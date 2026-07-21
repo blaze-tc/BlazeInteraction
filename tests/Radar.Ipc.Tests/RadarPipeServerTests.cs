@@ -149,6 +149,35 @@ public sealed class RadarPipeServerTests
     }
 
     [Fact]
+    public async Task Server_DefaultHandshake_UsesBridgeVersionOnePointTwoZero()
+    {
+        var pipeName = "RadarControl.Tests." + Guid.NewGuid().ToString("N");
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await using var server = new RadarPipeServer(new RadarPipeServerOptions
+        {
+            PipeName = pipeName,
+            HeartbeatTimeout = TimeSpan.FromSeconds(2)
+        });
+        var runTask = server.RunAsync(cancellation.Token);
+
+        await using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        await client.ConnectAsync(cancellation.Token);
+        await IpcStream.WriteAsync(
+            client,
+            IpcEnvelope.Create(IpcMessageType.Hello, 1, Hello()),
+            cancellation.Token);
+
+        var acknowledgement = await IpcStream.ReadAsync(client, cancellation.Token);
+        var helloAck = acknowledgement.DeserializePayload<HelloAckPayload>();
+
+        Assert.Equal(IpcMessageType.HelloAck, acknowledgement.MessageType);
+        Assert.Equal("1.2.0", helloAck.BridgeVersion);
+
+        cancellation.Cancel();
+        await runTask;
+    }
+
+    [Fact]
     public async Task Server_ReturnsErrorForIncompatibleProtocol()
     {
         var pipeName = "RadarControl.Tests." + Guid.NewGuid().ToString("N");

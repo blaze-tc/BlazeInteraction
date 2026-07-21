@@ -8,6 +8,16 @@ namespace Yuexin.Radar.Ipc.Tests;
 public sealed class IpcFrameCodecTests
 {
     [Fact]
+    public void LegacyPointerFramePayload_IsNotPubliclyExposedByTheV2ContractAssembly()
+    {
+        var payloadType = typeof(IpcEnvelope).Assembly.GetType(
+            "Yuexin.Radar.Contracts.PointerFramePayload",
+            throwOnError: true);
+
+        Assert.False(payloadType!.IsPublic);
+    }
+
+    [Fact]
     public void EncodeAndAppend_RoundTripsMultiScreenPointerBatch()
     {
         var batch = new PointerBatchPayload([

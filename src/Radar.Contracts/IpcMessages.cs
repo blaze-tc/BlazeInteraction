@@ -77,7 +77,7 @@ public sealed record HelloAckPayload(
         : this(bridgeVersion, 2, connected, "multi-screen", []) { }
 }
 
-public sealed record PointerFramePayload(IReadOnlyList<RadarPointer> Pointers);
+internal sealed record PointerFramePayload(IReadOnlyList<RadarPointer> Pointers);
 public sealed record PointerBatchPayload(IReadOnlyList<RadarScreenPointerFrame> Screens);
 public sealed record PingPayload(long ClientTimestampUnixMilliseconds);
 public sealed record PongPayload(long ClientTimestampUnixMilliseconds);
