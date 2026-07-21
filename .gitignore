@@ -12,3 +12,4 @@ tmp/
 *.log
 UnityPackage/com.blaze.radar/Library/
 .superpowers/
+.worktrees/
