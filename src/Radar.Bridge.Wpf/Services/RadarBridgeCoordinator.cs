@@ -296,9 +296,9 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     [Obsolete("Use DisconnectAllAsync.")]
     public Task StopSimulationAsync() => DisconnectAllAsync();
     [Obsolete("Use StartRecordingAsync(screenId, sensorId, path).")]
-    public Task StartRecordingAsync(string path, CancellationToken cancellationToken = default) => PrimaryPipeline?.Pipeline.StartRecordingAsync(path, cancellationToken) ?? Task.CompletedTask;
+    public Task StartRecordingAsync(string path, CancellationToken cancellationToken = default) => PrimarySensorAddress() is { } address ? StartRecordingAsync(address.ScreenId, address.SensorId, path, cancellationToken) : Task.CompletedTask;
     [Obsolete("Use StopRecordingAsync(screenId, sensorId).")]
-    public Task StopRecordingAsync() => PrimaryPipeline?.Pipeline.StopRecordingAsync() ?? Task.CompletedTask;
+    public Task StopRecordingAsync() => PrimarySensorAddress() is { } address ? StopRecordingAsync(address.ScreenId, address.SensorId) : Task.CompletedTask;
     [Obsolete("Use ReplaySensorAsync.")]
     public Task ReplayAsync(string path, double speed, bool loop, CancellationToken cancellationToken = default) => PrimaryPipeline?.Pipeline.ReplayAsync(path, speed, loop, cancellationToken) ?? Task.CompletedTask;
     [Obsolete("Use PauseReplay(screenId, sensorId).")]
@@ -828,6 +828,13 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
 
     private PipelineRuntime? PrimaryPipeline => AssociatedRuntimes().OrderBy(runtime => runtime.Info.Order).ThenBy(runtime => runtime.Info.ScreenId, StringComparer.OrdinalIgnoreCase)
         .FirstOrDefault(runtime => runtime.Info.IsPrimary)?.Pipelines.Values.FirstOrDefault();
+
+    private (string ScreenId, string SensorId)? PrimarySensorAddress()
+    {
+        var runtime = AssociatedRuntimes().FirstOrDefault(value => value.Info.IsPrimary);
+        var sensorId = runtime is null ? null : SnapshotSensorIds(runtime).FirstOrDefault();
+        return runtime is null || sensorId is null ? null : (runtime.Info.ScreenId, sensorId);
+    }
 
     private ScreenRuntime[] AssociatedRuntimes() => Volatile.Read(ref _associatedSnapshot);
 

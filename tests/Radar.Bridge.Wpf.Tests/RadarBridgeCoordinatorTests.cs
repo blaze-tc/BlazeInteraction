@@ -203,6 +203,25 @@ public sealed class RadarBridgeCoordinatorTests
     }
 
     [Fact]
+    public async Task Coordinator_DisposeBoundsHungOperationAndQuarantinesPipelineUntilRelease()
+    {
+        var configuration = new RadarAppConfiguration { Screens = [ScreenConfiguration("front", "f1", 1920, 1080)] };
+        var factory = new FakePipelineFactory();
+        var coordinator = CreateCoordinator(configuration, factory);
+        await coordinator.ApplyUnityTopologyAsync(Hello(Screen("front", "Front", true, 1920, 1080, 0)));
+        factory["front", "f1"].BlockStart(ignoreCancellation: true);
+        var operation = coordinator.ConnectSensorAsync("front", "f1");
+        await factory["front", "f1"].StartEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        await coordinator.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1));
+
+        Assert.False(factory["front", "f1"].Disposed);
+        factory["front", "f1"].ReleaseStart();
+        await operation;
+        await WaitUntilAsync(() => factory["front", "f1"].Disposed, new CancellationTokenSource(TimeSpan.FromSeconds(1)).Token);
+    }
+
+    [Fact]
     public async Task Coordinator_StartStopAndDisposeAreConcurrentSafe()
     {
         var factory = new FakePipelineFactory();
@@ -379,6 +398,7 @@ public sealed class RadarBridgeCoordinatorTests
         public bool DisposedDuringOperation { get; private set; }
         public TaskCompletionSource StartEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private TaskCompletionSource? _startRelease;
+        private bool _ignoreStartCancellation;
         public event Action<RadarSensorRuntimeSnapshot>? SnapshotUpdated;
         public event Action<SensorDetectionFrame>? DetectionFrameUpdated;
         public event Action<RadarSensorRuntimeState>? StateChanged;
@@ -386,7 +406,11 @@ public sealed class RadarBridgeCoordinatorTests
         public async Task StartAsync(CancellationToken cancellationToken = default)
         {
             StartEntered.TrySetResult();
-            if (_startRelease is not null) await _startRelease.Task.WaitAsync(cancellationToken);
+            if (_startRelease is not null)
+            {
+                if (_ignoreStartCancellation) await _startRelease.Task;
+                else await _startRelease.Task.WaitAsync(cancellationToken);
+            }
             DisposedDuringOperation |= Disposed;
             State = RadarSensorRuntimeState.Running;
             StateChanged?.Invoke(State);
@@ -400,7 +424,7 @@ public sealed class RadarBridgeCoordinatorTests
         public void StepReplay() { }
         public Task StopReplayAsync() => Task.CompletedTask;
         public ValueTask DisposeAsync() { Disposed = true; return ValueTask.CompletedTask; }
-        public void BlockStart() => _startRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public void BlockStart(bool ignoreCancellation = false) { _ignoreStartCancellation = ignoreCancellation; _startRelease = new(TaskCreationOptions.RunContinuationsAsynchronously); }
         public void ReleaseStart() => _startRelease?.TrySetResult();
         public void Publish(SensorDetectionFrame frame) => DetectionFrameUpdated?.Invoke(frame);
         public void Fault() { State = RadarSensorRuntimeState.Faulted; StateChanged?.Invoke(State); }
