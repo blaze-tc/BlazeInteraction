@@ -37,6 +37,8 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
     private int _pendingFrame;
     private int _disposed;
     private int _activeSource = -1;
+    private long _runGeneration;
+    private long _recordingSession;
     private long _droppedInputFrameCount;
     private long _lastSequence;
     private long _snapshotSequence;
@@ -85,7 +87,8 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
             _runCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetimeCancellation.Token);
             _processingTask = ProcessFramesAsync(_runCancellation);
             Volatile.Write(ref _activeSource, (int)_options.SourceMode);
-            _sourceTask = StartConfiguredSourceAsync(_runCancellation.Token);
+            var generation = Interlocked.Increment(ref _runGeneration);
+            _sourceTask = StartConfiguredSourceAsync(_runCancellation.Token, generation);
             ObserveSourceCompletion(_sourceTask);
             if (_options.SourceMode != RadarSensorSourceMode.Real)
             {
@@ -148,6 +151,7 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
                         DateTimeOffset.UtcNow), cancellationToken).ConfigureAwait(false);
                     _recordingStream = stream;
                     _recordingWriter = writer;
+                    Interlocked.Increment(ref _recordingSession);
                 }
                 catch
                 {
@@ -195,6 +199,7 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
             _runCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetimeCancellation.Token);
             _processingTask = ProcessFramesAsync(_runCancellation);
             Volatile.Write(ref _activeSource, (int)RadarSensorSourceMode.Replay);
+            Interlocked.Increment(ref _runGeneration);
             _sourceTask = RunSourceSafelyAsync(
                 token => ReplayCoreAsync(fullPath, speed, loop, token),
                 _runCancellation.Token);
@@ -278,6 +283,7 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
         _processingTask = null;
         _connectionService = null;
         Volatile.Write(ref _activeSource, -1);
+        Interlocked.Increment(ref _runGeneration);
         cancellation?.Cancel();
         _replayGate.Resume();
         await StopRecordingUnderLifecycleAsync().ConfigureAwait(false);
@@ -308,11 +314,11 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
         }
     }
 
-    private Task StartConfiguredSourceAsync(CancellationToken cancellationToken)
+    private Task StartConfiguredSourceAsync(CancellationToken cancellationToken, long generation)
     {
         return _options.SourceMode switch
         {
-            RadarSensorSourceMode.Real => StartRealSource(cancellationToken),
+            RadarSensorSourceMode.Real => StartRealSource(cancellationToken, generation),
             RadarSensorSourceMode.Simulation => RunSourceSafelyAsync(GenerateSimulationAsync, cancellationToken),
             RadarSensorSourceMode.Replay => RunSourceSafelyAsync(
                 token => ReplayCoreAsync(_options.ReplayFilePath, _options.ReplaySpeed, _options.ReplayLoop, token),
@@ -321,7 +327,7 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
         };
     }
 
-    private Task StartRealSource(CancellationToken cancellationToken)
+    private Task StartRealSource(CancellationToken cancellationToken, long generation)
     {
         var service = new RadarConnectionService(new RadarConnectionOptions
         {
@@ -330,10 +336,10 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
             LocalIp = _options.LocalIp,
             AutoReconnect = _options.AutoReconnect
         });
-        service.StateChanged += OnConnectionStateChanged;
+        service.StateChanged += state => OnConnectionStateChanged(state, generation);
         service.ConnectionError += exception => PublishLog($"Radar connection error: {exception.Message}");
         service.DataWarning += elapsed => PublishLog($"No radar data for {elapsed.TotalMilliseconds:0} ms.");
-        service.BytesReceived += OnRawBytesReceived;
+        service.BytesReceived += bytes => ObserveRecordingWrite(RecordBytesAsync(bytes, generation, Volatile.Read(ref _recordingSession)));
         service.ScanFrameReceived += PublishScan;
         _connectionService = service;
         return RunSourceSafelyAsync(service.RunAsync, cancellationToken);
@@ -485,8 +491,9 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
         }
     }
 
-    private void OnConnectionStateChanged(RadarConnectionState state)
+    private void OnConnectionStateChanged(RadarConnectionState state, long generation)
     {
+        if (generation != Volatile.Read(ref _runGeneration)) return;
         switch (state)
         {
             case RadarConnectionState.Connected:
@@ -501,17 +508,15 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
                 break;
         }
 
-        _ = RecordConnectionStateAsync(state);
+        ObserveRecordingWrite(RecordConnectionStateAsync(state, generation, Volatile.Read(ref _recordingSession)));
     }
 
-    private void OnRawBytesReceived(ReadOnlyMemory<byte> bytes) => _ = RecordBytesAsync(bytes);
-
-    private async Task RecordBytesAsync(ReadOnlyMemory<byte> bytes)
+    private async Task RecordBytesAsync(ReadOnlyMemory<byte> bytes, long generation, long session)
     {
         await _recordingLock.WaitAsync().ConfigureAwait(false);
         try
         {
-            if (_recordingWriter is not null)
+            if (IsCurrentRecordingSession(generation, session))
             {
                 await _recordingWriter.WriteDataAsync(bytes, DateTimeOffset.UtcNow, _lifetimeCancellation.Token).ConfigureAwait(false);
             }
@@ -526,12 +531,12 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
         }
     }
 
-    private async Task RecordConnectionStateAsync(RadarConnectionState state)
+    private async Task RecordConnectionStateAsync(RadarConnectionState state, long generation, long session)
     {
         await _recordingLock.WaitAsync().ConfigureAwait(false);
         try
         {
-            if (_recordingWriter is not null)
+            if (IsCurrentRecordingSession(generation, session))
             {
                 await _recordingWriter.WriteConnectionStateAsync(state, DateTimeOffset.UtcNow, _lifetimeCancellation.Token).ConfigureAwait(false);
             }
@@ -548,6 +553,7 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
 
     private async Task StopRecordingCoreAsync()
     {
+        Interlocked.Increment(ref _recordingSession);
         var writer = Interlocked.Exchange(ref _recordingWriter, null);
         var stream = Interlocked.Exchange(ref _recordingStream, null);
         if (writer is not null)
@@ -559,6 +565,17 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
         {
             await stream.DisposeAsync().ConfigureAwait(false);
         }
+    }
+
+    private bool IsCurrentRecordingSession(long generation, long session) =>
+        session != 0 && generation == Volatile.Read(ref _runGeneration) && session == Volatile.Read(ref _recordingSession) && _recordingWriter is not null;
+
+    private void ObserveRecordingWrite(Task writeTask) => _ = ObserveRecordingWriteAsync(writeTask);
+
+    private async Task ObserveRecordingWriteAsync(Task writeTask)
+    {
+        try { await writeTask.ConfigureAwait(false); }
+        catch (Exception exception) { PublishLog($"Recording callback failed: {exception.Message}"); }
     }
 
     // Lifecycle transitions always acquire the lifecycle lock before this recording lock.
