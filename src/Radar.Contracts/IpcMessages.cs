@@ -14,7 +14,8 @@ public enum IpcMessageType
     Error = 7,
     Ping = 8,
     Pong = 9,
-    Shutdown = 10
+    Shutdown = 10,
+    PointerBatch = 11
 }
 
 public sealed record IpcEnvelope(
@@ -29,7 +30,7 @@ public sealed record IpcEnvelope(
         long sequence,
         TPayload payload,
         long? timestampUnixMilliseconds = null,
-        int protocolVersion = 1)
+        int protocolVersion = 2)
     {
         return new IpcEnvelope(
             protocolVersion,
@@ -46,18 +47,38 @@ public sealed record IpcEnvelope(
     }
 }
 
+[method: JsonConstructor]
 public sealed record HelloPayload(
     int UnityProcessId,
     string UnityVersion,
-    int ScreenWidth,
-    int ScreenHeight);
+    IReadOnlyList<RadarScreenDefinitionPayload> Screens)
+{
+    [JsonIgnore]
+    public int ScreenWidth => Screens.FirstOrDefault(screen => screen.IsPrimary)?.DefaultWidthPixels ?? 0;
 
+    [JsonIgnore]
+    public int ScreenHeight => Screens.FirstOrDefault(screen => screen.IsPrimary)?.DefaultHeightPixels ?? 0;
+
+    [Obsolete("Temporary build bridge; use the multi-screen constructor.")]
+    public HelloPayload(int processId, string unityVersion, int screenWidth, int screenHeight)
+        : this(processId, unityVersion, [new("main", "Main", screenWidth, screenHeight, true, 0)]) { }
+}
+
+[method: JsonConstructor]
 public sealed record HelloAckPayload(
     string BridgeVersion,
-    string DeviceModel,
-    bool Connected);
+    int ProtocolVersion,
+    bool Connected,
+    string Capability,
+    IReadOnlyList<RadarScreenInfo> Screens)
+{
+    [Obsolete("Temporary build bridge; use the IPC v2 constructor.")]
+    public HelloAckPayload(string bridgeVersion, string ignoredDeviceModel, bool connected)
+        : this(bridgeVersion, 2, connected, "multi-screen", []) { }
+}
 
 public sealed record PointerFramePayload(IReadOnlyList<RadarPointer> Pointers);
+public sealed record PointerBatchPayload(IReadOnlyList<RadarScreenPointerFrame> Screens);
 public sealed record PingPayload(long ClientTimestampUnixMilliseconds);
 public sealed record PongPayload(long ClientTimestampUnixMilliseconds);
 public sealed record ErrorPayload(string Code, string Message);

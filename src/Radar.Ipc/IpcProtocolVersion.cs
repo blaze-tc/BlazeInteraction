@@ -6,7 +6,7 @@ public sealed record IpcVersionValidationResult(bool IsCompatible, string? Error
 
 public static class IpcProtocolVersion
 {
-    public const int Current = 1;
+    public const int Current = 2;
 
     public static IpcVersionValidationResult Validate(IpcEnvelope envelope)
     {

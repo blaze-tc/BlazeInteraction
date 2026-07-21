@@ -63,7 +63,7 @@ public sealed class RadarPipeServerTests
         await healthyClient.ConnectAsync(cancellation.Token);
         await IpcStream.WriteAsync(
             healthyClient,
-            IpcEnvelope.Create(IpcMessageType.Hello, 2, new HelloPayload(42, "2021.3", 1920, 1080)),
+            IpcEnvelope.Create(IpcMessageType.Hello, 2, Hello()),
             cancellation.Token);
 
         var ack = await IpcStream.ReadAsync(healthyClient, cancellation.Token);
@@ -94,7 +94,7 @@ public sealed class RadarPipeServerTests
         await healthyClient.ConnectAsync(cancellation.Token);
         await IpcStream.WriteAsync(
             healthyClient,
-            IpcEnvelope.Create(IpcMessageType.Hello, 3, new HelloPayload(42, "2021.3", 1920, 1080)),
+            IpcEnvelope.Create(IpcMessageType.Hello, 3, Hello()),
             cancellation.Token);
         await IpcStream.ReadAsync(healthyClient, cancellation.Token);
 
@@ -112,7 +112,12 @@ public sealed class RadarPipeServerTests
         {
             PipeName = pipeName,
             HeartbeatTimeout = TimeSpan.FromSeconds(2),
-            HelloAckFactory = () => new HelloAckPayload("1.0.0", "F10", true)
+            HelloAckFactory = () => new HelloAckPayload(
+                "1.0.0",
+                IpcProtocolVersion.Current,
+                true,
+                "multi-screen",
+                [new RadarScreenInfo("main", "Main", 1920, 1080, true, 0)])
         });
         var runTask = server.RunAsync(cancellation.Token);
 
@@ -120,12 +125,15 @@ public sealed class RadarPipeServerTests
         await client.ConnectAsync(cancellation.Token);
         await IpcStream.WriteAsync(
             client,
-            IpcEnvelope.Create(IpcMessageType.Hello, 1, new HelloPayload(42, "2021.3", 1920, 1080)),
+            IpcEnvelope.Create(IpcMessageType.Hello, 1, Hello()),
             cancellation.Token);
 
         var ack = await IpcStream.ReadAsync(client, cancellation.Token);
         Assert.Equal(IpcMessageType.HelloAck, ack.MessageType);
-        Assert.Equal("F10", ack.DeserializePayload<HelloAckPayload>().DeviceModel);
+        var helloAck = ack.DeserializePayload<HelloAckPayload>();
+        Assert.Equal(IpcProtocolVersion.Current, helloAck.ProtocolVersion);
+        Assert.Equal("multi-screen", helloAck.Capability);
+        Assert.Equal("main", Assert.Single(helloAck.Screens).ScreenId);
 
         await IpcStream.WriteAsync(
             client,
@@ -163,4 +171,9 @@ public sealed class RadarPipeServerTests
         cancellation.Cancel();
         await runTask;
     }
+
+    private static HelloPayload Hello() => new(
+        42,
+        "2021.3",
+        [new RadarScreenDefinitionPayload("main", "Main", 1920, 1080, true, 0)]);
 }

@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Text;
 using Yuexin.Radar.Contracts;
 using Yuexin.Radar.Ipc;
 
@@ -7,12 +8,48 @@ namespace Yuexin.Radar.Ipc.Tests;
 public sealed class IpcFrameCodecTests
 {
     [Fact]
+    public void EncodeAndAppend_RoundTripsMultiScreenPointerBatch()
+    {
+        var batch = new PointerBatchPayload([
+            new RadarScreenPointerFrame(
+                new RadarScreenInfo("front", "正面", 4096, 1536, true, 1),
+                7,
+                1000,
+                [new RadarScreenPointer(3, RadarPointerPhase.Move, 0.25f, 0.75f, 1024f, 1152f, 0.9f, 1000)])
+        ]);
+
+        var bytes = IpcFrameCodec.Encode(IpcEnvelope.Create(IpcMessageType.PointerBatch, 7, batch, 1000));
+        var json = Encoding.UTF8.GetString(bytes, sizeof(int), bytes.Length - sizeof(int));
+        var decoded = Assert.Single(new IpcFrameDecoder().Append(bytes));
+        var result = decoded.DeserializePayload<PointerBatchPayload>();
+
+        Assert.Contains("\"protocolVersion\":2", json);
+        Assert.Contains("\"messageType\":\"PointerBatch\"", json);
+        Assert.Contains("\"screenId\":\"front\"", json);
+        Assert.Equal(2, decoded.ProtocolVersion);
+        Assert.Equal("front", Assert.Single(result.Screens).Screen.ScreenId);
+        Assert.Equal(1024f, Assert.Single(result.Screens[0].Pointers).PixelX);
+    }
+
+    [Fact]
+    public void ProtocolVersion_RejectsVersionOneWithExplicitMessage()
+    {
+        var envelope = IpcEnvelope.Create(IpcMessageType.Hello, 1, new { }, protocolVersion: 1);
+
+        var result = IpcProtocolVersion.Validate(envelope);
+
+        Assert.False(result.IsCompatible);
+        Assert.Contains("version 1", result.Error);
+        Assert.Contains("version 2", result.Error);
+    }
+
+    [Fact]
     public void EncodeAndAppend_RoundTripsEnvelopeAcrossHalfPackets()
     {
         var envelope = IpcEnvelope.Create(
             IpcMessageType.Hello,
             sequence: 7,
-            new HelloPayload(1234, "2021.3.45f1", 1920, 1080),
+            new HelloPayload(1234, "2021.3.45f1", [new RadarScreenDefinitionPayload("main", "Main", 1920, 1080, true, 0)]),
             timestampUnixMilliseconds: 1000);
         var bytes = IpcFrameCodec.Encode(envelope);
         var decoder = new IpcFrameDecoder();
@@ -26,6 +63,7 @@ public sealed class IpcFrameCodecTests
         Assert.Equal(IpcMessageType.Hello, decoded.MessageType);
         Assert.Equal(7, decoded.Sequence);
         Assert.Equal(1234, hello.UnityProcessId);
+        Assert.Equal("main", Assert.Single(hello.Screens).ScreenId);
         Assert.Equal(0, decoder.BufferedByteCount);
     }
 
