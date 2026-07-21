@@ -31,3 +31,13 @@
 
 - Task 4 deliberately does not wire these pipelines into `RadarBridgeCoordinator`, screen fusion, WPF selection/UI or Unity; that belongs to later tasks.
 - Existing source files still carry compatibility-obsolescence warnings during `dotnet test`; the final standalone Release build is warning-free.
+
+## Review remediation TDD record
+
+1. **RED** — `Factory_CreatesPipelineThroughInjectableInterface` did not compile because the factory was static and no factory contract existed.
+2. **GREEN** — introduced `IRadarSensorPipelineFactory` and the DI-friendly `RadarSensorPipelineFactory(ILoggerFactory)` implementation returning `IRadarSensorPipeline`.
+3. **RED** — active replay recording, duplicate source sequence, unconnected Real state, processing-fault isolation and simulation replay controls failed exactly as expected (recording admitted; duplicate sequence; state Running; processing exception escaped; misleading replay logs).
+4. **GREEN** — active-source recording checks, source-completion ordering, strictly increasing pipeline metadata, Real connection state handling, processing fault containment/final empty frame and active replay-only controls now pass.
+5. Added terminal queued-frame, concurrent Start/Stop and immutable-snapshot coverage. Focused pipeline suite: 11/11 passed.
+
+Review verification: Bridge tests passed 41/41. A first full-solution run hit the known flaky concurrent configuration-save test with `UnauthorizedAccessException`; the immediate clean rerun passed all 192 tests. Release build passed with 0 warnings and 0 errors.

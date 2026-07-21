@@ -26,6 +26,7 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
     private readonly SemaphoreSlim _recordingLock = new(1, 1);
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly RadarReplayGate _replayGate = new();
+    private readonly object _snapshotGate = new();
     private CancellationTokenSource? _runCancellation;
     private Task? _sourceTask;
     private Task? _processingTask;
@@ -38,6 +39,8 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
     private int _activeSource = -1;
     private long _droppedInputFrameCount;
     private long _lastSequence;
+    private long _snapshotSequence;
+    private DateTimeOffset _lastSnapshotTimestamp = DateTimeOffset.MinValue;
 
     internal RadarSensorPipeline(
         RadarScreenConfiguration screen,
@@ -76,7 +79,11 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
             _processingTask = ProcessFramesAsync(_runCancellation.Token);
             Volatile.Write(ref _activeSource, (int)_options.SourceMode);
             _sourceTask = StartConfiguredSourceAsync(_runCancellation.Token);
-            SetState(RadarSensorRuntimeState.Running);
+            ObserveSourceCompletion(_sourceTask);
+            if (_options.SourceMode != RadarSensorSourceMode.Real)
+            {
+                SetState(RadarSensorRuntimeState.Running);
+            }
             PublishLog($"Started {_options.SourceMode} source.");
         }
         catch
@@ -107,7 +114,7 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
     {
         ThrowIfDisposed();
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        if (_options.SourceMode != RadarSensorSourceMode.Real)
+        if (Volatile.Read(ref _activeSource) != (int)RadarSensorSourceMode.Real || State != RadarSensorRuntimeState.Running)
         {
             throw new InvalidOperationException("Only a Real radar source can record raw TCP bytes.");
         }
@@ -175,6 +182,7 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
             _sourceTask = RunSourceSafelyAsync(
                 token => ReplayCoreAsync(fullPath, speed, loop, token),
                 _runCancellation.Token);
+            ObserveSourceCompletion(_sourceTask);
             SetState(RadarSensorRuntimeState.Running);
             PublishLog($"Replaying {fullPath} at {speed:0.0}x{(loop ? " (loop)" : string.Empty)}.");
         }
@@ -186,18 +194,21 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
 
     public void PauseReplay()
     {
+        if (Volatile.Read(ref _activeSource) != (int)RadarSensorSourceMode.Replay) return;
         _replayGate.Pause();
         PublishLog("Replay paused.");
     }
 
     public void ResumeReplay()
     {
+        if (Volatile.Read(ref _activeSource) != (int)RadarSensorSourceMode.Replay) return;
         _replayGate.Resume();
         PublishLog("Replay resumed.");
     }
 
     public void StepReplay()
     {
+        if (Volatile.Read(ref _activeSource) != (int)RadarSensorSourceMode.Replay) return;
         _replayGate.Step();
         PublishLog("Replay advanced by one frame.");
     }
@@ -316,11 +327,6 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
         try
         {
             await source(cancellationToken).ConfigureAwait(false);
-            if (!cancellationToken.IsCancellationRequested && State != RadarSensorRuntimeState.Faulted)
-            {
-                PublishEmptyFrame();
-                SetState(RadarSensorRuntimeState.Stopped);
-            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -337,38 +343,36 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
     {
         DateTimeOffset previousTimestamp = DateTimeOffset.MinValue;
         var previousBytes = 0L;
-        await foreach (var frame in _latestFrames.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+        try
         {
-            Interlocked.Exchange(ref _pendingFrame, 0);
-            Interlocked.Exchange(ref _lastSequence, frame.Sequence);
-            var transformed = frame.Points.Select(point => RadarCoordinateConverter.ApplyTransform(point, _options.Transform)).ToArray();
-            var valid = RadarPointFilter.Apply(transformed, _options.Filter).ToArray();
-            var clusters = new SequentialPointClusterer(_options.Clustering).Cluster(valid).Select(CloneCluster).ToArray();
-            var detections = MapClusters(clusters).ToArray();
-            var elapsed = previousTimestamp == DateTimeOffset.MinValue
-                ? 1d / _options.DefaultScanFrequencyHz
-                : Math.Max(0.001d, (frame.Timestamp - previousTimestamp).TotalSeconds);
-            var bytes = _connectionService?.Metrics.ReceivedByteCount ?? frame.Points.Count * 4L;
-            var frequency = 1d / elapsed;
-            var byteRate = Math.Max(0d, (bytes - previousBytes) / elapsed);
-            previousTimestamp = frame.Timestamp;
-            previousBytes = bytes;
-            var snapshot = new RadarSensorRuntimeSnapshot(
-                ScreenId,
-                SensorId,
-                frame.Sequence,
-                frame.Timestamp,
-                Freeze(frame.Points),
-                Freeze(valid),
-                Freeze(clusters),
-                Freeze(detections),
-                frequency,
-                byteRate,
-                _connectionService?.Metrics.CrcErrorCount ?? 0,
-                _connectionService?.Metrics.DiscardedByteCount ?? 0,
-                DroppedInputFrameCount);
-            InvokeSafely(SnapshotUpdated, snapshot);
-            InvokeSafely(DetectionFrameUpdated, new SensorDetectionFrame(SensorId, frame.Timestamp, detections));
+            await foreach (var frame in _latestFrames.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            {
+                Interlocked.Exchange(ref _pendingFrame, 0);
+                Interlocked.Exchange(ref _lastSequence, frame.Sequence);
+                var transformed = frame.Points.Select(point => RadarCoordinateConverter.ApplyTransform(point, _options.Transform)).ToArray();
+                var valid = RadarPointFilter.Apply(transformed, _options.Filter).ToArray();
+                var clusters = new SequentialPointClusterer(_options.Clustering).Cluster(valid).Select(CloneCluster).ToArray();
+                var detections = MapClusters(clusters).ToArray();
+                var elapsed = previousTimestamp == DateTimeOffset.MinValue ? 1d / _options.DefaultScanFrequencyHz : Math.Max(0.001d, (frame.Timestamp - previousTimestamp).TotalSeconds);
+                var bytes = _connectionService?.Metrics.ReceivedByteCount ?? frame.Points.Count * 4L;
+                var frequency = 1d / elapsed;
+                var byteRate = Math.Max(0d, (bytes - previousBytes) / elapsed);
+                previousTimestamp = frame.Timestamp;
+                previousBytes = bytes;
+                var (sequence, timestamp) = NextSnapshotMetadata(frame.Timestamp);
+                var snapshot = new RadarSensorRuntimeSnapshot(ScreenId, SensorId, sequence, timestamp, Freeze(frame.Points), Freeze(valid), Freeze(clusters), Freeze(detections), frequency, byteRate, _connectionService?.Metrics.CrcErrorCount ?? 0, _connectionService?.Metrics.DiscardedByteCount ?? 0, DroppedInputFrameCount);
+                InvokeSafely(SnapshotUpdated, snapshot);
+                InvokeSafely(DetectionFrameUpdated, new SensorDetectionFrame(SensorId, timestamp, detections));
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            PublishLog($"Processing failed: {exception.Message}");
+            SetState(RadarSensorRuntimeState.Faulted);
+            _runCancellation?.Cancel();
         }
     }
 
@@ -562,12 +566,42 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
 
     private void PublishEmptyFrame()
     {
-        var timestamp = DateTimeOffset.UtcNow;
-        var sequence = Interlocked.Read(ref _lastSequence);
+        var (sequence, timestamp) = NextSnapshotMetadata(DateTimeOffset.UtcNow);
         var snapshot = new RadarSensorRuntimeSnapshot(
             ScreenId, SensorId, sequence, timestamp, [], [], [], [], 0d, 0d, 0L, 0L, DroppedInputFrameCount);
         InvokeSafely(SnapshotUpdated, snapshot);
         InvokeSafely(DetectionFrameUpdated, new SensorDetectionFrame(SensorId, timestamp, []));
+    }
+
+    private (long Sequence, DateTimeOffset Timestamp) NextSnapshotMetadata(DateTimeOffset sourceTimestamp)
+    {
+        lock (_snapshotGate)
+        {
+            var timestamp = sourceTimestamp <= _lastSnapshotTimestamp
+                ? _lastSnapshotTimestamp.AddTicks(1)
+                : sourceTimestamp;
+            _lastSnapshotTimestamp = timestamp;
+            return (Interlocked.Increment(ref _snapshotSequence), timestamp);
+        }
+    }
+
+    private void ObserveSourceCompletion(Task sourceTask) => _ = CompleteSourceAsync(sourceTask);
+
+    private async Task CompleteSourceAsync(Task sourceTask)
+    {
+        await sourceTask.ConfigureAwait(false);
+        await _lifecycleLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (!ReferenceEquals(_sourceTask, sourceTask)) return;
+            var faulted = State == RadarSensorRuntimeState.Faulted;
+            await StopCoreAsync().ConfigureAwait(false);
+            if (faulted) SetState(RadarSensorRuntimeState.Faulted);
+        }
+        finally
+        {
+            _lifecycleLock.Release();
+        }
     }
 
     private void SetState(RadarSensorRuntimeState state)

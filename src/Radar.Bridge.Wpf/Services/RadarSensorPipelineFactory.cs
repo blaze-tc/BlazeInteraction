@@ -3,16 +3,28 @@ using Yuexin.Radar.Configuration;
 
 namespace Yuexin.Radar.Bridge.Wpf.Services;
 
-public static class RadarSensorPipelineFactory
+public interface IRadarSensorPipelineFactory
 {
-    public static RadarSensorPipeline Create(
+    IRadarSensorPipeline Create(
         RadarScreenConfiguration screen,
-        RadarSensorConfiguration sensor,
-        ILogger<RadarSensorPipeline> logger)
+        RadarSensorConfiguration sensor);
+}
+
+public sealed class RadarSensorPipelineFactory : IRadarSensorPipelineFactory
+{
+    private readonly ILoggerFactory _loggerFactory;
+
+    public RadarSensorPipelineFactory(ILoggerFactory loggerFactory)
+    {
+        _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
+    }
+
+    public IRadarSensorPipeline Create(
+        RadarScreenConfiguration screen,
+        RadarSensorConfiguration sensor)
     {
         ArgumentNullException.ThrowIfNull(screen);
         ArgumentNullException.ThrowIfNull(sensor);
-        ArgumentNullException.ThrowIfNull(logger);
-        return new RadarSensorPipeline(screen, sensor, logger);
+        return new RadarSensorPipeline(screen, sensor, _loggerFactory.CreateLogger<RadarSensorPipeline>());
     }
 }
