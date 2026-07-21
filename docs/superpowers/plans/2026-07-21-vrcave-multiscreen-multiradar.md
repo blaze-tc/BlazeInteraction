@@ -20,6 +20,7 @@
 - 热变更或拓扑移除时，每个活动 Pointer 先且仅发一次 `Up`，下一批发零点帧，再重置 Tracker。
 - 现有 `PointerFrameReceived`、Basic Interaction Sample、父进程退出、WPF 软件渲染与像素对齐行为必须保持可用。
 - 发布包必须内嵌完整 `UnityPackage/com.blaze.radar/Bridge~/win-x64/RadarBridge.exe` 目录，并验证版本标记与 SHA-256。
+- 每个任务提交后必须保持完整解决方案可编译、现有测试可运行；公共接口分阶段迁移时使用明确标记且不参与 JSON 的临时兼容访问器，并在计划指定的后续任务删除。
 
 ## File Structure
 
@@ -198,19 +199,32 @@ public enum IpcMessageType
 public sealed record HelloPayload(
     int UnityProcessId,
     string UnityVersion,
-    IReadOnlyList<RadarScreenDefinitionPayload> Screens);
+    IReadOnlyList<RadarScreenDefinitionPayload> Screens)
+{
+    [JsonIgnore] public int ScreenWidth => Screens.FirstOrDefault(screen => screen.IsPrimary)?.DefaultWidthPixels ?? 0;
+    [JsonIgnore] public int ScreenHeight => Screens.FirstOrDefault(screen => screen.IsPrimary)?.DefaultHeightPixels ?? 0;
+
+    [Obsolete("Temporary build bridge; use the multi-screen constructor.")]
+    public HelloPayload(int processId, string unityVersion, int screenWidth, int screenHeight)
+        : this(processId, unityVersion, [new("main", "Main", screenWidth, screenHeight, true, 0)]) { }
+}
 
 public sealed record HelloAckPayload(
     string BridgeVersion,
     int ProtocolVersion,
     bool Connected,
     string Capability,
-    IReadOnlyList<RadarScreenInfo> Screens);
+    IReadOnlyList<RadarScreenInfo> Screens)
+{
+    [Obsolete("Temporary build bridge; use the IPC v2 constructor.")]
+    public HelloAckPayload(string bridgeVersion, string ignoredDeviceModel, bool connected)
+        : this(bridgeVersion, 2, connected, "multi-screen", []) { }
+}
 
 public sealed record PointerBatchPayload(IReadOnlyList<RadarScreenPointerFrame> Screens);
 ```
 
-Change `IpcEnvelope.Create` default `protocolVersion` and `IpcProtocolVersion.Current` to `2`. Retain `PointerFramePayload` only as an internal legacy adapter payload; never publish it on protocol v2.
+Change `IpcEnvelope.Create` default `protocolVersion` and `IpcProtocolVersion.Current` to `2`. Retain `PointerFramePayload` only as an internal legacy adapter payload; never publish it on protocol v2. The `[JsonIgnore]` legacy Hello width/height accessors and obsolete constructors exist only to keep the old Bridge compiling through Task 4; Task 5 removes them after Coordinator migration. Update old IPC tests to assert `ProtocolVersion`, `Capability` and screen summaries rather than `DeviceModel`.
 
 - [ ] **Step 4: Run IPC tests and verify v2 JSON names and values**
 
@@ -368,6 +382,8 @@ public sealed class RadarAppConfiguration
 ```
 
 `RadarScreenTrackingConfiguration.FromLegacy` copies `ConfirmFrames`, `LostFrames` and `SmoothingAlpha`, sets `MaximumAssociationDistancePixels=160`, and returns a migration warning explaining that the legacy physical-meter association distance has no reliable pixel equivalent before screen calibration.
+
+Until Task 6 replaces the flat MainViewModel, add `[JsonIgnore]` get/set compatibility properties named `Device`, `Transform`, `Range`, `Clustering`, `Tracking`, `Interaction`, and `Calibration`. They delegate to the `main` screen and its first sensor, create that default path when missing, and never create duplicate JSON sections. Mark them obsolete with `Temporary build bridge; use Screens.`; Task 6 removes them after all UI bindings and tests use screen/sensor view models.
 
 `CloneWithId` is an explicit deep clone helper used by UI duplication; it must copy nested configuration values and replace `ScreenId`, while copied sensors receive new deterministic IDs (`sensor-1-copy`, `sensor-2-copy`, with numeric suffix collision handling).
 
@@ -836,6 +852,7 @@ public sealed class RadarPipeServerOptions
 ```
 
 `HandleClientAsync` must validate protocol 2, deserialize Hello, await `AuthenticateHelloAsync`, send `Error` and close on rejection, or send the returned Ack and only then raise `ClientConnected`.
+At the end of this task remove the temporary Hello width/height accessors and obsolete Hello/Ack constructors introduced in Task 1; all .NET call sites must now use screen collections and v2 Ack fields.
 
 - [ ] **Step 4: Define the multi-screen runtime API**
 
@@ -882,6 +899,8 @@ public interface IRadarBridgeRuntime : IAsyncDisposable
     Task ApplyConfigurationAsync(CancellationToken cancellationToken = default);
 }
 ```
+
+Keep the old parameterless `ConnectAsync`, `DisconnectAsync`, `StartSimulationAsync`, `StopSimulationAsync`, recording/replay methods, `ConnectionState`, `SnapshotUpdated`, and `ConnectionStateChanged` as obsolete adapters targeting the associated primary screen and its first sensor. This keeps the old MainViewModel compiling during Task 5; Task 6 must remove these adapters after replacing every old binding and test.
 
 - [ ] **Step 5: Reconcile Unity topology and own one fusion engine per associated screen**
 
@@ -977,6 +996,8 @@ Expected: compilation fails on screen/sensor collections and targeted commands.
 `ScreenItemViewModel` exposes `ScreenId`, read-only Unity name/order/associated/primary state, editable resolution mode/width/height, fusion/tracking/interaction properties, `ObservableCollection<SensorItemViewModel> Sensors`, and derived `EffectiveResolutionText`, `OnlineSensorCount`, `HasValidationErrors`.
 
 `SensorItemViewModel` exposes `SensorId`, display name, enabled/source/model/IP/port/NIC, transform/range/region/mask/cluster/calibration/output rectangle properties, runtime state/frequency/error counters, and `HasValidationErrors`. Every setter changes only its owned configuration object and raises derived property notifications.
+
+After the new MainViewModel and tests compile, remove all temporary flat configuration accessors from Task 2 and all obsolete single-sensor runtime adapters from Task 5. A repository search for their obsolete-message text must return no matches before committing Task 6.
 
 - [ ] **Step 4: Reduce MainViewModel to orchestration**
 
