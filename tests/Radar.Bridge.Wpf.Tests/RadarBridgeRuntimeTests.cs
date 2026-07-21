@@ -159,18 +159,22 @@ public sealed class RadarBridgeRuntimeTests
         await using var client = await ConnectUnityClientAsync(configuration.Ipc.PipeName, cancellation.Token);
         await runtime.StartSimulationAsync(cancellation.Token);
 
-        var frame = await ReadPointerFrameAsync(client, requirePointers: true, cancellation.Token);
+        var batch = await ReadPointerBatchAsync(client, requirePointers: true, cancellation.Token);
+        var frame = Assert.Single(batch.Screens);
 
         Assert.NotEmpty(frame.Pointers);
+        Assert.Equal("main", frame.Screen.ScreenId);
         Assert.All(frame.Pointers, pointer =>
         {
             Assert.InRange(pointer.NormalizedX, 0f, 1f);
             Assert.InRange(pointer.NormalizedY, 0f, 1f);
+            Assert.Equal(pointer.NormalizedX * frame.Screen.WidthPixels, pointer.PixelX);
+            Assert.Equal(pointer.NormalizedY * frame.Screen.HeightPixels, pointer.PixelY);
         });
     }
 
     [Fact]
-    public async Task Simulation_SendsEmptyPointerFramesWhenFiltersRejectEveryPoint()
+    public async Task Simulation_SendsEmptyPointerBatchesWhenFiltersRejectEveryPoint()
     {
         var configuration = CreateIpcSimulationConfiguration();
         configuration.Range.ActivePolygon =
@@ -189,7 +193,8 @@ public sealed class RadarBridgeRuntimeTests
         await using var client = await ConnectUnityClientAsync(configuration.Ipc.PipeName, cancellation.Token);
         await runtime.StartSimulationAsync(cancellation.Token);
 
-        var frame = await ReadPointerFrameAsync(client, requirePointers: false, cancellation.Token);
+        var batch = await ReadPointerBatchAsync(client, requirePointers: false, cancellation.Token);
+        var frame = Assert.Single(batch.Screens);
 
         Assert.Empty(frame.Pointers);
     }
@@ -223,14 +228,17 @@ public sealed class RadarBridgeRuntimeTests
             IpcEnvelope.Create(
                 IpcMessageType.Hello,
                 1,
-                new HelloPayload(42, "2021.3", 1920, 1080)),
+                new HelloPayload(
+                    42,
+                    "2021.3",
+                    [new RadarScreenDefinitionPayload("main", "Main", 1920, 1080, true, 0)])),
             cancellationToken);
         var acknowledgement = await IpcStream.ReadAsync(client, cancellationToken);
         Assert.Equal(IpcMessageType.HelloAck, acknowledgement.MessageType);
         return client;
     }
 
-    private static async Task<PointerFramePayload> ReadPointerFrameAsync(
+    private static async Task<PointerBatchPayload> ReadPointerBatchAsync(
         Stream client,
         bool requirePointers,
         CancellationToken cancellationToken)
@@ -238,15 +246,16 @@ public sealed class RadarBridgeRuntimeTests
         while (true)
         {
             var envelope = await IpcStream.ReadAsync(client, cancellationToken);
-            if (envelope.MessageType != IpcMessageType.PointerFrame)
+            Assert.NotEqual(IpcMessageType.PointerFrame, envelope.MessageType);
+            if (envelope.MessageType != IpcMessageType.PointerBatch)
             {
                 continue;
             }
 
-            var frame = envelope.DeserializePayload<PointerFramePayload>();
-            if (!requirePointers || frame.Pointers.Count > 0)
+            var batch = envelope.DeserializePayload<PointerBatchPayload>();
+            if (!requirePointers || Assert.Single(batch.Screens).Pointers.Count > 0)
             {
-                return frame;
+                return batch;
             }
         }
     }

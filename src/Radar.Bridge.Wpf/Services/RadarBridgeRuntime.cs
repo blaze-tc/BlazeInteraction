@@ -41,6 +41,7 @@ public sealed class RadarBridgeRuntime : IRadarBridgeRuntime
     private int _disposed;
     private int _infrastructureStarted;
     private long _ipcSequence;
+    private RadarScreenInfo? _unityScreen;
     private UnityClientStatus _unityStatus = UnityClientStatus.Disconnected;
 
     public RadarBridgeRuntime(
@@ -78,8 +79,10 @@ public sealed class RadarBridgeRuntime : IRadarBridgeRuntime
                 HeartbeatTimeout = TimeSpan.FromSeconds(3),
                 HelloAckFactory = () => new HelloAckPayload(
                     BridgeVersion.Value,
-                    _configuration.Device.DeviceModel.ToString(),
-                    _connectionService?.State == RadarConnectionState.Connected || _simulationTask is not null)
+                    IpcProtocolVersion.Current,
+                    _connectionService?.State == RadarConnectionState.Connected || _simulationTask is not null,
+                    "multi-screen",
+                    [])
             });
             _pipeServer.ClientConnected += OnUnityConnected;
             _pipeServer.ClientDisconnected += OnUnityDisconnected;
@@ -427,14 +430,28 @@ public sealed class RadarBridgeRuntime : IRadarBridgeRuntime
                 _connectionService?.Metrics.DiscardedByteCount ?? 0);
             InvokeSafely(SnapshotUpdated, snapshot);
 
-            if (_pipeServer is not null)
+            var screen = _unityScreen;
+            if (_pipeServer is not null && screen is not null)
             {
+                var sequence = Interlocked.Increment(ref _ipcSequence);
+                var timestampUnixMilliseconds = frame.Timestamp.ToUnixTimeMilliseconds();
+                var screenPointers = pointers.Select(pointer => new RadarScreenPointer(
+                    pointer.PointerId,
+                    pointer.Phase,
+                    pointer.NormalizedX,
+                    pointer.NormalizedY,
+                    pointer.NormalizedX * screen.WidthPixels,
+                    pointer.NormalizedY * screen.HeightPixels,
+                    pointer.Confidence,
+                    pointer.TimestampUnixMilliseconds)).ToArray();
                 var sent = await _pipeServer.SendAsync(
                     IpcEnvelope.Create(
-                        IpcMessageType.PointerFrame,
-                        Interlocked.Increment(ref _ipcSequence),
-                        new PointerFramePayload(pointers),
-                        frame.Timestamp.ToUnixTimeMilliseconds()),
+                        IpcMessageType.PointerBatch,
+                        sequence,
+                        new PointerBatchPayload([
+                            new RadarScreenPointerFrame(screen, sequence, timestampUnixMilliseconds, screenPointers)
+                        ]),
+                        timestampUnixMilliseconds),
                     cancellationToken).ConfigureAwait(false);
                 if (sent)
                 {
@@ -590,17 +607,27 @@ public sealed class RadarBridgeRuntime : IRadarBridgeRuntime
 
     private void OnUnityConnected(HelloPayload hello)
     {
+        var screen = hello.Screens.FirstOrDefault(candidate => candidate.IsPrimary) ?? hello.Screens.FirstOrDefault();
+        _unityScreen = screen is null
+            ? null
+            : new RadarScreenInfo(
+                screen.ScreenId,
+                screen.Name,
+                screen.DefaultWidthPixels,
+                screen.DefaultHeightPixels,
+                screen.IsPrimary,
+                screen.Order);
         _unityStatus = new UnityClientStatus(
             true,
             hello.UnityProcessId,
             hello.UnityVersion,
-            hello.ScreenWidth,
-            hello.ScreenHeight,
+            _unityScreen?.WidthPixels ?? 0,
+            _unityScreen?.HeightPixels ?? 0,
             null,
             0,
             null);
         InvokeSafely(UnityStatusChanged, _unityStatus);
-        PublishLog($"Unity 已连接：PID {hello.UnityProcessId} / {hello.UnityVersion} / {hello.ScreenWidth}x{hello.ScreenHeight}");
+        PublishLog($"Unity 已连接：PID {hello.UnityProcessId} / {hello.UnityVersion} / {_unityStatus.ScreenWidth}x{_unityStatus.ScreenHeight}");
     }
 
     private void OnUnityDisconnected()
@@ -611,6 +638,7 @@ public sealed class RadarBridgeRuntime : IRadarBridgeRuntime
         }
 
         _unityStatus = UnityClientStatus.Disconnected;
+        _unityScreen = null;
         InvokeSafely(UnityStatusChanged, _unityStatus);
         PublishLog("Unity IPC 已断开。");
     }

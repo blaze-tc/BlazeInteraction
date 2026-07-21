@@ -12,6 +12,11 @@ public static class IpcFrameCodec
     public static byte[] Encode(IpcEnvelope envelope)
     {
         ArgumentNullException.ThrowIfNull(envelope);
+        if (envelope.ProtocolVersion >= 2 && envelope.MessageType == IpcMessageType.PointerFrame)
+        {
+            throw new InvalidOperationException("PointerFrame is a protocol v1 legacy payload and cannot be published on protocol v2.");
+        }
+
         var payload = JsonSerializer.SerializeToUtf8Bytes(envelope, IpcJson.Options);
         var frame = new byte[LengthPrefixSize + payload.Length];
         BinaryPrimitives.WriteInt32LittleEndian(frame, payload.Length);

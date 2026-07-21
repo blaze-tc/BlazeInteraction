@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using System.Text.Json;
 using Yuexin.Radar.Contracts;
 using Yuexin.Radar.Ipc;
 
@@ -7,6 +8,30 @@ namespace Yuexin.Radar.Ipc.Tests;
 
 public sealed class IpcFrameCodecTests
 {
+    [Fact]
+    public void Create_RejectsLegacyPointerFrameForProtocolVersionTwo()
+    {
+        Assert.Throws<InvalidOperationException>(() =>
+            IpcEnvelope.Create(IpcMessageType.PointerFrame, 1, new { }, protocolVersion: 2));
+    }
+
+    [Fact]
+    public async Task WriteAsync_RejectsManualProtocolVersionTwoLegacyPointerFrameBeforeWritingBytes()
+    {
+        var envelope = new IpcEnvelope(
+            2,
+            IpcMessageType.PointerFrame,
+            1,
+            1000,
+            JsonSerializer.SerializeToElement(new { }));
+        await using var stream = new MemoryStream();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await IpcStream.WriteAsync(stream, envelope));
+
+        Assert.Equal(0, stream.Length);
+    }
+
     [Fact]
     public void LegacyPointerFramePayload_IsNotPubliclyExposedByTheV2ContractAssembly()
     {

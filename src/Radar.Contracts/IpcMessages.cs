@@ -32,6 +32,11 @@ public sealed record IpcEnvelope(
         long? timestampUnixMilliseconds = null,
         int protocolVersion = 2)
     {
+        if (protocolVersion >= 2 && messageType == IpcMessageType.PointerFrame)
+        {
+            throw new InvalidOperationException("PointerFrame is a protocol v1 legacy payload and cannot be published on protocol v2.");
+        }
+
         return new IpcEnvelope(
             protocolVersion,
             messageType,
