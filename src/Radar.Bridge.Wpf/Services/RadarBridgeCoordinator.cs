@@ -19,8 +19,11 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private readonly SemaphoreSlim _topologyLock = new(1, 1);
     private readonly Dictionary<string, ScreenRuntime> _screens = new(StringComparer.OrdinalIgnoreCase);
     private readonly Queue<TransitionFrame> _transitionFrames = new();
+    private TransitionFrame? _inFlightTransition;
+    private readonly HashSet<Task> _retirementTasks = [];
     private ScreenRuntime[] _associatedSnapshot = [];
     private static readonly TimeSpan SendTimeout = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan PipelineCleanupTimeout = TimeSpan.FromMilliseconds(250);
     private RadarPipeServer? _pipeServer;
     private Task? _pipeTask;
     private Task? _schedulerTask;
@@ -107,31 +110,57 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             var now = DateTimeOffset.UtcNow;
             var advertised = hello.Screens.OrderBy(screen => screen.Order).ThenBy(screen => screen.ScreenId, StringComparer.OrdinalIgnoreCase).ToArray();
             var advertisedIds = new HashSet<string>(advertised.Select(screen => screen.ScreenId), StringComparer.OrdinalIgnoreCase);
+            var candidate = CloneConfiguration(_configuration);
+            var staged = new Dictionary<string, ScreenRuntime>(StringComparer.OrdinalIgnoreCase);
+
+            try
+            {
+                foreach (var definition in advertised)
+                {
+                    var configuration = FindOrCreateScreenConfiguration(candidate, definition);
+                    var previousWidth = configuration.EffectiveWidthPixels;
+                    var previousHeight = configuration.EffectiveHeightPixels;
+                    UpdateUnityOwnedConfiguration(configuration, definition);
+                    var info = ToScreenInfo(configuration);
+                    var needsRuntime = !_screens.TryGetValue(definition.ScreenId, out var current) || current.IsRetiring ||
+                        previousWidth != configuration.EffectiveWidthPixels || previousHeight != configuration.EffectiveHeightPixels;
+                    if (needsRuntime) staged.Add(definition.ScreenId, CreateRuntime(configuration, info));
+                    configuration.IsAssociated = true;
+                }
+
+                foreach (var screen in candidate.Screens.Where(screen => !advertisedIds.Contains(screen.ScreenId))) screen.IsAssociated = false;
+                await PersistConfigurationAsync(candidate, cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                foreach (var runtime in staged.Values) await DisposeRuntimeAsync(runtime).ConfigureAwait(false);
+                throw;
+            }
+
+            _configuration.SchemaVersion = candidate.SchemaVersion;
+            _configuration.Ipc = candidate.Ipc;
+            _configuration.Screens = candidate.Screens;
 
             foreach (var stale in _screens.Values.Where(runtime => runtime.Associated && !advertisedIds.Contains(runtime.Info.ScreenId)).ToArray())
             {
                 stale.Associated = false;
                 stale.IsRetiring = true;
-                stale.Configuration.IsAssociated = false;
+                stale.Configuration = candidate.Screens.Single(screen => string.Equals(screen.ScreenId, stale.Info.ScreenId, StringComparison.OrdinalIgnoreCase));
                 QueueRetirement(stale, now, remove: true, replaceWith: null);
             }
 
             foreach (var definition in advertised)
             {
-                var configuration = FindOrCreateScreenConfiguration(definition);
-                var previousWidth = configuration.EffectiveWidthPixels;
-                var previousHeight = configuration.EffectiveHeightPixels;
-                UpdateUnityOwnedConfiguration(configuration, definition);
+                var configuration = candidate.Screens.Single(screen => string.Equals(screen.ScreenId, definition.ScreenId, StringComparison.OrdinalIgnoreCase));
                 var info = ToScreenInfo(configuration);
 
                 if (_screens.TryGetValue(definition.ScreenId, out var runtime))
                 {
-                    var resolutionChanged = previousWidth != configuration.EffectiveWidthPixels || previousHeight != configuration.EffectiveHeightPixels;
-                    if (resolutionChanged)
+                    if (staged.TryGetValue(definition.ScreenId, out var replacement))
                     {
                         runtime.Associated = false;
                         runtime.IsRetiring = true;
-                        QueueRetirement(runtime, now, remove: false, replaceWith: (configuration, info));
+                        QueueRetirement(runtime, now, remove: false, replacement);
                     }
                     else
                     {
@@ -143,7 +172,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
                 }
                 else
                 {
-                    runtime = CreateRuntime(configuration, info);
+                    runtime = staged[definition.ScreenId];
                     _screens.Add(definition.ScreenId, runtime);
                 }
 
@@ -152,8 +181,6 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             }
 
             RefreshAssociatedSnapshot();
-
-            await PersistConfigurationAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -172,7 +199,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             {
                 runtime.Associated = false;
                 runtime.IsRetiring = true;
-                QueueRetirement(runtime, now, remove: false, replaceWith: (runtime.Configuration, ToScreenInfo(runtime.Configuration)));
+                QueueRetirement(runtime, now, remove: false, CreateRuntime(runtime.Configuration, ToScreenInfo(runtime.Configuration)));
             }
             RefreshAssociatedSnapshot();
             await PersistConfigurationAsync(cancellationToken).ConfigureAwait(false);
@@ -183,11 +210,11 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         }
     }
 
-    public async Task ConnectSensorAsync(string screenId, string sensorId, CancellationToken cancellationToken = default) =>
-        await GetPipeline(screenId, sensorId).Pipeline.StartAsync(cancellationToken).ConfigureAwait(false);
+    public Task ConnectSensorAsync(string screenId, string sensorId, CancellationToken cancellationToken = default) =>
+        UsePipelineAsync(screenId, sensorId, (pipeline, token) => pipeline.StartAsync(token), cancellationToken);
 
-    public async Task DisconnectSensorAsync(string screenId, string sensorId) =>
-        await GetPipeline(screenId, sensorId).Pipeline.StopAsync().ConfigureAwait(false);
+    public Task DisconnectSensorAsync(string screenId, string sensorId) =>
+        UsePipelineAsync(screenId, sensorId, (pipeline, _) => pipeline.StopAsync(), CancellationToken.None);
 
     public async Task ConnectScreenAsync(string screenId, CancellationToken cancellationToken = default)
     {
@@ -222,17 +249,17 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     }
 
     public Task StartRecordingAsync(string screenId, string sensorId, string path, CancellationToken cancellationToken = default) =>
-        GetPipeline(screenId, sensorId).Pipeline.StartRecordingAsync(path, cancellationToken);
+        UsePipelineAsync(screenId, sensorId, (pipeline, token) => pipeline.StartRecordingAsync(path, token), cancellationToken);
 
-    public Task StopRecordingAsync(string screenId, string sensorId) => GetPipeline(screenId, sensorId).Pipeline.StopRecordingAsync();
+    public Task StopRecordingAsync(string screenId, string sensorId) => UsePipelineAsync(screenId, sensorId, (pipeline, _) => pipeline.StopRecordingAsync(), CancellationToken.None);
 
     public Task ReplaySensorAsync(string screenId, string sensorId, string path, double speed, bool loop, CancellationToken cancellationToken = default) =>
-        GetPipeline(screenId, sensorId).Pipeline.ReplayAsync(path, speed, loop, cancellationToken);
+        UsePipelineAsync(screenId, sensorId, (pipeline, token) => pipeline.ReplayAsync(path, speed, loop, token), cancellationToken);
 
-    public void PauseReplay(string screenId, string sensorId) => GetPipeline(screenId, sensorId).Pipeline.PauseReplay();
-    public void ResumeReplay(string screenId, string sensorId) => GetPipeline(screenId, sensorId).Pipeline.ResumeReplay();
-    public void StepReplay(string screenId, string sensorId) => GetPipeline(screenId, sensorId).Pipeline.StepReplay();
-    public Task StopReplayAsync(string screenId, string sensorId) => GetPipeline(screenId, sensorId).Pipeline.StopReplayAsync();
+    public void PauseReplay(string screenId, string sensorId) => UsePipeline(screenId, sensorId, pipeline => pipeline.PauseReplay());
+    public void ResumeReplay(string screenId, string sensorId) => UsePipeline(screenId, sensorId, pipeline => pipeline.ResumeReplay());
+    public void StepReplay(string screenId, string sensorId) => UsePipeline(screenId, sensorId, pipeline => pipeline.StepReplay());
+    public Task StopReplayAsync(string screenId, string sensorId) => UsePipelineAsync(screenId, sensorId, (pipeline, _) => pipeline.StopReplayAsync(), CancellationToken.None);
 
     [Obsolete("Use ConnectSensorAsync or ConnectScreenAsync.")]
     public Task ConnectAsync(CancellationToken cancellationToken = default) => ConnectPrimarySensorAsync(cancellationToken);
@@ -257,7 +284,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     [Obsolete("Use StopReplayAsync(screenId, sensorId).")]
     public Task StopReplayAsync() => PrimaryPipeline?.Pipeline.StopReplayAsync() ?? Task.CompletedTask;
 
-    internal PointerBatchPayload TickForTest(DateTimeOffset timestamp)
+    internal PointerBatchPayload TickForTest(DateTimeOffset timestamp, bool delivered = true, bool waitForRetirement = true)
     {
         PreparedBatch prepared;
         _topologyLock.Wait();
@@ -266,7 +293,19 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             prepared = PrepareNextBatch(timestamp, tickAll: true)!;
         }
         finally { _topologyLock.Release(); }
-        prepared.OnDelivered?.Invoke().GetAwaiter().GetResult();
+        if (delivered)
+        {
+            var cleanup = ConfirmTransition(prepared);
+            if (cleanup is not null)
+            {
+                if (waitForRetirement) cleanup.GetAwaiter().GetResult();
+                else TrackRetirement(cleanup);
+            }
+        }
+        else
+        {
+            ReleaseTransition(prepared);
+        }
         return prepared.Payload;
     }
 
@@ -297,6 +336,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
 
         await AwaitStoppedAsync(_schedulerTask).ConfigureAwait(false);
         await AwaitStoppedAsync(_pipeTask).ConfigureAwait(false);
+        await AwaitRetirementsAsync().ConfigureAwait(false);
         _lifecycleLock.Dispose();
         _topologyLock.Dispose();
         _lifetime.Dispose();
@@ -347,7 +387,9 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     {
         if (_transitionFrames.Count > 0)
         {
-            var transition = _transitionFrames.Dequeue();
+            if (_inFlightTransition is not null) return null;
+            var transition = _transitionFrames.Peek();
+            _inFlightTransition = transition;
             var frames = AssociatedRuntimes()
                 .Select(runtime => new TransitionFrame(runtime.Info, runtime.LastPointers))
                 .ToDictionary(frame => frame.Screen.ScreenId, StringComparer.OrdinalIgnoreCase);
@@ -355,7 +397,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             return CreateBatch(timestamp, frames.Values
                 .OrderBy(frame => frame.Screen.Order)
                 .ThenBy(frame => frame.Screen.ScreenId, StringComparer.OrdinalIgnoreCase)
-                .ToArray(), transition.OnDelivered);
+                .ToArray(), transition);
         }
 
         var runtimes = AssociatedRuntimes().ToArray();
@@ -381,7 +423,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         return CreateBatch(timestamp, runtimes.Select(runtime => new TransitionFrame(runtime.Info, runtime.LastPointers)).ToArray());
     }
 
-    private PreparedBatch CreateBatch(DateTimeOffset timestamp, IReadOnlyList<TransitionFrame> frames, Func<Task>? onDelivered = null)
+    private PreparedBatch CreateBatch(DateTimeOffset timestamp, IReadOnlyList<TransitionFrame> frames, TransitionFrame? transition = null)
     {
         var sequence = Interlocked.Increment(ref _batchSequence);
         var payload = new PointerBatchPayload(frames.Select(frame => new RadarScreenPointerFrame(
@@ -389,34 +431,85 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             sequence,
             timestamp.ToUnixTimeMilliseconds(),
             frame.Pointers.ToArray())).ToArray());
-        return new PreparedBatch(sequence, timestamp, payload, onDelivered);
+        return new PreparedBatch(sequence, timestamp, payload, transition);
     }
 
     private async Task SendBatchAsync(PreparedBatch batch, CancellationToken cancellationToken)
     {
         var server = _pipeServer;
-        if (server is null) return;
+        if (server is null)
+        {
+            ReleaseTransition(batch);
+            return;
+        }
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
         timeout.CancelAfter(SendTimeout);
-        var sent = await server.SendAsync(IpcEnvelope.Create(
-            IpcMessageType.PointerBatch,
-            batch.Sequence,
-            batch.Payload,
-            batch.Timestamp.ToUnixTimeMilliseconds()), timeout.Token).ConfigureAwait(false);
+        bool sent;
+        try
+        {
+            sent = await server.SendAsync(IpcEnvelope.Create(
+                IpcMessageType.PointerBatch,
+                batch.Sequence,
+                batch.Payload,
+                batch.Timestamp.ToUnixTimeMilliseconds()), timeout.Token).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            ReleaseTransition(batch);
+            SetUnityStatus(UnityStatus with { LastError = $"IPC pointer batch send failed: {exception.Message}" });
+            return;
+        }
         if (!sent)
         {
+            ReleaseTransition(batch);
             SetUnityStatus(UnityStatus with { LastError = "IPC pointer batch send timed out or disconnected." });
             return;
         }
         SetUnityStatus(UnityStatus with { LastBatchSentAt = batch.Timestamp, LastBatchSequence = batch.Sequence, LastError = null });
         PublishLog($"[IPC] batch={batch.Sequence} screens={batch.Payload.Screens.Count} pointers={batch.Payload.Screens.Sum(frame => frame.Pointers.Count)} latencyMs=0.0");
-        if (batch.OnDelivered is not null) await batch.OnDelivered().ConfigureAwait(false);
+        var cleanup = ConfirmTransition(batch);
+        if (cleanup is not null) TrackRetirement(cleanup);
     }
 
-    private RadarScreenConfiguration FindOrCreateScreenConfiguration(RadarScreenDefinitionPayload definition)
+    private Task? ConfirmTransition(PreparedBatch batch)
     {
-        _configuration.Screens ??= [];
-        var configuration = _configuration.Screens.FirstOrDefault(screen => string.Equals(screen.ScreenId, definition.ScreenId, StringComparison.OrdinalIgnoreCase));
+        var transition = batch.Transition;
+        if (transition is null) return null;
+        if (!ReferenceEquals(_inFlightTransition, transition) || _transitionFrames.Count == 0 || !ReferenceEquals(_transitionFrames.Peek(), transition)) return null;
+        _transitionFrames.Dequeue();
+        _inFlightTransition = null;
+        return transition.OnDelivered?.Invoke();
+    }
+
+    private void ReleaseTransition(PreparedBatch batch)
+    {
+        if (batch.Transition is not null && ReferenceEquals(_inFlightTransition, batch.Transition)) _inFlightTransition = null;
+    }
+
+    private void TrackRetirement(Task task)
+    {
+        lock (_retirementTasks) _retirementTasks.Add(task);
+        _ = task.ContinueWith(completed =>
+        {
+            lock (_retirementTasks) _retirementTasks.Remove(completed);
+            if (completed.IsFaulted) PublishLog($"[IPC] retirement cleanup fault: {completed.Exception?.GetBaseException().Message}");
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+    }
+
+    private async Task AwaitRetirementsAsync()
+    {
+        Task[] pending;
+        lock (_retirementTasks) pending = _retirementTasks.ToArray();
+        if (pending.Length == 0) return;
+        try { await Task.WhenAll(pending).WaitAsync(PipelineCleanupTimeout).ConfigureAwait(false); }
+        catch (TimeoutException) { PublishLog("[IPC] retirement cleanup remains quarantined during shutdown."); }
+        catch (Exception exception) { PublishLog($"[IPC] retirement cleanup shutdown fault: {exception.Message}"); }
+    }
+
+    private static RadarScreenConfiguration FindOrCreateScreenConfiguration(RadarAppConfiguration configurationRoot, RadarScreenDefinitionPayload definition)
+    {
+        configurationRoot.Screens ??= [];
+        var configuration = configurationRoot.Screens.FirstOrDefault(screen => string.Equals(screen.ScreenId, definition.ScreenId, StringComparison.OrdinalIgnoreCase));
         if (configuration is not null) return configuration;
         configuration = new RadarScreenConfiguration
         {
@@ -432,7 +525,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             HeightPixels = definition.DefaultHeightPixels,
             Sensors = []
         };
-        _configuration.Screens.Add(configuration);
+        configurationRoot.Screens.Add(configuration);
         return configuration;
     }
 
@@ -454,6 +547,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private ScreenRuntime CreateRuntime(RadarScreenConfiguration configuration, RadarScreenInfo info)
     {
         var runtime = new ScreenRuntime(configuration, info, CreateFusion(configuration, info));
+        runtime.OperationsDrained.TrySetResult();
         EnsureEnabledPipelines(runtime);
         return runtime;
     }
@@ -536,7 +630,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             result.Targets, result.Pointers, sequence, timestamp));
     }
 
-    private void QueueRetirement(ScreenRuntime runtime, DateTimeOffset timestamp, bool remove, (RadarScreenConfiguration Configuration, RadarScreenInfo Info)? replaceWith)
+    private void QueueRetirement(ScreenRuntime runtime, DateTimeOffset timestamp, bool remove, ScreenRuntime? replaceWith)
     {
         IReadOnlyList<RadarScreenPointer> ups;
         lock (runtime.Gate) ups = runtime.Fusion.SnapshotPressedPointers(timestamp);
@@ -546,7 +640,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         runtime.LastPointers = [];
     }
 
-    private async Task CompleteRetirementAsync(ScreenRuntime runtime, DateTimeOffset timestamp, bool remove, (RadarScreenConfiguration Configuration, RadarScreenInfo Info)? replaceWith)
+    private async Task CompleteRetirementAsync(ScreenRuntime runtime, DateTimeOffset timestamp, bool remove, ScreenRuntime? replaceWith)
     {
         lock (runtime.Gate) runtime.Fusion.Reset(timestamp);
         await DisposeRuntimeAsync(runtime).ConfigureAwait(false);
@@ -554,11 +648,10 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         try
         {
             if (!_screens.TryGetValue(runtime.Info.ScreenId, out var current) || !ReferenceEquals(current, runtime)) return;
-            if (replaceWith.HasValue)
+            if (replaceWith is not null)
             {
-                var replacement = CreateRuntime(replaceWith.Value.Configuration, replaceWith.Value.Info);
-                replacement.Associated = true;
-                _screens[runtime.Info.ScreenId] = replacement;
+                replaceWith.Associated = true;
+                _screens[runtime.Info.ScreenId] = replaceWith;
             }
             else if (remove)
             {
@@ -576,6 +669,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
 
     private async Task DisposeRuntimeAsync(ScreenRuntime runtime)
     {
+        await runtime.OperationsDrained.Task.ConfigureAwait(false);
         foreach (var binding in runtime.Pipelines.Values)
         {
             binding.Pipeline.DetectionFrameUpdated -= binding.DetectionHandler;
@@ -583,8 +677,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             binding.Pipeline.StateChanged -= binding.StateHandler;
             binding.Pipeline.LogReceived -= binding.LogHandler;
             await StopIsolatedAsync(runtime.Info.ScreenId, binding).ConfigureAwait(false);
-            try { await binding.Pipeline.DisposeAsync().ConfigureAwait(false); }
-            catch (Exception exception) { PublishLog($"[{runtime.Info.ScreenId}/{binding.Configuration.SensorId}] dispose fault: {exception.Message}"); }
+            await AwaitBoundedAsync(binding.Pipeline.DisposeAsync().AsTask(), runtime.Info.ScreenId, binding.Configuration.SensorId, "dispose").ConfigureAwait(false);
         }
         runtime.Pipelines.Clear();
     }
@@ -597,9 +690,34 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
 
     private async Task StopIsolatedAsync(string screenId, PipelineRuntime pipeline)
     {
-        try { await pipeline.Pipeline.StopAsync().ConfigureAwait(false); }
-        catch (Exception exception) { PublishLog($"[{screenId}/{pipeline.Configuration.SensorId}] stop fault: {exception.Message}"); }
+        await AwaitBoundedAsync(pipeline.Pipeline.StopAsync(), screenId, pipeline.Configuration.SensorId, "stop").ConfigureAwait(false);
     }
+
+    private async Task AwaitBoundedAsync(Task task, string screenId, string sensorId, string operation)
+    {
+        try
+        {
+            await task.WaitAsync(PipelineCleanupTimeout, _lifetime.Token).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            PublishLog($"[{screenId}/{sensorId}] {operation} quarantined after {PipelineCleanupTimeout.TotalMilliseconds:0}ms.");
+            ObserveLate(task, screenId, sensorId, operation);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+            ObserveLate(task, screenId, sensorId, operation);
+        }
+        catch (Exception exception)
+        {
+            PublishLog($"[{screenId}/{sensorId}] {operation} fault: {exception.Message}");
+        }
+    }
+
+    private void ObserveLate(Task task, string screenId, string sensorId, string operation) => _ = task.ContinueWith(completed =>
+    {
+        if (completed.IsFaulted) PublishLog($"[{screenId}/{sensorId}] quarantined {operation} fault: {completed.Exception?.GetBaseException().Message}");
+    }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
 
     private async Task ConnectPrimarySensorAsync(CancellationToken cancellationToken)
     {
@@ -628,6 +746,38 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         return pipeline;
     }
 
+    private async Task UsePipelineAsync(string screenId, string sensorId, Func<IRadarSensorPipeline, CancellationToken, Task> operation, CancellationToken cancellationToken)
+    {
+        using var lease = AcquirePipelineLease(screenId, sensorId);
+        await operation(lease.Pipeline.Pipeline, cancellationToken).ConfigureAwait(false);
+    }
+
+    private void UsePipeline(string screenId, string sensorId, Action<IRadarSensorPipeline> operation)
+    {
+        using var lease = AcquirePipelineLease(screenId, sensorId);
+        operation(lease.Pipeline.Pipeline);
+    }
+
+    private PipelineLease AcquirePipelineLease(string screenId, string sensorId)
+    {
+        var runtime = GetRuntime(screenId);
+        lock (runtime.Gate)
+        {
+            if (runtime.IsRetiring || !runtime.Associated || string.IsNullOrWhiteSpace(sensorId) || !runtime.Pipelines.TryGetValue(sensorId, out var pipeline))
+                throw new InvalidOperationException($"Sensor '{sensorId}' is not enabled on screen '{screenId}'.");
+            if (runtime.OperationCount++ == 0) runtime.OperationsDrained = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            return new PipelineLease(runtime, pipeline);
+        }
+    }
+
+    private static void ReleasePipelineLease(ScreenRuntime runtime)
+    {
+        lock (runtime.Gate)
+        {
+            if (--runtime.OperationCount == 0) runtime.OperationsDrained.TrySetResult();
+        }
+    }
+
     private PipelineRuntime? PrimaryPipeline => AssociatedRuntimes().OrderBy(runtime => runtime.Info.Order).ThenBy(runtime => runtime.Info.ScreenId, StringComparer.OrdinalIgnoreCase)
         .FirstOrDefault(runtime => runtime.Info.IsPrimary)?.Pipelines.Values.FirstOrDefault();
 
@@ -642,9 +792,17 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private static RadarScreenInfo ToScreenInfo(RadarScreenConfiguration configuration) => new(configuration.ScreenId, configuration.UnityDisplayName,
         configuration.EffectiveWidthPixels, configuration.EffectiveHeightPixels, configuration.IsPrimary, configuration.UnityOrder);
 
-    private async Task PersistConfigurationAsync(CancellationToken cancellationToken)
+    private async Task PersistConfigurationAsync(RadarAppConfiguration configuration, CancellationToken cancellationToken)
     {
-        if (_configurationPath is not null && _configuration.CanPersist) await RadarConfigurationStore.SaveAsync(_configurationPath, _configuration, cancellationToken).ConfigureAwait(false);
+        if (_configurationPath is not null && configuration.CanPersist) await RadarConfigurationStore.SaveAsync(_configurationPath, configuration, cancellationToken).ConfigureAwait(false);
+    }
+
+    private Task PersistConfigurationAsync(CancellationToken cancellationToken) => PersistConfigurationAsync(_configuration, cancellationToken);
+
+    private static RadarAppConfiguration CloneConfiguration(RadarAppConfiguration source)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(source);
+        return System.Text.Json.JsonSerializer.Deserialize<RadarAppConfiguration>(json) ?? throw new InvalidOperationException("Could not stage radar configuration.");
     }
 
     private void OnUnityConnected(HelloPayload hello) => SetUnityStatus(new UnityClientStatus(true, hello.UnityProcessId, hello.UnityVersion,
@@ -684,6 +842,8 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         public Dictionary<string, PipelineRuntime> Pipelines { get; } = new(StringComparer.OrdinalIgnoreCase);
         public bool Associated { get; set; } = true;
         public bool IsRetiring { get; set; }
+        public int OperationCount { get; set; }
+        public TaskCompletionSource OperationsDrained { get; set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public DateTimeOffset NextDue { get; set; } = DateTimeOffset.MinValue;
         public IReadOnlyList<FusedScreenTarget> LastTargets { get; set; } = [];
         public IReadOnlyList<RadarScreenPointer> LastPointers { get; set; } = [];
@@ -700,6 +860,12 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         public Action<string>? LogHandler { get; set; }
     }
 
+    private sealed class PipelineLease(ScreenRuntime runtime, PipelineRuntime pipeline) : IDisposable
+    {
+        public PipelineRuntime Pipeline { get; } = pipeline;
+        public void Dispose() => ReleasePipelineLease(runtime);
+    }
+
     private sealed record TransitionFrame(RadarScreenInfo Screen, IReadOnlyList<RadarScreenPointer> Pointers, Func<Task>? OnDelivered = null);
-    private sealed record PreparedBatch(long Sequence, DateTimeOffset Timestamp, PointerBatchPayload Payload, Func<Task>? OnDelivered);
+    private sealed record PreparedBatch(long Sequence, DateTimeOffset Timestamp, PointerBatchPayload Payload, TransitionFrame? Transition);
 }
