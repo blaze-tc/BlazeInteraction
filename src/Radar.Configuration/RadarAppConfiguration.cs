@@ -9,6 +9,10 @@ public sealed class RadarAppConfiguration
     public RadarIpcConfiguration Ipc { get; set; } = new();
     public List<RadarScreenConfiguration> Screens { get; set; } = [new()];
 
+    /// <summary>Non-persisted diagnostics recorded while loading or migrating a configuration file.</summary>
+    [JsonIgnore]
+    public List<string> LoadWarnings { get; } = [];
+
     [Obsolete("Temporary build bridge; use Screens.")]
     [JsonIgnore]
     public RadarDeviceConfiguration Device { get => MainSensor.Device; set => MainSensor.Device = value ?? new(); }

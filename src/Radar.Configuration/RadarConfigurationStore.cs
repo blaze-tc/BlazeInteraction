@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Yuexin.Radar.Contracts;
@@ -10,47 +11,50 @@ public static class RadarConfigurationStore
 
     public static RadarAppConfiguration LoadFromJson(string json)
     {
-        if (string.IsNullOrWhiteSpace(json)) return RadarAppConfiguration.CreateDefault();
-
-        try
-        {
-            var configuration = ReadSchemaVersion(json) <= 1
-                ? MigrateSchemaOne(JsonSerializer.Deserialize<LegacyRadarAppConfiguration>(json, JsonOptions) ?? new())
-                : JsonSerializer.Deserialize<RadarAppConfiguration>(json, JsonOptions) ?? RadarAppConfiguration.CreateDefault();
-            EnsureSections(configuration);
-            ConfigurationValidator.ValidateAndNormalize(configuration);
-            return configuration;
-        }
-        catch (JsonException)
-        {
-            return RadarAppConfiguration.CreateDefault();
-        }
+        if (string.IsNullOrWhiteSpace(json)) return CreateDiagnosticConfiguration("Configuration JSON is missing.");
+        return LoadFromBytes(Encoding.UTF8.GetBytes(json));
     }
 
     public static async Task<RadarAppConfiguration> LoadAsync(string path, CancellationToken cancellationToken = default)
     {
         if (!File.Exists(path)) return RadarAppConfiguration.CreateDefault();
 
-        var json = await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
-        if (ReadSchemaVersion(json) > 1) return LoadFromJson(json);
+        var bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+        var schema = ReadSchemaVersion(bytes);
+        if (schema.Kind == SchemaReadKind.Schema2) return DeserializeSchema2(bytes);
+        if (schema.Kind != SchemaReadKind.Schema1) return CreateDiagnosticConfiguration(schema.Diagnostic!);
 
-        RadarAppConfiguration migrated;
+        LegacyRadarAppConfiguration legacy;
         try
         {
-            migrated = MigrateSchemaOne(JsonSerializer.Deserialize<LegacyRadarAppConfiguration>(json, JsonOptions) ?? new());
+            legacy = JsonSerializer.Deserialize<LegacyRadarAppConfiguration>(GetJsonBytes(bytes), JsonOptions) ?? new LegacyRadarAppConfiguration();
         }
-        catch (JsonException)
+        catch (JsonException exception)
         {
-            return RadarAppConfiguration.CreateDefault();
+            return CreateDiagnosticConfiguration($"Configuration JSON is malformed: {exception.Message}");
         }
 
+        var migrated = MigrateSchemaOne(legacy);
         EnsureSections(migrated);
-        ConfigurationValidator.ValidateAndNormalize(migrated);
-        var backupPath = Path.Combine(
-            Path.GetDirectoryName(Path.GetFullPath(path))!,
-            $"{Path.GetFileNameWithoutExtension(path)}.schema1.{DateTime.UtcNow:yyyyMMddHHmmssfff}.bak");
-        await File.WriteAllTextAsync(backupPath, json, cancellationToken).ConfigureAwait(false);
-        await SaveAsync(path, migrated, cancellationToken).ConfigureAwait(false);
+        var validation = ConfigurationValidator.ValidateAndNormalize(migrated);
+        if (!validation.IsValid)
+        {
+            migrated.LoadWarnings.AddRange(validation.Errors.Select(error => $"Schema 1 migration was not saved: {error}"));
+            return migrated;
+        }
+
+        var backupPath = CreateSchemaOneBackup(path);
+        try
+        {
+            await SaveAsync(path, migrated, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            // The original source is still available both at path and in the byte-for-byte backup.
+            throw;
+        }
+
+        migrated.LoadWarnings.Add($"Schema 1 configuration migrated to Schema 2; original preserved at '{backupPath}'.");
         return migrated;
     }
 
@@ -67,43 +71,138 @@ public static class RadarConfigurationStore
         if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
 
         var json = JsonSerializer.Serialize(configuration, JsonOptions);
-        var temporaryPath = path + ".tmp";
-        await File.WriteAllTextAsync(temporaryPath, json, cancellationToken).ConfigureAwait(false);
-        File.Move(temporaryPath, path, overwrite: true);
+        var temporaryPath = Path.Combine(directory!, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            await File.WriteAllTextAsync(temporaryPath, json, cancellationToken).ConfigureAwait(false);
+            File.Move(temporaryPath, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+        }
     }
 
     public static string GetDefaultUserConfigurationPath() => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Yuexin", "RadarBridge", "config.json");
 
-    private static int ReadSchemaVersion(string json)
+    private static RadarAppConfiguration LoadFromBytes(byte[] bytes)
     {
-        using var document = JsonDocument.Parse(json);
-        return document.RootElement.TryGetProperty("schemaVersion", out var value) && value.TryGetInt32(out var version) ? version : 1;
+        var schema = ReadSchemaVersion(bytes);
+        return schema.Kind switch
+        {
+            SchemaReadKind.Schema1 => MigrateSchemaOne(JsonSerializer.Deserialize<LegacyRadarAppConfiguration>(GetJsonBytes(bytes), JsonOptions) ?? new LegacyRadarAppConfiguration()),
+            SchemaReadKind.Schema2 => DeserializeSchema2(bytes),
+            _ => CreateDiagnosticConfiguration(schema.Diagnostic!)
+        };
     }
 
-    private static RadarAppConfiguration MigrateSchemaOne(LegacyRadarAppConfiguration legacy) => new()
+    private static RadarAppConfiguration DeserializeSchema2(byte[] bytes)
     {
-        SchemaVersion = 2,
-        Ipc = legacy.Ipc,
-        Screens = [new RadarScreenConfiguration
+        try
         {
-            ScreenId = "main",
-            UnityDisplayName = "Main",
-            IsPrimary = true,
-            Tracking = RadarScreenTrackingConfiguration.FromLegacy(legacy.Tracking),
-            Interaction = legacy.Interaction,
-            Sensors = [new RadarSensorConfiguration
+            var configuration = JsonSerializer.Deserialize<RadarAppConfiguration>(GetJsonBytes(bytes), JsonOptions) ?? RadarAppConfiguration.CreateDefault();
+            EnsureSections(configuration);
+            ConfigurationValidator.ValidateAndNormalize(configuration);
+            return configuration;
+        }
+        catch (JsonException exception)
+        {
+            return CreateDiagnosticConfiguration($"Configuration JSON is malformed: {exception.Message}");
+        }
+    }
+
+    private static SchemaReadResult ReadSchemaVersion(byte[] bytes)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(GetJsonBytes(bytes));
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return SchemaReadResult.Rejected("Configuration root must be an object.");
+
+            var discriminators = document.RootElement.EnumerateObject()
+                .Where(property => string.Equals(property.Name, "schemaVersion", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (discriminators.Length == 0) return SchemaReadResult.Rejected("Configuration schemaVersion is missing; the file was not migrated or overwritten.");
+            if (discriminators.Length != 1) return SchemaReadResult.Rejected("Configuration schemaVersion is ambiguous; the file was not migrated or overwritten.");
+            if (!discriminators[0].Value.TryGetInt32(out var version))
+                return SchemaReadResult.Rejected("Configuration schemaVersion must be an integer; the file was not migrated or overwritten.");
+
+            return version switch
             {
-                SensorId = "sensor-1",
-                Device = legacy.Device,
-                Transform = legacy.Transform,
-                Range = legacy.Range,
-                Clustering = legacy.Clustering,
-                Calibration = legacy.Calibration,
-                OutputRectPixels = new RadarPixelRect(0, 0, 1920, 1080)
+                1 => new SchemaReadResult(SchemaReadKind.Schema1, null),
+                2 => new SchemaReadResult(SchemaReadKind.Schema2, null),
+                _ => SchemaReadResult.Rejected($"Configuration schemaVersion '{version}' is unsupported; the file was not migrated or overwritten.")
+            };
+        }
+        catch (JsonException exception)
+        {
+            return SchemaReadResult.Rejected($"Configuration JSON is malformed: {exception.Message}");
+        }
+    }
+
+    private static string CreateSchemaOneBackup(string path)
+    {
+        var directory = Path.GetDirectoryName(Path.GetFullPath(path))!;
+        var baseName = Path.GetFileNameWithoutExtension(path);
+        for (var attempt = 0; ; attempt++)
+        {
+            var suffix = attempt == 0 ? string.Empty : $".{attempt}";
+            var backupPath = Path.Combine(directory, $"{baseName}.schema1.{DateTime.UtcNow:yyyyMMddHHmmssfff}{suffix}.bak");
+            try
+            {
+                File.Copy(path, backupPath, overwrite: false);
+                return backupPath;
+            }
+            catch (IOException) when (File.Exists(backupPath))
+            {
+                // Timestamp collisions are rare but must never overwrite an earlier backup.
+            }
+        }
+    }
+
+    private static byte[] GetJsonBytes(byte[] bytes)
+    {
+        if (bytes.AsSpan().StartsWith(Encoding.UTF8.Preamble)) return bytes[Encoding.UTF8.Preamble.Length..];
+        if (bytes.AsSpan().StartsWith(Encoding.Unicode.Preamble)) return Encoding.UTF8.GetBytes(Encoding.Unicode.GetString(bytes, Encoding.Unicode.Preamble.Length, bytes.Length - Encoding.Unicode.Preamble.Length));
+        if (bytes.AsSpan().StartsWith(Encoding.BigEndianUnicode.Preamble)) return Encoding.UTF8.GetBytes(Encoding.BigEndianUnicode.GetString(bytes, Encoding.BigEndianUnicode.Preamble.Length, bytes.Length - Encoding.BigEndianUnicode.Preamble.Length));
+        return bytes;
+    }
+
+    private static RadarAppConfiguration MigrateSchemaOne(LegacyRadarAppConfiguration legacy)
+    {
+        var migrated = new RadarAppConfiguration
+        {
+            SchemaVersion = 2,
+            Ipc = legacy.Ipc,
+            Screens = [new RadarScreenConfiguration
+            {
+                ScreenId = "main",
+                UnityDisplayName = "Main",
+                IsPrimary = true,
+                Interaction = legacy.Interaction,
+                Sensors = [new RadarSensorConfiguration
+                {
+                    SensorId = "sensor-1",
+                    Device = legacy.Device,
+                    Transform = legacy.Transform,
+                    Range = legacy.Range,
+                    Clustering = legacy.Clustering,
+                    Calibration = legacy.Calibration,
+                    OutputRectPixels = new RadarPixelRect(0, 0, 1920, 1080)
+                }]
             }]
-        }]
-    };
+        };
+        migrated.Screens[0].Tracking = RadarScreenTrackingConfiguration.FromLegacy(legacy.Tracking, migrated.LoadWarnings);
+        return migrated;
+    }
+
+    private static RadarAppConfiguration CreateDiagnosticConfiguration(string diagnostic)
+    {
+        var configuration = RadarAppConfiguration.CreateDefault();
+        configuration.LoadWarnings.Add(diagnostic);
+        return configuration;
+    }
 
     private static JsonSerializerOptions CreateJsonOptions()
     {
@@ -141,6 +240,12 @@ public static class RadarConfigurationStore
         sensor.Calibration.PhysicalCorners ??= [];
         sensor.Calibration.HomographyMatrix ??= [];
         sensor.Calibration.TransformSnapshot ??= new RadarTransformConfiguration();
+    }
+
+    private enum SchemaReadKind { Schema1, Schema2, Rejected }
+    private readonly record struct SchemaReadResult(SchemaReadKind Kind, string? Diagnostic)
+    {
+        public static SchemaReadResult Rejected(string diagnostic) => new(SchemaReadKind.Rejected, diagnostic);
     }
 
     private sealed class LenientRadarModelJsonConverter : JsonConverter<RadarModel>

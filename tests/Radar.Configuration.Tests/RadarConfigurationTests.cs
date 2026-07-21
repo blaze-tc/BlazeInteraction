@@ -218,8 +218,8 @@ public sealed class RadarConfigurationTests
             var json = await File.ReadAllTextAsync(path);
             Assert.Contains("\"screens\"", json);
             using var document = System.Text.Json.JsonDocument.Parse(json);
-            Assert.False(document.RootElement.TryGetProperty("device", out _));
-            Assert.False(document.RootElement.TryGetProperty("tracking", out _));
+            Assert.False(document.RootElement.TryGetProperty("device", out var ignoredDevice));
+            Assert.False(document.RootElement.TryGetProperty("tracking", out var ignoredTracking));
         }
         finally
         {
@@ -261,6 +261,187 @@ public sealed class RadarConfigurationTests
             {
                 Directory.Delete(directory, recursive: true);
             }
+        }
+    }
+
+    [Fact]
+    public async Task LoadAsync_CaseInsensitiveSchemaVersion_LoadsSchemaTwoWithoutMigration()
+    {
+        await WithTemporaryConfigurationAsync(async (directory, path) =>
+        {
+            var json = """
+                {"SchemaVersion":2,"screens":[{"screenId":"preserved","isPrimary":true,
+                  "sensors":[{"sensorId":"sensor-a","device":{"radarIp":"10.0.0.9","port":8487}}]}]}
+                """;
+            await File.WriteAllTextAsync(path, json);
+
+            var loaded = await RadarConfigurationStore.LoadAsync(path);
+
+            Assert.Equal("preserved", Assert.Single(loaded.Screens).ScreenId);
+            Assert.Equal("sensor-a", loaded.Screens[0].Sensors[0].SensorId);
+            Assert.Empty(Directory.GetFiles(directory, "*.bak"));
+            Assert.Equal(json, await File.ReadAllTextAsync(path));
+        });
+    }
+
+    [Theory]
+    [InlineData("{\"schemaVersion\":3,\"screens\":[]}")]
+    [InlineData("{\"schemaVersion\":1,\"SchemaVersion\":2}")]
+    [InlineData("{\"screens\":[]}")]
+    public async Task LoadAsync_UnsupportedOrAmbiguousSchema_PreservesSourceAndReturnsDiagnostic(string json)
+    {
+        await WithTemporaryConfigurationAsync(async (directory, path) =>
+        {
+            await File.WriteAllTextAsync(path, json);
+
+            var loaded = await RadarConfigurationStore.LoadAsync(path);
+
+            Assert.Equal(json, await File.ReadAllTextAsync(path));
+            Assert.Empty(Directory.GetFiles(directory, "*.bak"));
+            Assert.NotEmpty(loaded.LoadWarnings);
+        });
+    }
+
+    [Fact]
+    public async Task LoadAsync_MalformedJson_PreservesSourceAndReturnsDiagnostic()
+    {
+        await WithTemporaryConfigurationAsync(async (directory, path) =>
+        {
+            const string malformed = "{\"schemaVersion\":2,\"screens\":[";
+            await File.WriteAllTextAsync(path, malformed);
+
+            var loaded = await RadarConfigurationStore.LoadAsync(path);
+
+            Assert.Equal(malformed, await File.ReadAllTextAsync(path));
+            Assert.Empty(Directory.GetFiles(directory, "*.bak"));
+            Assert.Contains(loaded.LoadWarnings, warning => warning.Contains("malformed", StringComparison.OrdinalIgnoreCase));
+        });
+    }
+
+    [Fact]
+    public async Task LoadAsync_SchemaOne_PreservesBackupBytesAndExposesMigrationWarning()
+    {
+        await WithTemporaryConfigurationAsync(async (directory, path) =>
+        {
+            var original = System.Text.Encoding.UTF8.GetPreamble()
+                .Concat(System.Text.Encoding.UTF8.GetBytes("{\"schemaVersion\":1,\"tracking\":{\"maximumAssociationDistanceMeters\":0.7},\"device\":{\"radarIp\":\"10.0.0.8\",\"port\":8487}}"))
+                .ToArray();
+            await File.WriteAllBytesAsync(path, original);
+
+            var migrated = await RadarConfigurationStore.LoadAsync(path);
+
+            var backup = Assert.Single(Directory.GetFiles(directory, "config.schema1.*.bak"));
+            Assert.Equal(original, await File.ReadAllBytesAsync(backup));
+            Assert.Contains(migrated.LoadWarnings, warning => warning.Contains("maximumAssociationDistanceMeters", StringComparison.Ordinal));
+        });
+    }
+
+    [Fact]
+    public async Task LoadAsync_SchemaOneUtf16Bom_PreservesOriginalBytes()
+    {
+        await WithTemporaryConfigurationAsync(async (directory, path) =>
+        {
+            var json = "{\"schemaVersion\":1,\"device\":{\"radarIp\":\"10.0.0.8\",\"port\":8487}}";
+            var original = System.Text.Encoding.Unicode.GetPreamble()
+                .Concat(System.Text.Encoding.Unicode.GetBytes(json))
+                .ToArray();
+            await File.WriteAllBytesAsync(path, original);
+
+            var migrated = await RadarConfigurationStore.LoadAsync(path);
+
+            Assert.Equal(2, migrated.SchemaVersion);
+            var backup = Assert.Single(Directory.GetFiles(directory, "config.schema1.*.bak"));
+            Assert.Equal(original, await File.ReadAllBytesAsync(backup));
+        });
+    }
+
+    [Fact]
+    public void CloneWithId_DeepCopiesLegacyTrackingAndMutableCollections()
+    {
+        var screen = RadarAppConfiguration.CreateDefault().Screens[0];
+        screen.Tracking.MaximumAssociationDistanceMeters = 0.7f;
+        screen.Sensors[0].Range.ActivePolygon = [new RadarPoint2(1, 2)];
+
+        var clone = screen.CloneWithId("copy");
+        clone.Tracking.MaximumAssociationDistanceMeters = 0.1f;
+        clone.Sensors[0].Range.ActivePolygon[0] = new RadarPoint2(3, 4);
+
+        Assert.Equal(0.7f, screen.Tracking.MaximumAssociationDistanceMeters);
+        Assert.Equal(new RadarPoint2(1, 2), screen.Sensors[0].Range.ActivePolygon[0]);
+        Assert.NotSame(screen.Sensors[0].Range.ActivePolygon, clone.Sensors[0].Range.ActivePolygon);
+    }
+
+    [Fact]
+    public void Validator_ReportsOwnedPathsForAllNonFinitePersistedSensorValues()
+    {
+        var configuration = RadarAppConfiguration.CreateDefault();
+        var screen = configuration.Screens[0];
+        screen.ScreenId = "side";
+        var sensor = screen.Sensors[0];
+        sensor.SensorId = "sensor-2";
+        sensor.Range.ActivePolygon = [new RadarPoint2(float.NaN, 0)];
+        sensor.Range.MaskedPolygons = [[new RadarPoint2(0, float.PositiveInfinity)]];
+        sensor.Calibration.PhysicalCorners = [new RadarPoint2(float.NaN, 0)];
+        sensor.Calibration.HomographyMatrix = [double.PositiveInfinity];
+        sensor.Calibration.TransformSnapshot.OffsetYMeters = float.NaN;
+        sensor.Calibration.MaximumCornerError = double.PositiveInfinity;
+
+        var result = ConfigurationValidator.ValidateAndNormalize(configuration);
+
+        Assert.False(result.IsValid);
+        Assert.All(result.Errors, error => Assert.Contains("screens[side]", error, StringComparison.Ordinal));
+        Assert.Contains(result.Errors, error => error.Contains("sensors[sensor-2]", StringComparison.Ordinal));
+        Assert.Contains(result.Errors, error => error.Contains("physicalCorners", StringComparison.Ordinal));
+        Assert.Contains(result.Errors, error => error.Contains("transformSnapshot", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task FlatBridge_CreatesMainSensorDelegatesWithoutSerializingSecondState()
+    {
+        var configuration = new RadarAppConfiguration { Screens = [] };
+        configuration.Device = new RadarDeviceConfiguration { RadarIp = "10.0.0.12", Port = 8487 };
+        configuration.Tracking = new RadarScreenTrackingConfiguration { MaximumAssociationDistancePixels = 222f };
+
+        await WithTemporaryConfigurationAsync(async (_, path) =>
+        {
+            await RadarConfigurationStore.SaveAsync(path, configuration);
+            using var document = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(path));
+
+            var screen = Assert.Single(configuration.Screens);
+            Assert.Equal("main", screen.ScreenId);
+            Assert.Equal("10.0.0.12", Assert.Single(screen.Sensors).Device.RadarIp);
+            Assert.Equal(222f, screen.Tracking.MaximumAssociationDistancePixels);
+            Assert.False(document.RootElement.TryGetProperty("device", out var ignoredDevice));
+            Assert.False(document.RootElement.TryGetProperty("tracking", out var ignoredTracking));
+        });
+    }
+
+    [Fact]
+    public async Task SaveAsync_ConcurrentSaves_UseUniqueTemporaryFilesAndCleanUp()
+    {
+        await WithTemporaryConfigurationAsync(async (directory, path) =>
+        {
+            var saves = Enumerable.Range(0, 12)
+                .Select(_ => RadarConfigurationStore.SaveAsync(path, RadarAppConfiguration.CreateDefault()));
+
+            await Task.WhenAll(saves);
+
+            Assert.True(File.Exists(path));
+            Assert.Empty(Directory.GetFiles(directory, "*.tmp"));
+        });
+    }
+
+    private static async Task WithTemporaryConfigurationAsync(Func<string, string, Task> action)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "RadarControl.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            await action(directory, Path.Combine(directory, "config.json"));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
         }
     }
 }

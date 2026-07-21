@@ -162,6 +162,7 @@ public sealed class RadarScreenConfiguration
             Tracking = new RadarScreenTrackingConfiguration
             {
                 ConfirmFrames = Tracking.ConfirmFrames, LostFrames = Tracking.LostFrames,
+                MaximumAssociationDistanceMeters = Tracking.MaximumAssociationDistanceMeters,
                 MaximumAssociationDistancePixels = Tracking.MaximumAssociationDistancePixels,
                 SmoothingAlpha = Tracking.SmoothingAlpha
             },
