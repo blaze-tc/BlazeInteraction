@@ -125,8 +125,10 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
                     var previousHeight = configuration.EffectiveHeightPixels;
                     UpdateUnityOwnedConfiguration(configuration, definition);
                     var info = ToScreenInfo(configuration);
+                    var expectedSensors = new HashSet<string>(configuration.Sensors.Where(sensor => sensor.Enabled).Select(sensor => sensor.SensorId), StringComparer.OrdinalIgnoreCase);
                     var needsRuntime = !_screens.TryGetValue(definition.ScreenId, out var current) || current.IsRetiring ||
-                        previousWidth != configuration.EffectiveWidthPixels || previousHeight != configuration.EffectiveHeightPixels;
+                        previousWidth != configuration.EffectiveWidthPixels || previousHeight != configuration.EffectiveHeightPixels ||
+                        !expectedSensors.SetEquals(current.Pipelines.Keys);
                     if (needsRuntime) staged.Add(definition.ScreenId, CreateRuntime(configuration, info));
                     configuration.IsAssociated = true;
                 }
