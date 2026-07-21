@@ -15,6 +15,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private readonly IRadarSensorPipelineFactory _pipelineFactory;
     private readonly string? _configurationPath;
     private readonly Func<RadarAppConfiguration, CancellationToken, Task> _persistConfigurationAsync;
+    private readonly Func<PointerBatchPayload, CancellationToken, Task<bool>>? _sendPointerBatchAsync;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
     private readonly SemaphoreSlim _topologyLock = new(1, 1);
@@ -38,13 +39,15 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         ILogger<RadarBridgeCoordinator> logger,
         IRadarSensorPipelineFactory pipelineFactory,
         string? configurationPath = null,
-        Func<RadarAppConfiguration, CancellationToken, Task>? persistConfigurationAsync = null)
+        Func<RadarAppConfiguration, CancellationToken, Task>? persistConfigurationAsync = null,
+        Func<PointerBatchPayload, CancellationToken, Task<bool>>? sendPointerBatchAsync = null)
     {
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _pipelineFactory = pipelineFactory ?? throw new ArgumentNullException(nameof(pipelineFactory));
         _configurationPath = configurationPath;
         _persistConfigurationAsync = persistConfigurationAsync ?? PersistWithStoreAsync;
+        _sendPointerBatchAsync = sendPointerBatchAsync;
     }
 
     public event Action<RadarSensorRuntimeSnapshot>? SensorSnapshotUpdated;
@@ -462,6 +465,20 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
 
     private async Task SendBatchAsync(PreparedBatch batch, CancellationToken cancellationToken)
     {
+        if (_sendPointerBatchAsync is not null)
+        {
+            var seamSent = await _sendPointerBatchAsync(batch.Payload, cancellationToken).ConfigureAwait(false);
+            if (!seamSent)
+            {
+                await ReleaseTransitionAsync(batch, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            var seamCleanup = await ConfirmTransitionAsync(batch, cancellationToken).ConfigureAwait(false);
+            if (seamCleanup is not null) TrackRetirement(seamCleanup);
+            return;
+        }
+
         var server = _pipeServer;
         if (server is null)
         {

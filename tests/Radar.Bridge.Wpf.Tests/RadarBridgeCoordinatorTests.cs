@@ -222,6 +222,81 @@ public sealed class RadarBridgeCoordinatorTests
     }
 
     [Fact]
+    public async Task Coordinator_BlockedTransitionSendSerializesConcurrentTopologyAndPreservesUpThenEmpty()
+    {
+        var configuration = new RadarAppConfiguration { Screens = [ScreenConfiguration("front", "f1", 1920, 1080)] };
+        configuration.Screens[0].Tracking.ConfirmFrames = 1;
+        var factory = new FakePipelineFactory();
+        var sendStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSend = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sent = new System.Collections.Concurrent.ConcurrentQueue<PointerBatchPayload>();
+        var upAttempts = 0;
+        await using var coordinator = CreateCoordinator(configuration, factory, send: async (batch, _) =>
+        {
+            sent.Enqueue(batch);
+            if (batch.Screens.Any(frame => frame.Screen.ScreenId == "front" && frame.Pointers.Any(pointer => pointer.Phase == RadarPointerPhase.Up)))
+            {
+                if (Interlocked.Increment(ref upAttempts) == 1)
+                {
+                    sendStarted.TrySetResult();
+                    await releaseSend.Task;
+                    return false;
+                }
+            }
+            return true;
+        });
+        await coordinator.ApplyUnityTopologyAsync(Hello(Screen("front", "Front", true, 1920, 1080, 0)));
+        factory["front", "f1"].Publish(Detection("f1", 400, 300));
+        coordinator.TickForTest(DateTimeOffset.UnixEpoch.AddSeconds(1));
+        await coordinator.ApplyUnityTopologyAsync(Hello(Screen("left", "Left", true, 1920, 1080, 0)));
+        await coordinator.StartInfrastructureAsync();
+        await sendStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var concurrent = coordinator.ApplyUnityTopologyAsync(Hello(Screen("left", "Left", true, 1920, 1080, 0)));
+        await concurrent.WaitAsync(TimeSpan.FromSeconds(1));
+        releaseSend.TrySetResult();
+        await WaitUntilAsync(() => Volatile.Read(ref upAttempts) >= 2 && sent.Any(batch => batch.Screens.Any(frame => frame.Screen.ScreenId == "front" && frame.Pointers.Count == 0)), new CancellationTokenSource(TimeSpan.FromSeconds(2)).Token);
+
+        var batches = sent.ToArray();
+        var firstUp = Array.FindIndex(batches, batch => batch.Screens.Any(frame => frame.Screen.ScreenId == "front" && frame.Pointers.Any(pointer => pointer.Phase == RadarPointerPhase.Up)));
+        var retriedUp = Array.FindIndex(batches, firstUp + 1, batch => batch.Screens.Any(frame => frame.Screen.ScreenId == "front" && frame.Pointers.Any(pointer => pointer.Phase == RadarPointerPhase.Up)));
+        var empty = Array.FindIndex(batches, retriedUp + 1, batch => batch.Screens.Any(frame => frame.Screen.ScreenId == "front" && frame.Pointers.Count == 0));
+        Assert.Equal(2, upAttempts);
+        Assert.True(firstUp >= 0 && retriedUp > firstUp && empty > retriedUp);
+    }
+
+    [Fact]
+    public async Task Coordinator_LegacyStartRecordingLeaseDefersRetirementAndBecomesSafeAfterRetirement()
+    {
+        var configuration = new RadarAppConfiguration { Screens = [ScreenConfiguration("front", "f1", 1920, 1080)] };
+        var factory = new FakePipelineFactory();
+        await using var coordinator = CreateCoordinator(configuration, factory);
+        await coordinator.ApplyUnityTopologyAsync(Hello(Screen("front", "Front", true, 1920, 1080, 0)));
+        var retiringPipeline = factory["front", "f1"];
+        retiringPipeline.BlockRecording(ignoreCancellation: true);
+
+#pragma warning disable CS0618
+        var recording = coordinator.StartRecordingAsync("capture.rdr");
+#pragma warning restore CS0618
+        await retiringPipeline.RecordingEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+
+        await coordinator.ApplyConfigurationAsync();
+        coordinator.TickForTest(DateTimeOffset.UnixEpoch.AddSeconds(1));
+        coordinator.TickForTest(DateTimeOffset.UnixEpoch.AddSeconds(2), waitForRetirement: false);
+
+        Assert.False(retiringPipeline.Disposed);
+#pragma warning disable CS0618
+        await coordinator.StartRecordingAsync("obsolete-safe.rdr");
+#pragma warning restore CS0618
+        Assert.Equal(1, retiringPipeline.RecordingCallCount);
+
+        retiringPipeline.ReleaseRecording();
+        await recording;
+        await WaitUntilAsync(() => retiringPipeline.Disposed, new CancellationTokenSource(TimeSpan.FromSeconds(1)).Token);
+        Assert.False(retiringPipeline.DisposedDuringOperation);
+    }
+
+    [Fact]
     public async Task Coordinator_StartStopAndDisposeAreConcurrentSafe()
     {
         var factory = new FakePipelineFactory();
@@ -287,10 +362,10 @@ public sealed class RadarBridgeCoordinatorTests
         Assert.True(coordinator.UnityStatus.IsConnected);
     }
 
-    private static RadarBridgeCoordinator CreateCoordinator(RadarAppConfiguration configuration, FakePipelineFactory factory, Func<RadarAppConfiguration, CancellationToken, Task>? persist = null)
+    private static RadarBridgeCoordinator CreateCoordinator(RadarAppConfiguration configuration, FakePipelineFactory factory, Func<RadarAppConfiguration, CancellationToken, Task>? persist = null, Func<PointerBatchPayload, CancellationToken, Task<bool>>? send = null)
     {
         configuration.Ipc.PipeName = "RadarControl.Tests." + Guid.NewGuid().ToString("N");
-        return new RadarBridgeCoordinator(configuration, NullLogger<RadarBridgeCoordinator>.Instance, factory, persistConfigurationAsync: persist);
+        return new RadarBridgeCoordinator(configuration, NullLogger<RadarBridgeCoordinator>.Instance, factory, persistConfigurationAsync: persist, sendPointerBatchAsync: send);
     }
 
     private static async Task<NamedPipeClientStream> ConnectAsync(string pipeName, CancellationToken cancellationToken)
@@ -397,8 +472,12 @@ public sealed class RadarBridgeCoordinatorTests
         public bool Disposed { get; private set; }
         public bool DisposedDuringOperation { get; private set; }
         public TaskCompletionSource StartEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource RecordingEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int RecordingCallCount { get; private set; }
         private TaskCompletionSource? _startRelease;
+        private TaskCompletionSource? _recordingRelease;
         private bool _ignoreStartCancellation;
+        private bool _ignoreRecordingCancellation;
         public event Action<RadarSensorRuntimeSnapshot>? SnapshotUpdated;
         public event Action<SensorDetectionFrame>? DetectionFrameUpdated;
         public event Action<RadarSensorRuntimeState>? StateChanged;
@@ -416,7 +495,17 @@ public sealed class RadarBridgeCoordinatorTests
             StateChanged?.Invoke(State);
         }
         public Task StopAsync() { StopCallCount++; State = RadarSensorRuntimeState.Stopped; StateChanged?.Invoke(State); return Task.CompletedTask; }
-        public Task StartRecordingAsync(string path, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public async Task StartRecordingAsync(string path, CancellationToken cancellationToken = default)
+        {
+            RecordingCallCount++;
+            RecordingEntered.TrySetResult();
+            if (_recordingRelease is not null)
+            {
+                if (_ignoreRecordingCancellation) await _recordingRelease.Task;
+                else await _recordingRelease.Task.WaitAsync(cancellationToken);
+            }
+            DisposedDuringOperation |= Disposed;
+        }
         public Task StopRecordingAsync() => Task.CompletedTask;
         public Task ReplayAsync(string path, double speed, bool loop, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public void PauseReplay() { }
@@ -426,6 +515,8 @@ public sealed class RadarBridgeCoordinatorTests
         public ValueTask DisposeAsync() { Disposed = true; return ValueTask.CompletedTask; }
         public void BlockStart(bool ignoreCancellation = false) { _ignoreStartCancellation = ignoreCancellation; _startRelease = new(TaskCreationOptions.RunContinuationsAsynchronously); }
         public void ReleaseStart() => _startRelease?.TrySetResult();
+        public void BlockRecording(bool ignoreCancellation = false) { _ignoreRecordingCancellation = ignoreCancellation; _recordingRelease = new(TaskCreationOptions.RunContinuationsAsynchronously); }
+        public void ReleaseRecording() => _recordingRelease?.TrySetResult();
         public void Publish(SensorDetectionFrame frame) => DetectionFrameUpdated?.Invoke(frame);
         public void Fault() { State = RadarSensorRuntimeState.Faulted; StateChanged?.Invoke(State); }
     }
