@@ -454,6 +454,27 @@ public sealed class RadarConfigurationTests
     }
 
     [Fact]
+    public async Task SaveAsync_ReleasesKeyedLocksAfterUniqueTargetsComplete()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "RadarControl.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            await Task.WhenAll(Enumerable.Range(0, 64).Select(index =>
+                RadarConfigurationStore.SaveAsync(Path.Combine(directory, $"{index}.json"), RadarAppConfiguration.CreateDefault())));
+
+            var activeLockCount = (int)typeof(RadarConfigurationStore)
+                .GetProperty("ActiveSaveLockCount", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
+                .GetValue(null)!;
+            Assert.Equal(0, activeLockCount);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task RejectedLoad_CannotBePersistedAndPreservesOriginalBytes()
     {
         await WithTemporaryConfigurationAsync(async (_, path) =>

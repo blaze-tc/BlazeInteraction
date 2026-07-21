@@ -50,3 +50,11 @@ Review verification: Bridge tests passed 41/41. A first full-solution run hit th
 - Added transition regression coverage for recorder release on replay, stop and dispose plus repeated concurrent normalized-target save stress.
 
 Second-review verification: focused recording-transition tests passed 2/2; Bridge tests passed 43/43; Configuration tests passed 34/34 and the repeated normalized-target stress case passed twice; the full solution passed 195/195. The Release build passed with 0 errors and retained 306 pre-existing compatibility-obsolescence warnings.
+
+## Third review remediation
+
+- `StartAsync` now reaps a faulted generation while holding the lifecycle lock before replacing any source, processor, connection or cancellation references. This preserves the lifecycle-to-recording lock order and prevents a delayed completion callback from stopping a newer run.
+- Save locks are now reference-counted keyed leases: waiters and holders retain the entry, and the final departure removes and disposes it. This keeps same-path serialization while preventing unbounded path-key retention.
+- Replay loop backoff is based on whether a scan was actually published, so incomplete raw entries do not spin a loop at full speed.
+
+Third-review focused verification: configuration suite and keyed-lock reclamation passed; processing-fault, recording-transition and replay EOF bridge cases passed. Clean Release build warnings remain the documented 306 pre-existing Task1/2 compatibility-obsolescence warnings, with 0 errors.

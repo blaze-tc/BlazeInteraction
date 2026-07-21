@@ -73,10 +73,17 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
                 return;
             }
 
+            // A faulted processor cancels its run before its source-completion callback can
+            // acquire this lock. Reap that complete generation before replacing any fields.
+            if (_runCancellation is not null || _sourceTask is not null || _processingTask is not null || _connectionService is not null)
+            {
+                await StopCoreAsync().ConfigureAwait(false);
+            }
+
             ValidateConfiguredSource();
             SetState(RadarSensorRuntimeState.Starting);
             _runCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetimeCancellation.Token);
-            _processingTask = ProcessFramesAsync(_runCancellation.Token);
+            _processingTask = ProcessFramesAsync(_runCancellation);
             Volatile.Write(ref _activeSource, (int)_options.SourceMode);
             _sourceTask = StartConfiguredSourceAsync(_runCancellation.Token);
             ObserveSourceCompletion(_sourceTask);
@@ -186,7 +193,7 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
             await StopCoreAsync().ConfigureAwait(false);
             SetState(RadarSensorRuntimeState.Starting);
             _runCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetimeCancellation.Token);
-            _processingTask = ProcessFramesAsync(_runCancellation.Token);
+            _processingTask = ProcessFramesAsync(_runCancellation);
             Volatile.Write(ref _activeSource, (int)RadarSensorSourceMode.Replay);
             _sourceTask = RunSourceSafelyAsync(
                 token => ReplayCoreAsync(fullPath, speed, loop, token),
@@ -349,8 +356,9 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
         }
     }
 
-    private async Task ProcessFramesAsync(CancellationToken cancellationToken)
+    private async Task ProcessFramesAsync(CancellationTokenSource runCancellation)
     {
+        var cancellationToken = runCancellation.Token;
         DateTimeOffset previousTimestamp = DateTimeOffset.MinValue;
         var previousBytes = 0L;
         try
@@ -382,7 +390,7 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
         {
             PublishLog($"Processing failed: {exception.Message}");
             SetState(RadarSensorRuntimeState.Faulted);
-            _runCancellation?.Cancel();
+            runCancellation.Cancel();
         }
     }
 
@@ -413,15 +421,13 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
             var decoder = new RadarByteStreamDecoder();
             var builder = new RadarScanFrameBuilder(minimumValidPointCount: 2);
             DateTimeOffset? previousTimestamp = null;
-            var containsRawBytes = false;
+            var publishedFrame = false;
             await foreach (var entry in reader.ReadEntriesAsync(cancellationToken).ConfigureAwait(false))
             {
                 if (entry.EntryType != RadarRecordingEntryType.RawBytes)
                 {
                     continue;
                 }
-
-                containsRawBytes = true;
 
                 if (previousTimestamp.HasValue)
                 {
@@ -440,11 +446,12 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
                     {
                         await _replayGate.WaitForFrameAsync(cancellationToken).ConfigureAwait(false);
                         PublishScan(frame);
+                        publishedFrame = true;
                     }
                 }
             }
 
-            if (loop && !containsRawBytes)
+            if (loop && !publishedFrame)
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(25), cancellationToken).ConfigureAwait(false);
             }

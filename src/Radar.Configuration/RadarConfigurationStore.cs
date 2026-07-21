@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -9,7 +8,16 @@ namespace Yuexin.Radar.Configuration;
 public static class RadarConfigurationStore
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
-    private static readonly ConcurrentDictionary<string, SemaphoreSlim> SaveLocks = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly object SaveLocksGate = new();
+    private static readonly Dictionary<string, SaveLockEntry> SaveLocks = new(StringComparer.OrdinalIgnoreCase);
+
+    internal static int ActiveSaveLockCount
+    {
+        get
+        {
+            lock (SaveLocksGate) return SaveLocks.Count;
+        }
+    }
 
     public static RadarAppConfiguration LoadFromJson(string json)
     {
@@ -58,32 +66,66 @@ public static class RadarConfigurationStore
         if (!validation.IsValid) throw new InvalidOperationException(string.Join(Environment.NewLine, validation.Errors));
 
         var targetPath = Path.GetFullPath(path);
-        var saveLock = SaveLocks.GetOrAdd(targetPath, static _ => new SemaphoreSlim(1, 1));
-        await saveLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var saveLock = RentSaveLock(targetPath);
         try
         {
-            var directory = Path.GetDirectoryName(targetPath)!;
-            Directory.CreateDirectory(directory);
-            var json = JsonSerializer.Serialize(configuration, JsonOptions);
-            var temporaryPath = Path.Combine(directory, $".{Path.GetFileName(targetPath)}.{Guid.NewGuid():N}.tmp");
+            await saveLock.Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                await File.WriteAllTextAsync(temporaryPath, json, cancellationToken).ConfigureAwait(false);
-                File.Move(temporaryPath, targetPath, overwrite: true);
+                var directory = Path.GetDirectoryName(targetPath)!;
+                Directory.CreateDirectory(directory);
+                var json = JsonSerializer.Serialize(configuration, JsonOptions);
+                var temporaryPath = Path.Combine(directory, $".{Path.GetFileName(targetPath)}.{Guid.NewGuid():N}.tmp");
+                try
+                {
+                    await File.WriteAllTextAsync(temporaryPath, json, cancellationToken).ConfigureAwait(false);
+                    File.Move(temporaryPath, targetPath, overwrite: true);
+                }
+                finally
+                {
+                    if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+                }
             }
             finally
             {
-                if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+                saveLock.Gate.Release();
             }
         }
         finally
         {
-            saveLock.Release();
+            ReturnSaveLock(targetPath, saveLock);
         }
     }
 
     public static string GetDefaultUserConfigurationPath() => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Yuexin", "RadarBridge", "config.json");
+
+    private static SaveLockEntry RentSaveLock(string targetPath)
+    {
+        lock (SaveLocksGate)
+        {
+            if (!SaveLocks.TryGetValue(targetPath, out var entry))
+            {
+                entry = new SaveLockEntry();
+                SaveLocks.Add(targetPath, entry);
+            }
+
+            entry.ReferenceCount++;
+            return entry;
+        }
+    }
+
+    private static void ReturnSaveLock(string targetPath, SaveLockEntry entry)
+    {
+        lock (SaveLocksGate)
+        {
+            if (--entry.ReferenceCount == 0 && SaveLocks.TryGetValue(targetPath, out var current) && ReferenceEquals(current, entry))
+            {
+                SaveLocks.Remove(targetPath);
+                entry.Gate.Dispose();
+            }
+        }
+    }
 
     private static RadarAppConfiguration LoadFromBytes(byte[] bytes)
     {
@@ -324,6 +366,11 @@ public static class RadarConfigurationStore
     }
 
     private enum SchemaReadKind { Schema1, Schema2, Rejected }
+    private sealed class SaveLockEntry
+    {
+        public SemaphoreSlim Gate { get; } = new(1, 1);
+        public int ReferenceCount { get; set; }
+    }
     private readonly record struct SchemaReadResult(SchemaReadKind Kind, string? Diagnostic)
     {
         public static SchemaReadResult Rejected(string diagnostic) => new(SchemaReadKind.Rejected, diagnostic);
