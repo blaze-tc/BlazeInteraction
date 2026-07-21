@@ -54,3 +54,19 @@ dotnet test tests\Radar.Bridge.Wpf.Tests\Radar.Bridge.Wpf.Tests.csproj -c Releas
 ```
 
 Results: the two new IPC authentication tests first failed by receiving `PointerBatch` before `HelloAck`, then passed (11/11 IPC). The fusion snapshot test first failed to compile because the API did not exist, then passed. Coordinator focused tests passed 6/6 after the staged transition rewrite.
+
+## Final acceptance (2026-07-21)
+
+All requested Release/no-restore acceptance commands passed without retries for a failure:
+
+```powershell
+dotnet test tests\Radar.Ipc.Tests\Radar.Ipc.Tests.csproj -c Release --no-restore
+dotnet test tests\Radar.Processing.Tests\Radar.Processing.Tests.csproj -c Release --no-restore
+dotnet test tests\Radar.Bridge.Wpf.Tests\Radar.Bridge.Wpf.Tests.csproj -c Release --no-restore
+dotnet test RadarControl.sln -c Release --no-restore # run 1
+dotnet test RadarControl.sln -c Release --no-restore # run 2
+dotnet build RadarControl.sln -c Release --no-restore --nologo
+dotnet build RadarControl.sln -c Release --no-restore --nologo -t:Rebuild
+```
+
+Exact results: IPC 21/21; Processing 53/53; Bridge WPF 40/40. Each full-solution run passed 198/198: Unity Compatibility 17, Protocol 17, IPC 21, Device 15, Processing 53, Configuration 35, Bridge WPF 40. The incremental build reported 0 warnings and 0 errors; forced `Rebuild` reported 247 warnings and 0 errors. `git status --porcelain=v1` was clean before this report append.
