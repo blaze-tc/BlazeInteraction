@@ -109,6 +109,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     public async Task ApplyUnityTopologyAsync(HelloPayload hello, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
+        EnsureConfigurationWritable();
         if (!TryValidateTopology(hello, out var error)) throw new InvalidOperationException($"{error.Code}: {error.Message}");
         await _topologyLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -201,6 +202,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     public async Task ApplyConfigurationAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
+        EnsureConfigurationWritable();
         await _topologyLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -293,7 +295,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     [Obsolete("Use ConnectSensorAsync or ConnectScreenAsync.")]
     public Task ConnectAsync(CancellationToken cancellationToken = default) => ConnectPrimarySensorAsync(cancellationToken);
     [Obsolete("Use DisconnectSensorAsync or DisconnectScreenAsync.")]
-    public Task DisconnectAsync() => PrimaryPipeline?.Pipeline.StopAsync() ?? Task.CompletedTask;
+    public Task DisconnectAsync() => PrimarySensorAddress() is { } address ? DisconnectSensorAsync(address.ScreenId, address.SensorId) : Task.CompletedTask;
     [Obsolete("Use StartAllSimulationAsync.")]
     public Task StartSimulationAsync(CancellationToken cancellationToken = default) => StartAllSimulationAsync(cancellationToken);
     [Obsolete("Use DisconnectAllAsync.")]
@@ -303,15 +305,15 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     [Obsolete("Use StopRecordingAsync(screenId, sensorId).")]
     public Task StopRecordingAsync() => PrimarySensorAddress() is { } address ? StopRecordingAsync(address.ScreenId, address.SensorId) : Task.CompletedTask;
     [Obsolete("Use ReplaySensorAsync.")]
-    public Task ReplayAsync(string path, double speed, bool loop, CancellationToken cancellationToken = default) => PrimaryPipeline?.Pipeline.ReplayAsync(path, speed, loop, cancellationToken) ?? Task.CompletedTask;
+    public Task ReplayAsync(string path, double speed, bool loop, CancellationToken cancellationToken = default) => PrimarySensorAddress() is { } address ? ReplaySensorAsync(address.ScreenId, address.SensorId, path, speed, loop, cancellationToken) : Task.CompletedTask;
     [Obsolete("Use PauseReplay(screenId, sensorId).")]
-    public void PauseReplay() => PrimaryPipeline?.Pipeline.PauseReplay();
+    public void PauseReplay() { if (PrimarySensorAddress() is { } address) PauseReplay(address.ScreenId, address.SensorId); }
     [Obsolete("Use ResumeReplay(screenId, sensorId).")]
-    public void ResumeReplay() => PrimaryPipeline?.Pipeline.ResumeReplay();
+    public void ResumeReplay() { if (PrimarySensorAddress() is { } address) ResumeReplay(address.ScreenId, address.SensorId); }
     [Obsolete("Use StepReplay(screenId, sensorId).")]
-    public void StepReplay() => PrimaryPipeline?.Pipeline.StepReplay();
+    public void StepReplay() { if (PrimarySensorAddress() is { } address) StepReplay(address.ScreenId, address.SensorId); }
     [Obsolete("Use StopReplayAsync(screenId, sensorId).")]
-    public Task StopReplayAsync() => PrimaryPipeline?.Pipeline.StopReplayAsync() ?? Task.CompletedTask;
+    public Task StopReplayAsync() => PrimarySensorAddress() is { } address ? StopReplayAsync(address.ScreenId, address.SensorId) : Task.CompletedTask;
 
     internal PointerBatchPayload TickForTest(DateTimeOffset timestamp, bool delivered = true, bool waitForRetirement = true)
     {
@@ -549,7 +551,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         _ = task.ContinueWith(completed =>
         {
             lock (_retirementTasks) _retirementTasks.Remove(completed);
-            if (completed.IsFaulted) PublishLog($"[IPC] retirement cleanup fault: {completed.Exception?.GetBaseException().Message}");
+            if (completed.IsFaulted) _logger.LogError(completed.Exception?.GetBaseException(), "Retirement cleanup fault.");
         }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 
@@ -706,6 +708,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     {
         lock (runtime.Gate) runtime.Fusion.Reset(timestamp);
         await DisposeRuntimeAsync(runtime).ConfigureAwait(false);
+        if (Volatile.Read(ref _disposed) != 0) return;
         await _topologyLock.WaitAsync(_lifetime.Token).ConfigureAwait(false);
         try
         {
@@ -731,17 +734,70 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
 
     private async Task DisposeRuntimeAsync(ScreenRuntime runtime)
     {
-        await runtime.OperationsDrained.Task.ConfigureAwait(false);
-        foreach (var binding in runtime.Pipelines.Values)
+        PipelineRuntime[] bindings;
+        Task drained;
+        lock (runtime.Gate)
+        {
+            bindings = runtime.Pipelines.Values.ToArray();
+            runtime.Pipelines.Clear();
+            drained = runtime.OperationsDrained.Task;
+        }
+        DetachPipelineCallbacks(bindings);
+        try
+        {
+            await drained.WaitAsync(PipelineCleanupTimeout).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            _logger.LogWarning("[{ScreenId}] runtime cleanup quarantined after {TimeoutMs}ms.", runtime.Info.ScreenId, PipelineCleanupTimeout.TotalMilliseconds);
+            ObserveLateRuntimeCleanup(drained, bindings, _logger, runtime.Info.ScreenId);
+            return;
+        }
+        await DisposeRuntimeBindingsAsync(bindings, _logger, runtime.Info.ScreenId).ConfigureAwait(false);
+    }
+
+    private static void DetachPipelineCallbacks(IEnumerable<PipelineRuntime> bindings)
+    {
+        foreach (var binding in bindings)
         {
             binding.Pipeline.DetectionFrameUpdated -= binding.DetectionHandler;
             binding.Pipeline.SnapshotUpdated -= binding.SnapshotHandler;
             binding.Pipeline.StateChanged -= binding.StateHandler;
             binding.Pipeline.LogReceived -= binding.LogHandler;
-            await StopIsolatedAsync(runtime.Info.ScreenId, binding).ConfigureAwait(false);
-            await AwaitBoundedAsync(binding.Pipeline.DisposeAsync().AsTask(), runtime.Info.ScreenId, binding.Configuration.SensorId, "dispose").ConfigureAwait(false);
         }
-        runtime.Pipelines.Clear();
+    }
+
+    private static async Task DisposeRuntimeBindingsAsync(IEnumerable<PipelineRuntime> bindings, ILogger logger, string screenId)
+    {
+        foreach (var binding in bindings)
+        {
+            await AwaitRuntimeCleanupAsync(binding.Pipeline.StopAsync(), logger, screenId, binding.Configuration.SensorId, "stop").ConfigureAwait(false);
+            await AwaitRuntimeCleanupAsync(binding.Pipeline.DisposeAsync().AsTask(), logger, screenId, binding.Configuration.SensorId, "dispose").ConfigureAwait(false);
+        }
+    }
+
+    private static void ObserveLateRuntimeCleanup(Task drained, PipelineRuntime[] bindings, ILogger logger, string screenId)
+    {
+        _ = drained.ContinueWith(async completed =>
+        {
+            try
+            {
+                if (completed.IsFaulted) logger.LogError(completed.Exception?.GetBaseException(), "[{ScreenId}] quarantined lease drain fault.", screenId);
+                await DisposeRuntimeBindingsAsync(bindings, logger, screenId).ConfigureAwait(false);
+            }
+            catch (Exception exception) { logger.LogError(exception, "[{ScreenId}] quarantined runtime cleanup fault.", screenId); }
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default).Unwrap();
+    }
+
+    private static async Task AwaitRuntimeCleanupAsync(Task task, ILogger logger, string screenId, string sensorId, string operation)
+    {
+        try { await task.WaitAsync(PipelineCleanupTimeout).ConfigureAwait(false); }
+        catch (TimeoutException)
+        {
+            logger.LogWarning("[{ScreenId}/{SensorId}] quarantined {Operation} after {TimeoutMs}ms.", screenId, sensorId, operation, PipelineCleanupTimeout.TotalMilliseconds);
+            _ = task.ContinueWith(completed => { if (completed.IsFaulted) logger.LogError(completed.Exception?.GetBaseException(), "[{ScreenId}/{SensorId}] quarantined {Operation} fault.", screenId, sensorId, operation); }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+        catch (Exception exception) { logger.LogError(exception, "[{ScreenId}/{SensorId}] {Operation} fault.", screenId, sensorId, operation); }
     }
 
     private async Task StartIsolatedAsync(string screenId, PipelineRuntime pipeline, CancellationToken cancellationToken)
@@ -889,7 +945,15 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private static RadarAppConfiguration CloneConfiguration(RadarAppConfiguration source)
     {
         var json = System.Text.Json.JsonSerializer.Serialize(source);
-        return System.Text.Json.JsonSerializer.Deserialize<RadarAppConfiguration>(json) ?? throw new InvalidOperationException("Could not stage radar configuration.");
+        var clone = System.Text.Json.JsonSerializer.Deserialize<RadarAppConfiguration>(json) ?? throw new InvalidOperationException("Could not stage radar configuration.");
+        clone.PreservePersistenceDiagnosticsFrom(source);
+        return clone;
+    }
+
+    private void EnsureConfigurationWritable()
+    {
+        if (!_configuration.CanPersist)
+            throw new InvalidOperationException("Configuration was rejected during loading and cannot be reconciled or saved. Create a new configuration explicitly first.");
     }
 
     private void OnUnityConnected(HelloPayload hello) => SetUnityStatus(new UnityClientStatus(true, hello.UnityProcessId, hello.UnityVersion,

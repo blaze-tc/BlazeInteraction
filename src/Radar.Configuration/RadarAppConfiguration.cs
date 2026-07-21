@@ -20,6 +20,15 @@ public sealed class RadarAppConfiguration
     [JsonIgnore]
     public bool CanPersist => PersistenceState == RadarConfigurationPersistenceState.Writable;
 
+    /// <summary>Copies non-serialized load diagnostics when a configuration is staged in memory.</summary>
+    public void PreservePersistenceDiagnosticsFrom(RadarAppConfiguration source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        PersistenceState = source.PersistenceState;
+        LoadWarnings.Clear();
+        LoadWarnings.AddRange(source.LoadWarnings);
+    }
+
     [Obsolete("Temporary build bridge; use Screens.")]
     [JsonIgnore]
     public RadarDeviceConfiguration Device { get => MainSensor.Device; set => MainSensor.Device = value ?? new(); }

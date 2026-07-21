@@ -162,12 +162,46 @@ public sealed class RadarBridgeCoordinatorTests
     {
         var configuration = new RadarAppConfiguration { Screens = [ScreenConfiguration("front", "f1", 1920, 1080)] };
         var factory = new FakePipelineFactory();
-        await using var coordinator = CreateCoordinator(configuration, factory, (_, _) => Task.FromException(new IOException("save failed")));
+        var saves = 0;
+        var failSaves = false;
+        await using var coordinator = CreateCoordinator(configuration, factory, (_, _) => { saves++; return failSaves ? Task.FromException(new IOException("save failed")) : Task.CompletedTask; });
+        await coordinator.ApplyUnityTopologyAsync(Hello(Screen("front", "Front", true, 1920, 1080, 0)));
+        saves = 0;
+        failSaves = true;
+        var active = factory["front", "f1"];
+        var before = coordinator.TickForTest(DateTimeOffset.UnixEpoch.AddSeconds(1));
 
         await Assert.ThrowsAsync<IOException>(() => coordinator.ApplyConfigurationAsync());
 
-        Assert.Empty(factory.Created);
-        Assert.Empty(coordinator.TickForTest(DateTimeOffset.UnixEpoch.AddSeconds(1)).Screens);
+        Assert.Equal(1, saves);
+        Assert.False(active.Disposed);
+        Assert.Same(configuration, configuration);
+        Assert.Single(coordinator.TickForTest(DateTimeOffset.UnixEpoch.AddSeconds(2)).Screens);
+        Assert.Equal(before.Screens.Single().Screen.ScreenId, coordinator.TickForTest(DateTimeOffset.UnixEpoch.AddSeconds(3)).Screens.Single().Screen.ScreenId);
+        Assert.True(factory.Instances.Where(pipeline => !ReferenceEquals(pipeline, active)).All(pipeline => pipeline.Disposed));
+    }
+
+    [Fact]
+    public async Task Coordinator_RejectsTopologyAndApplyConfigurationForRejectedLoadWithoutPersisting()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "RadarControl.Rejected." + Guid.NewGuid().ToString("N") + ".json");
+        var sourceBytes = System.Text.Encoding.UTF8.GetBytes("{\"schemaVersion\":99,\"screens\":[]}");
+        await File.WriteAllBytesAsync(path, sourceBytes);
+        var configuration = await RadarConfigurationStore.LoadAsync(path);
+        var factory = new FakePipelineFactory();
+        var saves = 0;
+        await using var coordinator = CreateCoordinator(configuration, factory, (_, _) => { saves++; return Task.CompletedTask; });
+
+        var topology = await Assert.ThrowsAsync<InvalidOperationException>(() => coordinator.ApplyUnityTopologyAsync(Hello(Screen("front", "Front", true, 1920, 1080, 0))));
+        var apply = await Assert.ThrowsAsync<InvalidOperationException>(() => coordinator.ApplyConfigurationAsync());
+
+        Assert.Contains("rejected", topology.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("rejected", apply.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, saves);
+        Assert.False(configuration.CanPersist);
+        Assert.Empty(factory.Instances);
+        Assert.Equal(sourceBytes, await File.ReadAllBytesAsync(path));
+        File.Delete(path);
     }
 
     [Fact]
@@ -443,12 +477,14 @@ public sealed class RadarBridgeCoordinatorTests
     private sealed class FakePipelineFactory : IRadarSensorPipelineFactory
     {
         private readonly Dictionary<(string ScreenId, string SensorId), FakePipeline> _pipelines = new();
+        private readonly List<FakePipeline> _instances = [];
         public bool ThrowOnCreate { get; set; }
         public int ThrowOnCreateNumber { get; set; }
         public Action<string>? CreateObserved { get; set; }
         private int _createCalls;
         public bool AllDisposed => _pipelines.Values.All(value => value.Disposed);
         public IReadOnlyCollection<FakePipeline> Created => _pipelines.Values;
+        public IReadOnlyCollection<FakePipeline> Instances => _instances;
 
         public FakePipeline this[string screenId, string sensorId] => _pipelines[(screenId, sensorId)];
 
@@ -458,6 +494,7 @@ public sealed class RadarBridgeCoordinatorTests
             CreateObserved?.Invoke(sensor.SensorId);
             var pipeline = new FakePipeline(screen.ScreenId, sensor.SensorId);
             _pipelines[(screen.ScreenId, sensor.SensorId)] = pipeline;
+            _instances.Add(pipeline);
             return pipeline;
         }
     }
