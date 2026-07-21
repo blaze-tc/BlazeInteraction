@@ -11,3 +11,4 @@ tmp/
 *.suo
 *.log
 UnityPackage/com.blaze.radar/Library/
+.superpowers/
