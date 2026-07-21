@@ -121,9 +121,9 @@ public sealed class RadarBridgeCoordinatorTests
         coordinator.TickForTest(DateTimeOffset.UnixEpoch.AddSeconds(3), waitForRetirement: false);
         await Task.Delay(20);
 
-        Assert.False(factory["front", "f1"].Disposed);
+        Assert.False(factory["front", "f1"].DisposedDuringOperation);
         factory["front", "f1"].ReleaseStart();
-        await connect;
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => connect);
         await WaitUntilAsync(() => factory["front", "f1"].Disposed, new CancellationTokenSource(TimeSpan.FromSeconds(1)).Token);
         Assert.False(factory["front", "f1"].DisposedDuringOperation);
     }
