@@ -31,6 +31,18 @@ public sealed class RadarOutputMapperTests
         Assert.Equal(250f / 600f, mapped.NormalizedY);
     }
 
+    [Fact]
+    public void Map_MapsExactLocalCornersToRectangleCorners()
+    {
+        var mapper = new RadarOutputMapper(new RadarPixelRect(100, 50, 300, 200), 800, 600);
+
+        var bottomLeft = mapper.Map(0f, 0f);
+        var topRight = mapper.Map(1f, 1f);
+
+        Assert.Equal(new MappedScreenPoint(100f, 50f, 0.125f, 50f / 600f), bottomLeft);
+        Assert.Equal(new MappedScreenPoint(400f, 250f, 0.5f, 250f / 600f), topRight);
+    }
+
     [Theory]
     [InlineData(0, 600)]
     [InlineData(800, 0)]

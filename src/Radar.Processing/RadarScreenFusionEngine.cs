@@ -67,13 +67,19 @@ public interface IRadarScreenFusionEngine
 
 public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
 {
+    private const int MaximumScreenPixels = 32768;
+    private const int MinimumSensorDataMaxAgeMilliseconds = 10;
+    private const int MaximumSensorDataMaxAgeMilliseconds = 5000;
+    private const int MaximumTrackingFrames = 120;
+
     private readonly RadarScreenFusionOptions _options;
     private readonly PointerStateMachine _pointerStateMachine;
-    private readonly Dictionary<string, SensorDetectionFrame> _latestFrames = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, SensorDetectionFrame> _latestFrames = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<int, TrackState> _tracks = [];
     private readonly Dictionary<int, PointerPosition> _pointerPositions = [];
     private readonly HashSet<int> _pressedTouchPointers = [];
     private int _nextTrackId = 1;
+    private DateTimeOffset? _lastTickTimestamp;
 
     public RadarScreenFusionEngine(RadarScreenFusionOptions options)
     {
@@ -94,18 +100,25 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
     public void Publish(SensorDetectionFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
+        var sensorId = NormalizeSensorId(frame.SensorId);
         ValidateFrame(frame);
 
-        if (_latestFrames.TryGetValue(frame.SensorId, out var current) && current.Timestamp > frame.Timestamp)
+        if (_latestFrames.TryGetValue(sensorId, out var current) && current.Timestamp >= frame.Timestamp)
         {
             return;
         }
 
-        _latestFrames[frame.SensorId] = new SensorDetectionFrame(frame.SensorId, frame.Timestamp, frame.Detections);
+        _latestFrames[sensorId] = new SensorDetectionFrame(sensorId, frame.Timestamp, frame.Detections);
     }
 
     public RadarScreenFusionResult Tick(DateTimeOffset timestamp)
     {
+        if (_lastTickTimestamp.HasValue && timestamp <= _lastTickTimestamp.Value)
+        {
+            return new RadarScreenFusionResult([], []);
+        }
+
+        _lastTickTimestamp = timestamp;
         var observations = FuseCurrentDetections(timestamp);
         var observedTracks = AssociateAndTrack(observations);
         var targets = observedTracks
@@ -175,6 +188,10 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
         _pressedTouchPointers.Clear();
         _pointerStateMachine.Reset(timestamp);
         _nextTrackId = 1;
+        if (!_lastTickTimestamp.HasValue || timestamp > _lastTickTimestamp.Value)
+        {
+            _lastTickTimestamp = timestamp;
+        }
         return Array.AsReadOnly(output);
     }
 
@@ -198,7 +215,7 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
         }
 
         var detections = current
-            .OrderBy(detection => detection.SensorId, StringComparer.Ordinal)
+            .OrderBy(detection => detection.SensorId, StringComparer.OrdinalIgnoreCase)
             .ThenBy(detection => detection.Detection.PixelX)
             .ThenBy(detection => detection.Detection.PixelY)
             .ThenBy(detection => detection.Detection.DetectionId)
@@ -211,7 +228,7 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
         {
             for (var right = left + 1; right < detections.Length; right++)
             {
-                if (string.Equals(detections[left].SensorId, detections[right].SensorId, StringComparison.Ordinal))
+                if (string.Equals(detections[left].SensorId, detections[right].SensorId, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -247,7 +264,7 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
                     members.Average(member => member.Detection.PixelX),
                     members.Average(member => member.Detection.PixelY),
                     members.Average(member => member.Detection.Confidence),
-                    members.Select(member => member.SensorId).Distinct(StringComparer.Ordinal).Count());
+                    members.Select(member => member.SensorId).Distinct(StringComparer.OrdinalIgnoreCase).Count());
             })
             .ToArray();
     }
@@ -272,10 +289,13 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
 
         foreach (var candidate in candidates.OrderBy(candidate => candidate.Distance).ThenBy(candidate => candidate.TrackId).ThenBy(candidate => candidate.ObservationIndex))
         {
-            if (!matchedTrackIds.Add(candidate.TrackId) || !matchedObservationIndices.Add(candidate.ObservationIndex))
+            if (matchedTrackIds.Contains(candidate.TrackId) || matchedObservationIndices.Contains(candidate.ObservationIndex))
             {
                 continue;
             }
+
+            matchedTrackIds.Add(candidate.TrackId);
+            matchedObservationIndices.Add(candidate.ObservationIndex);
 
             var track = _tracks[candidate.TrackId];
             var observation = observations[candidate.ObservationIndex];
@@ -334,8 +354,8 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
 
     private static bool HaveSharedSensor(int[] parent, DetectionInput[] detections, int leftRoot, int rightRoot)
     {
-        var leftSensors = new HashSet<string>(StringComparer.Ordinal);
-        var rightSensors = new HashSet<string>(StringComparer.Ordinal);
+        var leftSensors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var rightSensors = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         for (var index = 0; index < detections.Length; index++)
         {
             var root = Find(parent, index);
@@ -372,11 +392,6 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
 
     private void ValidateFrame(SensorDetectionFrame frame)
     {
-        if (string.IsNullOrWhiteSpace(frame.SensorId))
-        {
-            throw new ArgumentException("Sensor ID is required.", nameof(frame));
-        }
-
         foreach (var detection in frame.Detections)
         {
             if (!float.IsFinite(detection.PixelX) || !float.IsFinite(detection.PixelY) || !float.IsFinite(detection.Confidence) ||
@@ -391,8 +406,9 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
     private static void ValidateOptions(RadarScreenFusionOptions options)
     {
         var screen = options.Screen;
-        if (screen is null || string.IsNullOrWhiteSpace(screen.ScreenId) || screen.WidthPixels <= 0 || screen.HeightPixels <= 0 ||
-            options.SensorDataMaxAgeMilliseconds < 0 || options.ConfirmFrames < 1 || options.LostFrames < 1 ||
+        if (screen is null || !IsConfigurationId(screen.ScreenId) || screen.WidthPixels is < 1 or > MaximumScreenPixels || screen.HeightPixels is < 1 or > MaximumScreenPixels ||
+            options.SensorDataMaxAgeMilliseconds is < MinimumSensorDataMaxAgeMilliseconds or > MaximumSensorDataMaxAgeMilliseconds ||
+            options.ConfirmFrames is < 1 or > MaximumTrackingFrames || options.LostFrames is < 1 or > MaximumTrackingFrames ||
             options.DwellMilliseconds < 0 || options.MinimumPressMilliseconds < 0 ||
             !float.IsFinite(options.FusionDistancePixels) || options.FusionDistancePixels <= 0f ||
             !float.IsFinite(options.MaximumAssociationDistancePixels) || options.MaximumAssociationDistancePixels <= 0f ||
@@ -402,8 +418,29 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
             !float.IsFinite(options.MaximumClickMovementNormalized) || options.MaximumClickMovementNormalized < 0f ||
             !Enum.IsDefined(options.InteractionMode))
         {
-            throw new ArgumentException("Screen fusion options are invalid.", nameof(options));
+            throw new ArgumentOutOfRangeException(nameof(options), "Screen fusion options are invalid.");
         }
+    }
+
+    private static string NormalizeSensorId(string sensorId)
+    {
+        var normalized = sensorId?.ToLowerInvariant() ?? string.Empty;
+        if (!IsConfigurationId(normalized))
+        {
+            throw new ArgumentException("Sensor ID must match ^[a-z0-9_-]{1,64}$.", nameof(sensorId));
+        }
+
+        return normalized;
+    }
+
+    private static bool IsConfigurationId(string? value)
+    {
+        if (value is null || value.Length is < 1 or > 64)
+        {
+            return false;
+        }
+
+        return value.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '-');
     }
 
     private sealed class TrackState(int trackId, float pixelX, float pixelY, float confidence, int sourceSensorCount)

@@ -92,6 +92,108 @@ public sealed class RadarScreenFusionEngineTests
         Assert.Equal(0.75f, target.Confidence);
     }
 
+    [Fact]
+    public void Tick_LosesTrackThatCompetesForAnAlreadyMatchedObservation()
+    {
+        var engine = CreateEngine(confirmFrames: 1, lostFrames: 1, smoothingAlpha: 1f, maximumAssociationDistancePixels: 20f);
+        var now = DateTimeOffset.UnixEpoch;
+        engine.Publish(new SensorDetectionFrame("f1", now, [new(1, 0, 100, 1f), new(2, 10, 100, 1f)]));
+        var initial = engine.Tick(now).Pointers;
+        engine.Publish(new SensorDetectionFrame("f1", now.AddMilliseconds(16), [new(1, 1, 100, 1f)]));
+
+        var result = engine.Tick(now.AddMilliseconds(16));
+
+        var winner = initial.Single(pointer => pointer.PixelX == 0f);
+        var loser = initial.Single(pointer => pointer.PixelX == 10f);
+        Assert.Equal(winner.PointerId, Assert.Single(result.Targets).TrackId);
+        Assert.Equal(RadarPointerPhase.Move, Assert.Single(result.Pointers.Where(pointer => pointer.PointerId == winner.PointerId)).Phase);
+        Assert.Equal(RadarPointerPhase.Up, Assert.Single(result.Pointers.Where(pointer => pointer.PointerId == loser.PointerId)).Phase);
+    }
+
+    [Fact]
+    public void Publish_DoesNotReplaceSnapshotWithEqualTimestamp()
+    {
+        var engine = CreateEngine(confirmFrames: 1, smoothingAlpha: 1f);
+        var now = DateTimeOffset.UnixEpoch;
+        engine.Publish(new SensorDetectionFrame("f1", now, [new(1, 100, 100, 1f)]));
+        engine.Publish(new SensorDetectionFrame("f1", now, [new(1, 900, 100, 1f)]));
+
+        var target = Assert.Single(engine.Tick(now).Targets);
+
+        Assert.Equal(100f, target.PixelX);
+    }
+
+    [Fact]
+    public void Publish_IgnoresOlderSnapshot()
+    {
+        var engine = CreateEngine(confirmFrames: 1, smoothingAlpha: 1f);
+        var now = DateTimeOffset.UnixEpoch;
+        engine.Publish(new SensorDetectionFrame("f1", now.AddMilliseconds(16), [new(1, 200, 100, 1f)]));
+        engine.Publish(new SensorDetectionFrame("f1", now, [new(1, 100, 100, 1f)]));
+
+        var target = Assert.Single(engine.Tick(now.AddMilliseconds(16)).Targets);
+
+        Assert.Equal(200f, target.PixelX);
+    }
+
+    [Fact]
+    public void Tick_IgnoresRollbackWithoutChangingPointerLifecycle()
+    {
+        var engine = CreateEngine(confirmFrames: 1, lostFrames: 1, smoothingAlpha: 1f);
+        var now = DateTimeOffset.UnixEpoch;
+        engine.Publish(new SensorDetectionFrame("f1", now, [new(1, 100, 100, 1f)]));
+        var down = Assert.Single(engine.Tick(now).Pointers);
+
+        Assert.Empty(engine.Tick(now.AddMilliseconds(-1)).Targets);
+        Assert.Empty(engine.Tick(now.AddMilliseconds(-1)).Pointers);
+
+        engine.Publish(new SensorDetectionFrame("f1", now.AddMilliseconds(16), [new(1, 110, 100, 1f)]));
+        var move = Assert.Single(engine.Tick(now.AddMilliseconds(16)).Pointers);
+        Assert.Equal(down.PointerId, move.PointerId);
+        Assert.Equal(RadarPointerPhase.Move, move.Phase);
+    }
+
+    [Fact]
+    public void Publish_TreatsCaseVariantsAsOneSensorSnapshot()
+    {
+        var engine = CreateEngine(confirmFrames: 1, smoothingAlpha: 1f);
+        var now = DateTimeOffset.UnixEpoch;
+        engine.Publish(new SensorDetectionFrame("f1", now, [new(1, 100, 100, 1f)]));
+        engine.Publish(new SensorDetectionFrame("F1", now.AddMilliseconds(16), [new(1, 120, 100, 1f)]));
+
+        var target = Assert.Single(engine.Tick(now.AddMilliseconds(16)).Targets);
+
+        Assert.Equal(120f, target.PixelX);
+        Assert.Equal(1, target.SourceSensorCount);
+    }
+
+    [Theory]
+    [InlineData("bad id")]
+    [InlineData("sensor!")]
+    [InlineData("")]
+    public void Publish_RejectsSensorIdsOutsideConfigurationSyntax(string sensorId)
+    {
+        var engine = CreateEngine();
+
+        Assert.Throws<ArgumentException>(() => engine.Publish(new SensorDetectionFrame(sensorId, DateTimeOffset.UnixEpoch, [])));
+    }
+
+    [Fact]
+    public void Constructor_RejectsOptionsOutsideConfigurationRanges()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RadarScreenFusionEngine(Options(screen: new RadarScreenInfo("front", "Front", 32769, 1080, true, 0))));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RadarScreenFusionEngine(Options(sensorDataMaxAgeMilliseconds: 9)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RadarScreenFusionEngine(Options(sensorDataMaxAgeMilliseconds: 5001)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RadarScreenFusionEngine(Options(confirmFrames: 121)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RadarScreenFusionEngine(Options(lostFrames: 0)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RadarScreenFusionEngine(Options(fusionDistancePixels: float.NaN)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RadarScreenFusionEngine(Options(maximumAssociationDistancePixels: float.PositiveInfinity)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RadarScreenFusionEngine(Options(smoothingAlpha: 0f)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RadarScreenFusionEngine(Options(dwellRadiusNormalized: -0.01f)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RadarScreenFusionEngine(Options(dragThresholdNormalized: float.PositiveInfinity)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RadarScreenFusionEngine(Options(maximumClickMovementNormalized: float.NaN)));
+    }
+
     [Theory]
     [InlineData(RadarInteractionMode.Dwell, RadarPointerPhase.Hover)]
     [InlineData(RadarInteractionMode.HoverOnly, RadarPointerPhase.Hover)]
@@ -131,6 +233,20 @@ public sealed class RadarScreenFusionEngineTests
     }
 
     [Fact]
+    public void Reset_EmitsUpForEveryPressedTouchPointerInStableIdOrder()
+    {
+        var engine = CreateEngine(confirmFrames: 1);
+        var now = DateTimeOffset.UnixEpoch;
+        engine.Publish(new SensorDetectionFrame("f1", now, [new(1, 100, 100, 1f), new(2, 500, 100, 1f)]));
+        var down = engine.Tick(now).Pointers;
+
+        var reset = engine.Reset(now.AddMilliseconds(1));
+
+        Assert.Equal(down.Select(pointer => pointer.PointerId).Order(), reset.Select(pointer => pointer.PointerId));
+        Assert.All(reset, pointer => Assert.Equal(RadarPointerPhase.Up, pointer.Phase));
+    }
+
+    [Fact]
     public void PublishAndResults_DoNotExposeMutableCollectionAliases()
     {
         var detections = new[] { new SensorDetection(1, 100, 100, 1f) };
@@ -155,9 +271,32 @@ public sealed class RadarScreenFusionEngineTests
         float smoothingAlpha = 0.5f,
         RadarInteractionMode interactionMode = RadarInteractionMode.Touch)
     {
-        return new RadarScreenFusionEngine(new RadarScreenFusionOptions
+        return new RadarScreenFusionEngine(Options(
+            sensorDataMaxAgeMilliseconds,
+            fusionDistancePixels,
+            maximumAssociationDistancePixels,
+            confirmFrames,
+            lostFrames,
+            smoothingAlpha,
+            interactionMode));
+    }
+
+    private static RadarScreenFusionOptions Options(
+        int sensorDataMaxAgeMilliseconds = 150,
+        float fusionDistancePixels = 80f,
+        float maximumAssociationDistancePixels = 160f,
+        int confirmFrames = 2,
+        int lostFrames = 3,
+        float smoothingAlpha = 0.5f,
+        RadarInteractionMode interactionMode = RadarInteractionMode.Touch,
+        RadarScreenInfo? screen = null,
+        float dwellRadiusNormalized = 0.03f,
+        float dragThresholdNormalized = 0.015f,
+        float maximumClickMovementNormalized = 0.03f)
+    {
+        return new RadarScreenFusionOptions
         {
-            Screen = new RadarScreenInfo("front", "Front", 1920, 1080, true, 0),
+            Screen = screen ?? new RadarScreenInfo("front", "Front", 1920, 1080, true, 0),
             SensorDataMaxAgeMilliseconds = sensorDataMaxAgeMilliseconds,
             FusionDistancePixels = fusionDistancePixels,
             MaximumAssociationDistancePixels = maximumAssociationDistancePixels,
@@ -165,7 +304,10 @@ public sealed class RadarScreenFusionEngineTests
             LostFrames = lostFrames,
             SmoothingAlpha = smoothingAlpha,
             InteractionMode = interactionMode,
+            DwellRadiusNormalized = dwellRadiusNormalized,
+            DragThresholdNormalized = dragThresholdNormalized,
+            MaximumClickMovementNormalized = maximumClickMovementNormalized,
             MinimumPressMilliseconds = 0
-        });
+        };
     }
 }
