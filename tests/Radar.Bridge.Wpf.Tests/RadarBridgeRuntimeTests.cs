@@ -199,6 +199,44 @@ public sealed class RadarBridgeRuntimeTests
         Assert.Empty(frame.Pointers);
     }
 
+    [Fact]
+    public async Task Simulation_PointerBatchPreservesAllNegotiatedScreens()
+    {
+        var configuration = CreateIpcSimulationConfiguration();
+        var screens = new RadarScreenDefinitionPayload[]
+        {
+            new("front", "Front", 1920, 1080, true, 1),
+            new("left", "Left", 1280, 720, false, 2),
+            new("rear", "Rear", 1024, 768, false, 3)
+        };
+        await using var runtime = new RadarBridgeRuntime(
+            configuration,
+            NullLogger<RadarBridgeRuntime>.Instance);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+
+        await runtime.StartInfrastructureAsync(cancellation.Token);
+        await using var client = await ConnectUnityClientAsync(configuration.Ipc.PipeName, cancellation.Token, screens);
+        await runtime.StartSimulationAsync(cancellation.Token);
+
+        var batch = await ReadPointerBatchAsync(client, requirePointers: true, cancellation.Token);
+
+        Assert.Equal(["front", "left", "rear"], batch.Screens.Select(frame => frame.Screen.ScreenId));
+        Assert.Equal(["Front", "Left", "Rear"], batch.Screens.Select(frame => frame.Screen.Name));
+        Assert.Equal([1920, 1280, 1024], batch.Screens.Select(frame => frame.Screen.WidthPixels));
+        Assert.Equal([1080, 720, 768], batch.Screens.Select(frame => frame.Screen.HeightPixels));
+        Assert.Equal([true, false, false], batch.Screens.Select(frame => frame.Screen.IsPrimary));
+        Assert.Equal([1, 2, 3], batch.Screens.Select(frame => frame.Screen.Order));
+        Assert.All(batch.Screens, frame =>
+        {
+            Assert.NotEmpty(frame.Pointers);
+            Assert.All(frame.Pointers, pointer =>
+            {
+                Assert.Equal(pointer.NormalizedX * frame.Screen.WidthPixels, pointer.PixelX);
+                Assert.Equal(pointer.NormalizedY * frame.Screen.HeightPixels, pointer.PixelY);
+            });
+        });
+    }
+
     private static RadarAppConfiguration CreateIpcSimulationConfiguration()
     {
         var configuration = RadarAppConfiguration.CreateDefault();
@@ -215,7 +253,8 @@ public sealed class RadarBridgeRuntimeTests
 
     private static async Task<NamedPipeClientStream> ConnectUnityClientAsync(
         string pipeName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyList<RadarScreenDefinitionPayload>? screens = null)
     {
         var client = new NamedPipeClientStream(
             ".",
@@ -231,7 +270,7 @@ public sealed class RadarBridgeRuntimeTests
                 new HelloPayload(
                     42,
                     "2021.3",
-                    [new RadarScreenDefinitionPayload("main", "Main", 1920, 1080, true, 0)])),
+                    screens ?? [new RadarScreenDefinitionPayload("main", "Main", 1920, 1080, true, 0)])),
             cancellationToken);
         var acknowledgement = await IpcStream.ReadAsync(client, cancellationToken);
         Assert.Equal(IpcMessageType.HelloAck, acknowledgement.MessageType);
@@ -253,7 +292,7 @@ public sealed class RadarBridgeRuntimeTests
             }
 
             var batch = envelope.DeserializePayload<PointerBatchPayload>();
-            if (!requirePointers || Assert.Single(batch.Screens).Pointers.Count > 0)
+            if (!requirePointers || batch.Screens.Any(frame => frame.Pointers.Count > 0))
             {
                 return batch;
             }
