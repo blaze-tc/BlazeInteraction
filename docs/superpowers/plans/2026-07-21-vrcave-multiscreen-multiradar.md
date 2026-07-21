@@ -1125,6 +1125,7 @@ git commit -m "feat: add screen-centric RadarBridge workspace"
 - Modify: `UnityPackage/com.blaze.radar/Runtime/RadarRuntimeSettings.cs`
 - Modify: `UnityPackage/com.blaze.radar/Editor/RadarSettingsProvider.cs`
 - Modify: `UnityPackage/com.blaze.radar/Editor/RadarBuildProcessor.cs`
+- Create: `scripts/test-unity-package.ps1`
 - Test: `UnityPackage/com.blaze.radar/Tests/Runtime/RadarScreenTopologyValidatorTests.cs`
 - Test: `tests/Radar.Unity.Compatibility.Tests/PackageIdentityTests.cs`
 
@@ -1132,7 +1133,24 @@ git commit -m "feat: add screen-centric RadarBridge workspace"
 - Consumes: Unity serialization, Project Settings provider and existing Bridge copy processor.
 - Produces: `RadarScreenDefinition`, `RadarRuntimeSettings.Screens`, `PrimaryScreen`, topology validation shared by Inspector and build.
 
-- [ ] **Step 1: Write failing Unity topology validation tests**
+- [ ] **Step 1: Create the Unity 2021.3 package test runner before adding Unity tests**
+
+`scripts/test-unity-package.ps1` accepts `-UnityEditor`, `-TestPlatform EditMode|PlayMode|All`, and `-IncludeSamples`. If the editor path is empty, resolve the highest installed `C:\Program Files\Unity\Hub\Editor\2021.3.*\Editor\Unity.exe` and reject any other major/minor version. Recreate only the validated absolute `tmp/unity-package-tests` directory, then generate this manifest:
+
+```json
+{
+  "dependencies": {
+    "com.blaze.radar": "file:../../../UnityPackage/com.blaze.radar",
+    "com.unity.test-framework": "1.1.33",
+    "com.unity.ugui": "1.0.0",
+    "com.unity.nuget.newtonsoft-json": "3.0.2"
+  }
+}
+```
+
+Write `ProjectSettings/ProjectVersion.txt` from the resolved editor directory. When `-IncludeSamples` is present, read the current version from package.json and copy both sample folders to `Assets/Samples/Blaze Radar SDK/<current-version>/`. Invoke Unity separately for each requested platform with `-batchmode -nographics -runTests -testResults <absolute xml> -logFile <absolute log>` and fail on nonzero exit, XML failures or `error CS` in the log.
+
+- [ ] **Step 2: Write failing Unity topology validation tests**
 
 ```csharp
 [Test]
@@ -1169,7 +1187,7 @@ public void Validate_RequiresExactlyOneEnabledPrimary()
 }
 ```
 
-- [ ] **Step 2: Add serializable topology types with one-screen backward defaults**
+- [ ] **Step 3: Add serializable topology types with one-screen backward defaults**
 
 ```csharp
 [Serializable]
@@ -1214,7 +1232,7 @@ public sealed class RadarScreenTopologyValidationResult
 
 Validator rules must match Bridge: enabled ID regex `^[a-z0-9_-]{1,64}$`, ordinal-ignore-case uniqueness, dimensions 1–32768, and exactly one enabled primary. Disabled definitions remain serialized but are omitted from Hello.
 
-- [ ] **Step 3: Extend settings while preserving existing serialized fields**
+- [ ] **Step 4: Extend settings while preserving existing serialized fields**
 
 ```csharp
 [Header("Screens")]
@@ -1247,11 +1265,11 @@ private void EnsureDefaultScreen()
 
 Do not rename existing Bridge/connection/input serialized fields, so projects upgrading from 1.1.5 retain their values.
 
-- [ ] **Step 4: Replace the generic Settings iterator with a reorderable screen editor**
+- [ ] **Step 5: Replace the generic Settings iterator with a reorderable screen editor**
 
 Render existing settings normally, then a `UnityEditorInternal.ReorderableList` for `screens` with Add, Duplicate, Remove and drag sorting. On duplicate, generate collision-free IDs (`<id>-copy`, `<id>-copy-2`). Display all validator errors in `HelpBox(MessageType.Error)` and expose a `Set Primary` action that atomically clears other primary flags.
 
-- [ ] **Step 5: Fail Player builds before copying Bridge when topology is invalid**
+- [ ] **Step 6: Fail Player builds before copying Bridge when topology is invalid**
 
 Make `RadarBuildProcessor` implement both `IPreprocessBuildWithReport` and `IPostprocessBuildWithReport`:
 
@@ -1267,7 +1285,7 @@ public void OnPreprocessBuild(BuildReport report)
 
 Keep the existing post-build resolved-package check, version marker check, full directory replacement and executable SHA-256 comparison.
 
-- [ ] **Step 6: Run Unity topology tests and .NET package identity checks**
+- [ ] **Step 7: Run Unity topology tests and .NET package identity checks**
 
 At this stage run the .NET compatibility check immediately:
 
@@ -1275,12 +1293,18 @@ At this stage run the .NET compatibility check immediately:
 dotnet test tests/Radar.Unity.Compatibility.Tests/Radar.Unity.Compatibility.Tests.csproj -c Release --filter "FullyQualifiedName~PackageIdentityTests"
 ```
 
-The Unity test itself is run through `scripts/test-unity-package.ps1` after Task 13 creates that runner. Expected final result: all topology cases pass and invalid settings throw `BuildFailedException` before postprocessing.
-
-- [ ] **Step 7: Commit Unity topology settings**
+Run the Unity test immediately:
 
 ```powershell
-git add UnityPackage/com.blaze.radar/Runtime UnityPackage/com.blaze.radar/Editor UnityPackage/com.blaze.radar/Tests tests/Radar.Unity.Compatibility.Tests
+powershell -ExecutionPolicy Bypass -File scripts/test-unity-package.ps1 -TestPlatform EditMode
+```
+
+Expected: all topology cases pass and invalid settings throw `BuildFailedException` before postprocessing.
+
+- [ ] **Step 8: Commit Unity topology settings and test runner**
+
+```powershell
+git add UnityPackage/com.blaze.radar/Runtime UnityPackage/com.blaze.radar/Editor UnityPackage/com.blaze.radar/Tests tests/Radar.Unity.Compatibility.Tests scripts/test-unity-package.ps1
 git commit -m "feat: configure arbitrary radar screens in Unity"
 ```
 
@@ -1516,7 +1540,7 @@ public bool TryMapToCameraPixel(RadarScreenInfo screen, RadarScreenPointer point
 
 - [ ] **Step 4: Run Unity PlayMode tests**
 
-After Task 13 adds the runner, execute:
+Execute the runner created in Task 8:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/test-unity-package.ps1 -TestPlatform PlayMode
@@ -1754,7 +1778,7 @@ git commit -m "feat: add multi-screen camera routing sample"
 ### Task 13: Add repeatable Unity and end-to-end verification
 
 **Files:**
-- Create: `scripts/test-unity-package.ps1`
+- Modify: `scripts/test-unity-package.ps1`
 - Create: `tests/Radar.EndToEnd.Tests/Radar.EndToEnd.Tests.csproj`
 - Create: `tests/Radar.EndToEnd.Tests/MultiScreenRadarEndToEndTests.cs`
 - Modify: `RadarControl.sln`
@@ -1811,9 +1835,9 @@ Assert.Contains(logs, value => value.Contains("[IPC]") && value.Contains("batch=
 
 Continuous Move logging is limited to 10 Hz per `(ScreenId, PointerId)`; connection, error, Down, Up and configuration logs are never throttled.
 
-- [ ] **Step 4: Implement a self-contained Unity package test runner**
+- [ ] **Step 4: Verify and extend the existing Unity package test runner**
 
-`scripts/test-unity-package.ps1` accepts `-UnityEditor`, `-TestPlatform EditMode|PlayMode|All`, and `-IncludeSamples`. If `-UnityEditor` is empty, resolve the highest installed `C:\Program Files\Unity\Hub\Editor\2021.3.*\Editor\Unity.exe`; reject other major/minor versions. Recreate only `tmp/unity-package-tests`, write a manifest containing:
+Keep the Task 8 parameters and Unity 2021.3 validation. Confirm the generated manifest still contains:
 
 ```json
 {
@@ -1826,7 +1850,7 @@ Continuous Move logging is limited to 10 Hz per `(ScreenId, PointerId)`; connect
 }
 ```
 
-Write `ProjectSettings/ProjectVersion.txt` with the resolved 2021.3 editor version. When `-IncludeSamples` is set, copy both sample folders into `Assets/Samples/Blaze Radar SDK/1.2.0/`. Invoke Unity separately for EditMode and PlayMode with `-batchmode -nographics -runTests -testResults <absolute xml> -logFile <absolute log>`, check exit code, XML failures and `error CS` in the log.
+Confirm `ProjectSettings/ProjectVersion.txt` uses the resolved 2021.3 editor version. When `-IncludeSamples` is set, keep using the current package.json version in `Assets/Samples/Blaze Radar SDK/<current-version>/`. Add assertions in the script that both sample asmdefs were copied before invoking Unity, while retaining nonzero-exit, XML-failure and `error CS` checks.
 
 - [ ] **Step 5: Make the repository test script run every .NET project including E2E**
 
@@ -1969,15 +1993,27 @@ git status --short
 
 Expected: all tests pass without rebuilding source, embedded Bridge smoke passes, and the worktree is clean.
 
-- [ ] **Step 9: Tag and push only the verified release commit**
+- [ ] **Step 9: Record the verified release handoff without tagging or pushing**
 
 ```powershell
-git tag -a v1.2.0 -m "Blaze Radar SDK 1.2.0"
-git push origin main
-git push origin v1.2.0
+git rev-parse HEAD
+git status --short
 ```
 
-Expected: GitHub `main` and annotated `v1.2.0` point to the same verified release commit; the documented Unity Git URL resolves package version 1.2.0.
+Expected: the release commit ID is recorded in the task report and the worktree is clean. The controller performs the broad whole-branch review before updating `main`, creating `v1.2.0` or pushing anything.
+
+## Controller Finalization After Whole-Branch Review
+
+Only after every task review and the broad final review are clean, the controller fast-forwards the original `main` worktree to `codex/vrcave-multiscreen`, reruns the release smoke checks, creates the annotated tag on that exact commit, and pushes:
+
+```powershell
+git -C E:\WindowApp\RadarControl merge --ff-only codex/vrcave-multiscreen
+git -C E:\WindowApp\RadarControl tag -a v1.2.0 -m "Blaze Radar SDK 1.2.0"
+git -C E:\WindowApp\RadarControl push origin main
+git -C E:\WindowApp\RadarControl push origin v1.2.0
+```
+
+Expected: GitHub `main` and annotated `v1.2.0` point to the same fully reviewed release commit; the documented Unity Git URL resolves package version 1.2.0.
 
 ## Final On-Site Acceptance
 
