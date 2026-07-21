@@ -247,6 +247,22 @@ public sealed class RadarScreenFusionEngineTests
     }
 
     [Fact]
+    public void SnapshotPressedPointers_LeavesFusionStateIntactUntilReset()
+    {
+        var engine = CreateEngine(confirmFrames: 1);
+        var now = DateTimeOffset.UnixEpoch;
+        engine.Publish(new SensorDetectionFrame("f1", now, [new(1, 100, 100, 1f)]));
+        Assert.Equal(RadarPointerPhase.Down, Assert.Single(engine.Tick(now).Pointers).Phase);
+
+        var snapshot = Assert.Single(engine.SnapshotPressedPointers(now.AddMilliseconds(1)));
+
+        Assert.Equal(RadarPointerPhase.Up, snapshot.Phase);
+        var reset = Assert.Single(engine.Reset(now.AddMilliseconds(2)));
+        Assert.Equal(snapshot.PointerId, reset.PointerId);
+        Assert.Equal(snapshot.Phase, reset.Phase);
+    }
+
+    [Fact]
     public void PublishAndResults_DoNotExposeMutableCollectionAliases()
     {
         var detections = new[] { new SensorDetection(1, 100, 100, 1f) };

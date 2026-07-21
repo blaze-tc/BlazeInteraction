@@ -76,7 +76,6 @@ public sealed class RadarPipeServer : IAsyncDisposable
                     1,
                     PipeTransmissionMode.Byte,
                     PipeOptions.Asynchronous);
-                _activePipe = pipe;
                 var authenticated = false;
                 try
                 {
@@ -84,7 +83,11 @@ public sealed class RadarPipeServer : IAsyncDisposable
                     await HandleClientAsync(
                         pipe,
                         linked.Token,
-                        () => authenticated = true).ConfigureAwait(false);
+                        () =>
+                        {
+                            authenticated = true;
+                            _activePipe = pipe;
+                        }).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (linked.IsCancellationRequested)
                 {
@@ -142,6 +145,16 @@ public sealed class RadarPipeServer : IAsyncDisposable
             exception is IOException or InvalidOperationException or ObjectDisposedException)
         {
             NotifyClientError(exception);
+            return false;
+        }
+        catch (OperationCanceledException)
+        {
+            if (ReferenceEquals(_activePipe, pipe))
+            {
+                pipe.Dispose();
+            }
+
+            NotifyClientError(new TimeoutException("IPC client did not accept the pointer batch within the configured send timeout."));
             return false;
         }
     }

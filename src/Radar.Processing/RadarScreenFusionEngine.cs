@@ -62,6 +62,7 @@ public interface IRadarScreenFusionEngine
 {
     void Publish(SensorDetectionFrame frame);
     RadarScreenFusionResult Tick(DateTimeOffset timestamp);
+    IReadOnlyList<RadarScreenPointer> SnapshotPressedPointers(DateTimeOffset timestamp);
     IReadOnlyList<RadarScreenPointer> Reset(DateTimeOffset timestamp);
 }
 
@@ -174,13 +175,15 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
         return new RadarScreenFusionResult(targets, pointers);
     }
 
+    public IReadOnlyList<RadarScreenPointer> SnapshotPressedPointers(DateTimeOffset timestamp) => Array.AsReadOnly(_pressedTouchPointers
+        .OrderBy(pointerId => pointerId)
+        .Where(pointerId => _pointerPositions.ContainsKey(pointerId))
+        .Select(pointerId => ToScreenPointer(pointerId, RadarPointerPhase.Up, _pointerPositions[pointerId], timestamp))
+        .ToArray());
+
     public IReadOnlyList<RadarScreenPointer> Reset(DateTimeOffset timestamp)
     {
-        var output = _pressedTouchPointers
-            .OrderBy(pointerId => pointerId)
-            .Where(pointerId => _pointerPositions.ContainsKey(pointerId))
-            .Select(pointerId => ToScreenPointer(pointerId, RadarPointerPhase.Up, _pointerPositions[pointerId], timestamp))
-            .ToArray();
+        var output = SnapshotPressedPointers(timestamp);
 
         _latestFrames.Clear();
         _tracks.Clear();
@@ -192,7 +195,7 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
         {
             _lastTickTimestamp = timestamp;
         }
-        return Array.AsReadOnly(output);
+        return output;
     }
 
     private IReadOnlyList<FusedObservation> FuseCurrentDetections(DateTimeOffset timestamp)

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using System.IO.Pipes;
+using Yuexin.Radar.Bridge.Wpf;
 using Yuexin.Radar.Bridge.Wpf.Services;
 using Yuexin.Radar.Configuration;
 using Yuexin.Radar.Contracts;
@@ -71,8 +72,10 @@ public sealed class RadarBridgeCoordinatorTests
         var settledBatch = coordinator.TickForTest(DateTimeOffset.UnixEpoch.AddSeconds(4));
 
         var upFrame = upBatch.Screens.Single(frame => frame.Screen.ScreenId == "front");
+        Assert.Equal(["front", "left"], upBatch.Screens.Select(frame => frame.Screen.ScreenId));
         Assert.Single(upFrame.Pointers);
         Assert.Equal(RadarPointerPhase.Up, upFrame.Pointers[0].Phase);
+        Assert.Equal(["front", "left"], emptyBatch.Screens.Select(frame => frame.Screen.ScreenId));
         Assert.Empty(emptyBatch.Screens.Single(frame => frame.Screen.ScreenId == "front").Pointers);
         Assert.Equal(["left"], settledBatch.Screens.Select(frame => frame.Screen.ScreenId));
         Assert.True(factory["front", "f1"].StopCallCount > 0);
@@ -93,6 +96,31 @@ public sealed class RadarBridgeCoordinatorTests
         {
             await coordinator.DisposeAsync();
         }
+    }
+
+    [Fact]
+    public async Task Coordinator_ScreenRemovalTransitionsWithACompleteThreeScreenBatch()
+    {
+        var factory = new FakePipelineFactory();
+        await using var coordinator = CreateCoordinator(ThreeScreenFourSensorConfiguration(), factory);
+        await coordinator.ApplyUnityTopologyAsync(Hello(
+            Screen("left", "Left", false, 1920, 1440, 0),
+            Screen("front", "Front", true, 4096, 1536, 1),
+            Screen("right", "Right", false, 1920, 1440, 2)));
+        factory["front", "f1"].Publish(Detection("f1", 1000, 700));
+        coordinator.TickForTest(DateTimeOffset.UnixEpoch.AddSeconds(1));
+
+        await coordinator.ApplyUnityTopologyAsync(Hello(
+            Screen("left", "Left", true, 1920, 1440, 0),
+            Screen("right", "Right", false, 1920, 1440, 1)));
+        var upBatch = coordinator.TickForTest(DateTimeOffset.UnixEpoch.AddSeconds(2));
+        var emptyBatch = coordinator.TickForTest(DateTimeOffset.UnixEpoch.AddSeconds(3));
+
+        Assert.Equal(["left", "front", "right"], upBatch.Screens.Select(frame => frame.Screen.ScreenId));
+        Assert.Equal(["left", "front", "right"], emptyBatch.Screens.Select(frame => frame.Screen.ScreenId));
+        Assert.Equal(RadarPointerPhase.Up, Assert.Single(upBatch.Screens.Single(frame => frame.Screen.ScreenId == "front").Pointers).Phase);
+        Assert.Empty(emptyBatch.Screens.Single(frame => frame.Screen.ScreenId == "front").Pointers);
+        Assert.True(emptyBatch.Screens.Select(frame => frame.Sequence).Distinct().Single() > upBatch.Screens.Select(frame => frame.Sequence).Distinct().Single());
     }
 
     [Fact]
@@ -135,7 +163,10 @@ public sealed class RadarBridgeCoordinatorTests
             Screen("right", "Right", false, 1920, 1440, 2))), cancellationToken);
         var acknowledgement = await IpcStream.ReadAsync(client, cancellationToken);
         Assert.Equal(IpcMessageType.HelloAck, acknowledgement.MessageType);
-        Assert.Equal(["left", "front", "right"], acknowledgement.DeserializePayload<HelloAckPayload>().Screens.Select(screen => screen.ScreenId));
+        var ack = acknowledgement.DeserializePayload<HelloAckPayload>();
+        Assert.Equal("1.2.0", BridgeVersion.Value);
+        Assert.Equal(BridgeVersion.Value, ack.BridgeVersion);
+        Assert.Equal(["left", "front", "right"], ack.Screens.Select(screen => screen.ScreenId));
         return client;
     }
 

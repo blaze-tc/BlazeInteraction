@@ -246,6 +246,71 @@ public sealed class RadarPipeServerTests
         await runTask;
     }
 
+    [Fact]
+    public async Task Server_DoesNotPublishToCandidateBeforeHelloAuthentication()
+    {
+        var pipeName = "RadarControl.Tests." + Guid.NewGuid().ToString("N");
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await using var server = new RadarPipeServer(new RadarPipeServerOptions { PipeName = pipeName, AuthenticateHelloAsync = AcceptHelloAsync });
+        var runTask = server.RunAsync(cancellation.Token);
+
+        await using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        await client.ConnectAsync(cancellation.Token);
+
+        var send = server.SendAsync(PointerBatchEnvelope(), cancellation.Token).AsTask();
+        using var shortRead = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => IpcStream.ReadAsync(client, shortRead.Token).AsTask());
+        Assert.False(await send);
+
+        cancellation.Cancel();
+        await runTask;
+    }
+
+    [Fact]
+    public async Task Server_RejectsInvalidHelloBeforeAnyPointerBatchCanBePublished()
+    {
+        var pipeName = "RadarControl.Tests." + Guid.NewGuid().ToString("N");
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await using var server = new RadarPipeServer(new RadarPipeServerOptions { PipeName = pipeName, AuthenticateHelloAsync = AcceptHelloAsync });
+        var runTask = server.RunAsync(cancellation.Token);
+
+        await using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        await client.ConnectAsync(cancellation.Token);
+        await IpcStream.WriteAsync(client, IpcEnvelope.Create(IpcMessageType.Hello, 1, new HelloPayload(42, "2021.3",
+            [new RadarScreenDefinitionPayload("front", "Front", 1920, 1080, true, 0), new RadarScreenDefinitionPayload("front", "Duplicate", 1920, 1080, false, 1)])), cancellation.Token);
+
+        var send = server.SendAsync(PointerBatchEnvelope(), cancellation.Token).AsTask();
+        var response = await IpcStream.ReadAsync(client, cancellation.Token);
+        Assert.Equal(IpcMessageType.Error, response.MessageType);
+        Assert.NotEqual(IpcMessageType.PointerBatch, response.MessageType);
+        Assert.False(await send);
+
+        cancellation.Cancel();
+        await runTask;
+    }
+
+    [Fact]
+    public async Task Server_PublishesOnlyAfterHelloAckIsWritten()
+    {
+        var pipeName = "RadarControl.Tests." + Guid.NewGuid().ToString("N");
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await using var server = new RadarPipeServer(new RadarPipeServerOptions { PipeName = pipeName, AuthenticateHelloAsync = AcceptHelloAsync });
+        var runTask = server.RunAsync(cancellation.Token);
+
+        await using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        await client.ConnectAsync(cancellation.Token);
+        await IpcStream.WriteAsync(client, IpcEnvelope.Create(IpcMessageType.Hello, 1, Hello()), cancellation.Token);
+
+        var acknowledgement = await IpcStream.ReadAsync(client, cancellation.Token);
+        Assert.Equal(IpcMessageType.HelloAck, acknowledgement.MessageType);
+        var send = server.SendAsync(PointerBatchEnvelope(), cancellation.Token).AsTask();
+        Assert.Equal(IpcMessageType.PointerBatch, (await IpcStream.ReadAsync(client, cancellation.Token)).MessageType);
+        Assert.True(await send);
+
+        cancellation.Cancel();
+        await runTask;
+    }
+
     private static HelloPayload Hello() => new(
         42,
         "2021.3",
@@ -254,4 +319,7 @@ public sealed class RadarPipeServerTests
     private static ValueTask<HelloAuthenticationResult> AcceptHelloAsync(HelloPayload _, CancellationToken __) =>
         ValueTask.FromResult(HelloAuthenticationResult.Accept(new HelloAckPayload(
             "1.2.0", IpcProtocolVersion.Current, false, "multi-screen", [])));
+
+    private static IpcEnvelope PointerBatchEnvelope() => IpcEnvelope.Create(IpcMessageType.PointerBatch, 99,
+        new PointerBatchPayload([new RadarScreenPointerFrame(new RadarScreenInfo("main", "Main", 1920, 1080, true, 0), 99, 0, [])]));
 }

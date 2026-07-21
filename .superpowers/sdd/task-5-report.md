@@ -36,3 +36,21 @@ dotnet build RadarControl.sln -c Release --no-restore -t:Rebuild
 Results: IPC focused 8/8; Coordinator focused 5/5; Bridge tests 39/39; solution tests all passed (17 Unity compatibility, 17 Protocol, 18 IPC, 15 Device, 52 Processing, 35 Configuration, 39 Bridge); Release build completed with 0 errors.
 
 The forced rebuild reports 249 warnings. These are the planned Task 2/Task 6 compatibility warnings from retained obsolete flat `RadarAppConfiguration` adapters and the temporary old ViewModel command adapters, plus existing nullable warnings in `RadarSensorPipeline`; no Task 5 error was reported.
+
+## Review remediation
+
+- Raised `BridgeVersion` to `1.2.0`; the coordinator's real pipe handshake test now asserts that the production `HelloAck` carries this value.
+- The pipe server now keeps a candidate pipe private until it has read and validated `Hello`, successfully written `HelloAck`, and then marks it active. New tests cover a pre-Hello candidate, an invalid Hello, and the post-Ack activation point.
+- Transition output is now a two-stage, complete-batch protocol: the old screen contributes `Up` to a complete batch, then an empty frame to a second complete batch. Fusion reset and runtime disposal/replacement happen only after the empty batch has actually been sent. The test-only clock treats its returned batch as delivered so its assertions remain deterministic.
+- Fusion gained a non-mutating pressed-pointer snapshot API, enabling the coordinator to defer reset until transition delivery. Detection publication, fusion ticking, and reset all use the per-screen gate; active runtime enumeration uses a volatile immutable snapshot rather than the mutable screen dictionary.
+- Pointer sends use a 250 ms linked cancellation timeout. A cancelled send disposes the active pipe, reports a client error, and lets the scheduler continue rather than waiting forever on a slow peer.
+
+Remediation RED/GREEN evidence:
+
+```powershell
+dotnet test tests\Radar.Ipc.Tests\Radar.Ipc.Tests.csproj -c Release --filter "FullyQualifiedName~RadarPipeServerTests" --no-restore
+dotnet test tests\Radar.Processing.Tests\Radar.Processing.Tests.csproj -c Release --filter "FullyQualifiedName~SnapshotPressedPointers" --no-restore
+dotnet test tests\Radar.Bridge.Wpf.Tests\Radar.Bridge.Wpf.Tests.csproj -c Release --filter "FullyQualifiedName~RadarBridgeCoordinatorTests" --no-restore
+```
+
+Results: the two new IPC authentication tests first failed by receiving `PointerBatch` before `HelloAck`, then passed (11/11 IPC). The fusion snapshot test first failed to compile because the API did not exist, then passed. Coordinator focused tests passed 6/6 after the staged transition rewrite.
