@@ -142,6 +142,35 @@ public sealed class RadarBridgeCoordinatorTests
     }
 
     [Fact]
+    public async Task Coordinator_SaveFailureLeavesTopologyAndConfigurationUnchanged()
+    {
+        var configuration = new RadarAppConfiguration { Screens = [ScreenConfiguration("front", "f1", 1920, 1080)] };
+        var factory = new FakePipelineFactory();
+        var saves = 0;
+        await using var coordinator = CreateCoordinator(configuration, factory, (_, _) => { saves++; return Task.FromException(new IOException("save failed")); });
+
+        await Assert.ThrowsAsync<IOException>(() => coordinator.ApplyUnityTopologyAsync(Hello(Screen("front", "Front", true, 1920, 1080, 0))));
+
+        Assert.Equal(1, saves);
+        Assert.Equal(["front"], configuration.Screens.Select(screen => screen.ScreenId));
+        Assert.True(factory.AllDisposed);
+        Assert.Empty(coordinator.TickForTest(DateTimeOffset.UnixEpoch.AddSeconds(1)).Screens);
+    }
+
+    [Fact]
+    public async Task Coordinator_ApplyConfigurationSaveFailureLeavesActiveRuntimeUnchanged()
+    {
+        var configuration = new RadarAppConfiguration { Screens = [ScreenConfiguration("front", "f1", 1920, 1080)] };
+        var factory = new FakePipelineFactory();
+        await using var coordinator = CreateCoordinator(configuration, factory, (_, _) => Task.FromException(new IOException("save failed")));
+
+        await Assert.ThrowsAsync<IOException>(() => coordinator.ApplyConfigurationAsync());
+
+        Assert.Empty(factory.Created);
+        Assert.Empty(coordinator.TickForTest(DateTimeOffset.UnixEpoch.AddSeconds(1)).Screens);
+    }
+
+    [Fact]
     public async Task Coordinator_StartStopAndDisposeAreConcurrentSafe()
     {
         var factory = new FakePipelineFactory();
@@ -207,10 +236,10 @@ public sealed class RadarBridgeCoordinatorTests
         Assert.True(coordinator.UnityStatus.IsConnected);
     }
 
-    private static RadarBridgeCoordinator CreateCoordinator(RadarAppConfiguration configuration, FakePipelineFactory factory)
+    private static RadarBridgeCoordinator CreateCoordinator(RadarAppConfiguration configuration, FakePipelineFactory factory, Func<RadarAppConfiguration, CancellationToken, Task>? persist = null)
     {
         configuration.Ipc.PipeName = "RadarControl.Tests." + Guid.NewGuid().ToString("N");
-        return new RadarBridgeCoordinator(configuration, NullLogger<RadarBridgeCoordinator>.Instance, factory);
+        return new RadarBridgeCoordinator(configuration, NullLogger<RadarBridgeCoordinator>.Instance, factory, persistConfigurationAsync: persist);
     }
 
     private static async Task<NamedPipeClientStream> ConnectAsync(string pipeName, CancellationToken cancellationToken)
@@ -289,6 +318,8 @@ public sealed class RadarBridgeCoordinatorTests
     {
         private readonly Dictionary<(string ScreenId, string SensorId), FakePipeline> _pipelines = new();
         public bool ThrowOnCreate { get; set; }
+        public bool AllDisposed => _pipelines.Values.All(value => value.Disposed);
+        public IReadOnlyCollection<FakePipeline> Created => _pipelines.Values;
 
         public FakePipeline this[string screenId, string sensorId] => _pipelines[(screenId, sensorId)];
 

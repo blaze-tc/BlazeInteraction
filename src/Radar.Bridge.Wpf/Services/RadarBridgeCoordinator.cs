@@ -14,6 +14,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private readonly ILogger<RadarBridgeCoordinator> _logger;
     private readonly IRadarSensorPipelineFactory _pipelineFactory;
     private readonly string? _configurationPath;
+    private readonly Func<RadarAppConfiguration, CancellationToken, Task> _persistConfigurationAsync;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
     private readonly SemaphoreSlim _topologyLock = new(1, 1);
@@ -36,12 +37,14 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         RadarAppConfiguration configuration,
         ILogger<RadarBridgeCoordinator> logger,
         IRadarSensorPipelineFactory pipelineFactory,
-        string? configurationPath = null)
+        string? configurationPath = null,
+        Func<RadarAppConfiguration, CancellationToken, Task>? persistConfigurationAsync = null)
     {
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _pipelineFactory = pipelineFactory ?? throw new ArgumentNullException(nameof(pipelineFactory));
         _configurationPath = configurationPath;
+        _persistConfigurationAsync = persistConfigurationAsync ?? PersistWithStoreAsync;
     }
 
     public event Action<RadarSensorRuntimeSnapshot>? SensorSnapshotUpdated;
@@ -197,15 +200,35 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         try
         {
             var now = DateTimeOffset.UtcNow;
-            foreach (var runtime in _screens.Values.Where(value => value.Associated).ToArray())
+            var candidate = CloneConfiguration(_configuration);
+            var active = _screens.Values.Where(value => value.Associated).ToArray();
+            var staged = new Dictionary<string, ScreenRuntime>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                foreach (var runtime in active)
+                {
+                    var configuration = candidate.Screens.Single(screen => string.Equals(screen.ScreenId, runtime.Info.ScreenId, StringComparison.OrdinalIgnoreCase));
+                    staged.Add(runtime.Info.ScreenId, CreateRuntime(configuration, ToScreenInfo(configuration)));
+                }
+                await PersistConfigurationAsync(candidate, cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                foreach (var runtime in staged.Values) await DisposeRuntimeAsync(runtime).ConfigureAwait(false);
+                throw;
+            }
+
+            _configuration.SchemaVersion = candidate.SchemaVersion;
+            _configuration.Ipc = candidate.Ipc;
+            _configuration.Screens = candidate.Screens;
+            foreach (var runtime in active)
             {
                 runtime.Associated = false;
                 runtime.IsRetiring = true;
                 runtime.RetirementCancellation.Cancel();
-                QueueRetirement(runtime, now, remove: false, CreateRuntime(runtime.Configuration, ToScreenInfo(runtime.Configuration)));
+                QueueRetirement(runtime, now, remove: false, staged[runtime.Info.ScreenId]);
             }
             RefreshAssociatedSnapshot();
-            await PersistConfigurationAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -563,7 +586,12 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     {
         var runtime = new ScreenRuntime(configuration, info, CreateFusion(configuration, info));
         runtime.OperationsDrained.TrySetResult();
-        EnsureEnabledPipelines(runtime);
+        try { EnsureEnabledPipelines(runtime); }
+        catch
+        {
+            DisposeRuntimeAsync(runtime).GetAwaiter().GetResult();
+            throw;
+        }
         return runtime;
     }
 
@@ -824,8 +852,11 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
 
     private async Task PersistConfigurationAsync(RadarAppConfiguration configuration, CancellationToken cancellationToken)
     {
-        if (_configurationPath is not null && configuration.CanPersist) await RadarConfigurationStore.SaveAsync(_configurationPath, configuration, cancellationToken).ConfigureAwait(false);
+        if (configuration.CanPersist) await _persistConfigurationAsync(configuration, cancellationToken).ConfigureAwait(false);
     }
+
+    private Task PersistWithStoreAsync(RadarAppConfiguration configuration, CancellationToken cancellationToken) =>
+        _configurationPath is null ? Task.CompletedTask : RadarConfigurationStore.SaveAsync(_configurationPath, configuration, cancellationToken);
 
     private Task PersistConfigurationAsync(CancellationToken cancellationToken) => PersistConfigurationAsync(_configuration, cancellationToken);
 
