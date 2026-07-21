@@ -433,6 +433,27 @@ public sealed class RadarConfigurationTests
     }
 
     [Fact]
+    public async Task SaveAsync_ConcurrentNormalizedTargets_AreSerializedAcrossRepeatedRounds()
+    {
+        await WithTemporaryConfigurationAsync(async (directory, path) =>
+        {
+            var equivalentPath = Path.Combine(directory, ".", Path.GetFileName(path));
+
+            for (var round = 0; round < 8; round++)
+            {
+                var saves = Enumerable.Range(0, 40)
+                    .Select(index => RadarConfigurationStore.SaveAsync(
+                        index % 2 == 0 ? path : equivalentPath,
+                        RadarAppConfiguration.CreateDefault()));
+
+                await Task.WhenAll(saves);
+                Assert.True(File.Exists(path));
+                Assert.Empty(Directory.GetFiles(directory, "*.tmp"));
+            }
+        });
+    }
+
+    [Fact]
     public async Task RejectedLoad_CannotBePersistedAndPreservesOriginalBytes()
     {
         await WithTemporaryConfigurationAsync(async (_, path) =>

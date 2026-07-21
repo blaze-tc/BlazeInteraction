@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Yuexin.Radar.Bridge.Wpf.Services;
 using Yuexin.Radar.Configuration;
 using Yuexin.Radar.Contracts;
+using Yuexin.Radar.Device;
 using Yuexin.Radar.Processing;
 using ConfigurationPixelRect = Yuexin.Radar.Configuration.RadarPixelRect;
 
@@ -207,6 +208,52 @@ public sealed class RadarSensorPipelineTests
     }
 
     [Fact]
+    public async Task Recording_IsReleasedBeforeReplayTransitionsAwayFromARealSource()
+    {
+        await using var pipeline = CreatePipeline("main", "sensor-1", new ConfigurationPixelRect(0, 0, 1920, 1080));
+        var recordingPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".radarrec");
+        var replayPath = await CreateRecordingAsync();
+        try
+        {
+            SetActiveRealSourceForRecording(pipeline);
+            await pipeline.StartRecordingAsync(recordingPath);
+            Assert.NotNull(GetRecordingWriter(pipeline));
+
+            await pipeline.ReplayAsync(replayPath, 1d, loop: true);
+            await pipeline.StopReplayAsync();
+
+            Assert.Null(GetRecordingWriter(pipeline));
+        }
+        finally
+        {
+            File.Delete(recordingPath);
+            File.Delete(replayPath);
+        }
+    }
+
+    [Fact]
+    public async Task Recording_IsReleasedBeforeStopAndDisposeComplete()
+    {
+        var pipeline = CreatePipeline("main", "sensor-1", new ConfigurationPixelRect(0, 0, 1920, 1080));
+        var recordingPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".radarrec");
+        try
+        {
+            SetActiveRealSourceForRecording(pipeline);
+            await pipeline.StartRecordingAsync(recordingPath);
+            await pipeline.StopAsync();
+            Assert.Null(GetRecordingWriter(pipeline));
+
+            await pipeline.DisposeAsync();
+            Assert.Null(GetRecordingWriter(pipeline));
+        }
+        finally
+        {
+            await pipeline.DisposeAsync();
+            File.Delete(recordingPath);
+        }
+    }
+
+    [Fact]
     public async Task Lifecycle_IsIdempotentAndSnapshotsAreImmutable()
     {
         await using var pipeline = CreatePipeline("main", "sensor-1", new ConfigurationPixelRect(0, 0, 1920, 1080));
@@ -281,6 +328,19 @@ public sealed class RadarSensorPipelineTests
             RadarModel.F10, "{}", null, DateTimeOffset.UtcNow));
         return path;
     }
+
+    private static void SetActiveRealSourceForRecording(RadarSensorPipeline pipeline)
+    {
+        typeof(RadarSensorPipeline).GetField("_activeSource", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .SetValue(pipeline, (int)RadarSensorSourceMode.Real);
+        typeof(RadarSensorPipeline).GetField("_state", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .SetValue(pipeline, (int)RadarSensorRuntimeState.Running);
+    }
+
+    private static RadarRecordingWriter? GetRecordingWriter(RadarSensorPipeline pipeline) =>
+        (RadarRecordingWriter?)typeof(RadarSensorPipeline)
+            .GetField("_recordingWriter", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(pipeline);
 
     private static async Task WaitUntilAsync(Func<bool> predicate, CancellationToken cancellationToken)
     {

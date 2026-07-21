@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -8,6 +9,7 @@ namespace Yuexin.Radar.Configuration;
 public static class RadarConfigurationStore
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> SaveLocks = new(StringComparer.OrdinalIgnoreCase);
 
     public static RadarAppConfiguration LoadFromJson(string json)
     {
@@ -55,19 +57,28 @@ public static class RadarConfigurationStore
         var validation = ConfigurationValidator.ValidateAndNormalize(configuration);
         if (!validation.IsValid) throw new InvalidOperationException(string.Join(Environment.NewLine, validation.Errors));
 
-        var directory = Path.GetDirectoryName(Path.GetFullPath(path));
-        if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
-
-        var json = JsonSerializer.Serialize(configuration, JsonOptions);
-        var temporaryPath = Path.Combine(directory!, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        var targetPath = Path.GetFullPath(path);
+        var saveLock = SaveLocks.GetOrAdd(targetPath, static _ => new SemaphoreSlim(1, 1));
+        await saveLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await File.WriteAllTextAsync(temporaryPath, json, cancellationToken).ConfigureAwait(false);
-            File.Move(temporaryPath, path, overwrite: true);
+            var directory = Path.GetDirectoryName(targetPath)!;
+            Directory.CreateDirectory(directory);
+            var json = JsonSerializer.Serialize(configuration, JsonOptions);
+            var temporaryPath = Path.Combine(directory, $".{Path.GetFileName(targetPath)}.{Guid.NewGuid():N}.tmp");
+            try
+            {
+                await File.WriteAllTextAsync(temporaryPath, json, cancellationToken).ConfigureAwait(false);
+                File.Move(temporaryPath, targetPath, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+            }
         }
         finally
         {
-            if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
+            saveLock.Release();
         }
     }
 

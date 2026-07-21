@@ -114,40 +114,49 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
     {
         ThrowIfDisposed();
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        if (Volatile.Read(ref _activeSource) != (int)RadarSensorSourceMode.Real || State != RadarSensorRuntimeState.Running)
-        {
-            throw new InvalidOperationException("Only a Real radar source can record raw TCP bytes.");
-        }
-
         var fullPath = Path.GetFullPath(path);
         Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
-        await _recordingLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await _lifecycleLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await StopRecordingCoreAsync().ConfigureAwait(false);
-            var stream = new FileStream(fullPath, FileMode.Create, FileAccess.Write, FileShare.Read, 64 * 1024,
-                FileOptions.Asynchronous | FileOptions.SequentialScan);
-            var writer = new RadarRecordingWriter(stream, leaveOpen: true);
+            await _recordingLock.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                await writer.InitializeAsync(new RadarRecordingHeader(
-                    _options.DeviceModel,
-                    _options.ConfigurationSnapshotJson,
-                    null,
-                    DateTimeOffset.UtcNow), cancellationToken).ConfigureAwait(false);
-                _recordingStream = stream;
-                _recordingWriter = writer;
+                ThrowIfDisposed();
+                if (Volatile.Read(ref _activeSource) != (int)RadarSensorSourceMode.Real || State != RadarSensorRuntimeState.Running)
+                {
+                    throw new InvalidOperationException("Only a Real radar source can record raw TCP bytes.");
+                }
+
+                await StopRecordingCoreAsync().ConfigureAwait(false);
+                var stream = new FileStream(fullPath, FileMode.Create, FileAccess.Write, FileShare.Read, 64 * 1024,
+                    FileOptions.Asynchronous | FileOptions.SequentialScan);
+                var writer = new RadarRecordingWriter(stream, leaveOpen: true);
+                try
+                {
+                    await writer.InitializeAsync(new RadarRecordingHeader(
+                        _options.DeviceModel,
+                        _options.ConfigurationSnapshotJson,
+                        null,
+                        DateTimeOffset.UtcNow), cancellationToken).ConfigureAwait(false);
+                    _recordingStream = stream;
+                    _recordingWriter = writer;
+                }
+                catch
+                {
+                    await writer.DisposeAsync().ConfigureAwait(false);
+                    await stream.DisposeAsync().ConfigureAwait(false);
+                    throw;
+                }
             }
-            catch
+            finally
             {
-                await writer.DisposeAsync().ConfigureAwait(false);
-                await stream.DisposeAsync().ConfigureAwait(false);
-                throw;
+                _recordingLock.Release();
             }
         }
         finally
         {
-            _recordingLock.Release();
+            _lifecycleLock.Release();
         }
 
         PublishLog($"Recording raw TCP bytes to {fullPath}.");
@@ -155,14 +164,14 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
 
     public async Task StopRecordingAsync()
     {
-        await _recordingLock.WaitAsync().ConfigureAwait(false);
+        await _lifecycleLock.WaitAsync().ConfigureAwait(false);
         try
         {
-            await StopRecordingCoreAsync().ConfigureAwait(false);
+            await StopRecordingUnderLifecycleAsync().ConfigureAwait(false);
         }
         finally
         {
-            _recordingLock.Release();
+            _lifecycleLock.Release();
         }
     }
 
@@ -264,6 +273,7 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
         Volatile.Write(ref _activeSource, -1);
         cancellation?.Cancel();
         _replayGate.Resume();
+        await StopRecordingUnderLifecycleAsync().ConfigureAwait(false);
 
         if (source is not null)
         {
@@ -403,12 +413,15 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
             var decoder = new RadarByteStreamDecoder();
             var builder = new RadarScanFrameBuilder(minimumValidPointCount: 2);
             DateTimeOffset? previousTimestamp = null;
+            var containsRawBytes = false;
             await foreach (var entry in reader.ReadEntriesAsync(cancellationToken).ConfigureAwait(false))
             {
                 if (entry.EntryType != RadarRecordingEntryType.RawBytes)
                 {
                     continue;
                 }
+
+                containsRawBytes = true;
 
                 if (previousTimestamp.HasValue)
                 {
@@ -429,6 +442,11 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
                         PublishScan(frame);
                     }
                 }
+            }
+
+            if (loop && !containsRawBytes)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(25), cancellationToken).ConfigureAwait(false);
             }
         }
         while (loop && !cancellationToken.IsCancellationRequested);
@@ -533,6 +551,20 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
         if (stream is not null)
         {
             await stream.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    // Lifecycle transitions always acquire the lifecycle lock before this recording lock.
+    private async Task StopRecordingUnderLifecycleAsync()
+    {
+        await _recordingLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await StopRecordingCoreAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _recordingLock.Release();
         }
     }
 

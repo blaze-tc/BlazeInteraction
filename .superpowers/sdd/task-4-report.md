@@ -41,3 +41,12 @@
 5. Added terminal queued-frame, concurrent Start/Stop and immutable-snapshot coverage. Focused pipeline suite: 11/11 passed.
 
 Review verification: Bridge tests passed 41/41. A first full-solution run hit the known flaky concurrent configuration-save test with `UnauthorizedAccessException`; the immediate clean rerun passed all 192 tests. Release build passed with 0 warnings and 0 errors.
+
+## Second review remediation
+
+- Recording admission now takes the lifecycle lock before the recording lock and rechecks the active Real/Running source while both protections are held. Every source transition clears and flushes the recorder through that same lock order.
+- Configuration saves now serialize on a process-wide, normalized full target path using an ordinal-ignore-case lock; cancellation/error cleanup releases the gate and removes the unique temporary file.
+- Empty looped recordings pause for 25 ms with the run cancellation token between passes, preventing a header-only replay busy loop without delaying recordings that contain raw bytes.
+- Added transition regression coverage for recorder release on replay, stop and dispose plus repeated concurrent normalized-target save stress.
+
+Second-review verification: focused recording-transition tests passed 2/2; Bridge tests passed 43/43; Configuration tests passed 34/34 and the repeated normalized-target stress case passed twice; the full solution passed 195/195. The Release build passed with 0 errors and retained 306 pre-existing compatibility-obsolescence warnings.
