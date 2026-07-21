@@ -171,6 +171,22 @@ public sealed class RadarBridgeCoordinatorTests
     }
 
     [Fact]
+    public async Task Coordinator_SecondPipelineFactoryFailureDisposesFirstStagedPipeline()
+    {
+        var configuration = new RadarAppConfiguration
+        {
+            Screens = [new RadarScreenConfiguration { ScreenId = "front", UnityDisplayName = "Front", Sensors = [Sensor("f1"), Sensor("f2")] }]
+        };
+        var factory = new FakePipelineFactory { ThrowOnCreateNumber = 2 };
+        await using var coordinator = CreateCoordinator(configuration, factory);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => coordinator.ApplyUnityTopologyAsync(Hello(Screen("front", "Front", true, 1920, 1080, 0))));
+
+        Assert.True(factory["front", "f1"].Disposed);
+        Assert.Empty(coordinator.TickForTest(DateTimeOffset.UnixEpoch.AddSeconds(1)).Screens);
+    }
+
+    [Fact]
     public async Task Coordinator_StartStopAndDisposeAreConcurrentSafe()
     {
         var factory = new FakePipelineFactory();
@@ -318,6 +334,8 @@ public sealed class RadarBridgeCoordinatorTests
     {
         private readonly Dictionary<(string ScreenId, string SensorId), FakePipeline> _pipelines = new();
         public bool ThrowOnCreate { get; set; }
+        public int ThrowOnCreateNumber { get; set; }
+        private int _createCalls;
         public bool AllDisposed => _pipelines.Values.All(value => value.Disposed);
         public IReadOnlyCollection<FakePipeline> Created => _pipelines.Values;
 
@@ -325,7 +343,7 @@ public sealed class RadarBridgeCoordinatorTests
 
         public IRadarSensorPipeline Create(RadarScreenConfiguration screen, RadarSensorConfiguration sensor)
         {
-            if (ThrowOnCreate) throw new InvalidOperationException("factory failure");
+            if (ThrowOnCreate || ++_createCalls == ThrowOnCreateNumber) throw new InvalidOperationException("factory failure");
             var pipeline = new FakePipeline(screen.ScreenId, sensor.SensorId);
             _pipelines.Add((screen.ScreenId, sensor.SensorId), pipeline);
             return pipeline;
