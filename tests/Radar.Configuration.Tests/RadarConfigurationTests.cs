@@ -6,16 +6,17 @@ namespace Yuexin.Radar.Configuration.Tests;
 public sealed class RadarConfigurationTests
 {
     [Fact]
-    public void NewConfiguration_DefaultsToF10AndDocumentedEndpoint()
+    public void NewConfiguration_CreatesOnePrimaryMainScreenAndSensor()
     {
         var configuration = RadarAppConfiguration.CreateDefault();
+        var screen = Assert.Single(configuration.Screens);
+        var sensor = Assert.Single(screen.Sensors);
 
-        Assert.Equal(1, configuration.SchemaVersion);
-        Assert.Equal(RadarModel.F10, configuration.Device.DeviceModel);
-        Assert.Equal("192.168.0.100", configuration.Device.RadarIp);
-        Assert.Equal(8487, configuration.Device.Port);
-        Assert.Equal(5f, configuration.Range.MaximumDistanceMeters);
-        Assert.Equal(4f, configuration.Range.VisualizationRangeMeters);
+        Assert.Equal(2, configuration.SchemaVersion);
+        Assert.Equal("main", screen.ScreenId);
+        Assert.True(screen.IsPrimary);
+        Assert.Equal(new RadarPixelRect(0, 0, 1920, 1080), sensor.OutputRectPixels);
+        Assert.Equal(RadarModel.F10, sensor.Device.DeviceModel);
         Assert.Equal("Yuexin.RadarBridge", configuration.Ipc.PipeName);
     }
 
@@ -45,18 +46,25 @@ public sealed class RadarConfigurationTests
     {
         const string json = """
             {
-              "schemaVersion": 1,
-              "device": {
-                "deviceModel": "F99",
-                "radarIp": "192.168.0.100",
-                "port": 8487
-              }
+              "schemaVersion": 2,
+              "screens": [{
+                "screenId": "main",
+                "isPrimary": true,
+                "sensors": [{
+                  "sensorId": "sensor-1",
+                  "device": {
+                    "deviceModel": "F99",
+                    "radarIp": "192.168.0.100",
+                    "port": 8487
+                  }
+                }]
+              }]
             }
             """;
 
         var configuration = RadarConfigurationStore.LoadFromJson(json);
 
-        Assert.Equal(RadarModel.F10, configuration.Device.DeviceModel);
+        Assert.Equal(RadarModel.F10, configuration.Screens[0].Sensors[0].Device.DeviceModel);
     }
 
     [Fact]
@@ -101,6 +109,122 @@ public sealed class RadarConfigurationTests
         Assert.Contains(result.Errors, error => error.Contains("radarIp", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(result.Errors, error => error.Contains("port", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(result.Errors, error => error.Contains("minimumDistanceMeters", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task LoadAsync_SchemaOne_CreatesBackupAndMigratesAllSections()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "RadarControl.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, "config.json");
+        try
+        {
+            await File.WriteAllTextAsync(path, """
+                {"schemaVersion":1,"device":{"deviceModel":"F20","radarIp":"10.0.0.8","port":8487},
+                 "range":{"minimumDistanceMeters":0.2,"maximumDistanceMeters":20,"visualizationRangeMeters":8},
+                 "tracking":{"maximumAssociationDistanceMeters":0.7}}
+                """);
+
+            var migrated = await RadarConfigurationStore.LoadAsync(path);
+
+            Assert.Equal(2, migrated.SchemaVersion);
+            Assert.Equal(RadarModel.F20, migrated.Screens[0].Sensors[0].Device.DeviceModel);
+            Assert.Equal("10.0.0.8", migrated.Screens[0].Sensors[0].Device.RadarIp);
+            Assert.Equal(0.7f, migrated.Tracking.MaximumAssociationDistanceMeters);
+            Assert.Single(Directory.GetFiles(directory, "config.schema1.*.bak"));
+            using var savedDocument = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(path));
+            Assert.False(savedDocument.RootElement.TryGetProperty("device", out _));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Validator_RejectsDuplicateIdsAndOutOfBoundsOutputRect()
+    {
+        var configuration = RadarAppConfiguration.CreateDefault();
+        configuration.Screens.Add(configuration.Screens[0].CloneWithId("main"));
+        configuration.Screens[0].Sensors[0].OutputRectPixels = new RadarPixelRect(1800, 0, 400, 1080);
+
+        var result = ConfigurationValidator.ValidateAndNormalize(configuration);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, value => value.Contains("duplicate screenId", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Errors, value => value.Contains("outputRectPixels", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Validator_RequiresExactlyOneAssociatedPrimaryWhenScreensAreAssociated()
+    {
+        var configuration = RadarAppConfiguration.CreateDefault();
+        configuration.Screens[0].IsAssociated = true;
+        configuration.Screens.Add(new RadarScreenConfiguration
+        {
+            ScreenId = "side",
+            IsAssociated = true,
+            IsPrimary = true,
+            Sensors = [new RadarSensorConfiguration { SensorId = "sensor-2" }]
+        });
+
+        var result = ConfigurationValidator.ValidateAndNormalize(configuration);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, value => value.Contains("associated primary", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(0d)]
+    public void Validator_RejectsNonFiniteOrNonPositiveScreenFusionValues(double fusionDistancePixels)
+    {
+        var configuration = RadarAppConfiguration.CreateDefault();
+        configuration.Screens[0].Fusion.FusionDistancePixels = (float)fusionDistancePixels;
+
+        var result = ConfigurationValidator.ValidateAndNormalize(configuration);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, value => value.Contains("fusionDistancePixels", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Validator_RejectsNonFiniteSensorTransformAndInteractionValues()
+    {
+        var configuration = RadarAppConfiguration.CreateDefault();
+        configuration.Screens[0].Sensors[0].Transform.OffsetXMeters = float.NaN;
+        configuration.Screens[0].Interaction.DwellRadiusNormalized = float.PositiveInfinity;
+
+        var result = ConfigurationValidator.ValidateAndNormalize(configuration);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, value => value.Contains("transform", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Errors, value => value.Contains("interaction", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task SaveAsync_WritesOnlySchemaTwoSections()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "RadarControl.Tests", Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(directory, "config.json");
+        try
+        {
+            var configuration = RadarAppConfiguration.CreateDefault();
+            configuration.Device.DeviceModel = RadarModel.F20;
+
+            await RadarConfigurationStore.SaveAsync(path, configuration);
+
+            var json = await File.ReadAllTextAsync(path);
+            Assert.Contains("\"screens\"", json);
+            using var document = System.Text.Json.JsonDocument.Parse(json);
+            Assert.False(document.RootElement.TryGetProperty("device", out _));
+            Assert.False(document.RootElement.TryGetProperty("tracking", out _));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Fact]
