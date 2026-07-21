@@ -24,24 +24,8 @@ public static class RadarConfigurationStore
         if (schema.Kind == SchemaReadKind.Schema2) return DeserializeSchema2(bytes);
         if (schema.Kind != SchemaReadKind.Schema1) return CreateDiagnosticConfiguration(schema.Diagnostic!);
 
-        LegacyRadarAppConfiguration legacy;
-        try
-        {
-            legacy = JsonSerializer.Deserialize<LegacyRadarAppConfiguration>(GetJsonBytes(bytes), JsonOptions) ?? new LegacyRadarAppConfiguration();
-        }
-        catch (JsonException exception)
-        {
-            return CreateDiagnosticConfiguration($"Configuration JSON is malformed: {exception.Message}");
-        }
-
-        var migrated = MigrateSchemaOne(legacy);
-        EnsureSections(migrated);
-        var validation = ConfigurationValidator.ValidateAndNormalize(migrated);
-        if (!validation.IsValid)
-        {
-            migrated.LoadWarnings.AddRange(validation.Errors.Select(error => $"Schema 1 migration was not saved: {error}"));
-            return migrated;
-        }
+        var migrated = DeserializeSchemaOne(bytes);
+        if (!migrated.CanPersist) return migrated;
 
         var backupPath = CreateSchemaOneBackup(path);
         try
@@ -62,6 +46,10 @@ public static class RadarConfigurationStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentNullException.ThrowIfNull(configuration);
+        if (!configuration.CanPersist)
+            throw new InvalidOperationException("Configuration was rejected during loading and cannot replace its source file. Create a new configuration explicitly before saving.");
+        if (!TryEnsureSections(configuration, out var structureDiagnostic))
+            throw new InvalidOperationException(structureDiagnostic);
 
         EnsureSections(configuration);
         var validation = ConfigurationValidator.ValidateAndNormalize(configuration);
@@ -91,7 +79,7 @@ public static class RadarConfigurationStore
         var schema = ReadSchemaVersion(bytes);
         return schema.Kind switch
         {
-            SchemaReadKind.Schema1 => MigrateSchemaOne(JsonSerializer.Deserialize<LegacyRadarAppConfiguration>(GetJsonBytes(bytes), JsonOptions) ?? new LegacyRadarAppConfiguration()),
+            SchemaReadKind.Schema1 => DeserializeSchemaOne(bytes),
             SchemaReadKind.Schema2 => DeserializeSchema2(bytes),
             _ => CreateDiagnosticConfiguration(schema.Diagnostic!)
         };
@@ -102,14 +90,53 @@ public static class RadarConfigurationStore
         try
         {
             var configuration = JsonSerializer.Deserialize<RadarAppConfiguration>(GetJsonBytes(bytes), JsonOptions) ?? RadarAppConfiguration.CreateDefault();
-            EnsureSections(configuration);
-            ConfigurationValidator.ValidateAndNormalize(configuration);
-            return configuration;
+            return NormalizeLoadedConfiguration(configuration);
         }
         catch (JsonException exception)
         {
             return CreateDiagnosticConfiguration($"Configuration JSON is malformed: {exception.Message}");
         }
+    }
+
+    private static RadarAppConfiguration DeserializeSchemaOne(byte[] bytes)
+    {
+        try
+        {
+            var legacy = JsonSerializer.Deserialize<LegacyRadarAppConfiguration>(GetJsonBytes(bytes), JsonOptions) ?? new LegacyRadarAppConfiguration();
+            if (!TryValidateLegacySections(legacy, out var diagnostic)) return CreateDiagnosticConfiguration(diagnostic);
+            return NormalizeLoadedConfiguration(MigrateSchemaOne(legacy));
+        }
+        catch (JsonException exception)
+        {
+            return CreateDiagnosticConfiguration($"Configuration JSON is malformed: {exception.Message}");
+        }
+    }
+
+    private static RadarAppConfiguration NormalizeLoadedConfiguration(RadarAppConfiguration configuration)
+    {
+        if (!TryEnsureSections(configuration, out var structureDiagnostic)) return CreateDiagnosticConfiguration(structureDiagnostic);
+        EnsureSections(configuration);
+        var validation = ConfigurationValidator.ValidateAndNormalize(configuration);
+        if (validation.IsValid) return configuration;
+        return CreateDiagnosticConfiguration($"Configuration validation failed: {string.Join(" | ", validation.Errors)}");
+    }
+
+    private static bool TryValidateLegacySections(LegacyRadarAppConfiguration legacy, out string diagnostic)
+    {
+        var sections = new (string Path, object? Value)[]
+        {
+            ("root.device", legacy.Device), ("root.transform", legacy.Transform), ("root.range", legacy.Range),
+            ("root.clustering", legacy.Clustering), ("root.tracking", legacy.Tracking), ("root.interaction", legacy.Interaction),
+            ("root.ipc", legacy.Ipc), ("root.calibration", legacy.Calibration)
+        };
+        var missing = sections.FirstOrDefault(section => section.Value is null);
+        if (missing.Path is not null)
+        {
+            diagnostic = $"{missing.Path} must not be null; the file was not migrated or overwritten.";
+            return false;
+        }
+        diagnostic = string.Empty;
+        return true;
     }
 
     private static SchemaReadResult ReadSchemaVersion(byte[] bytes)
@@ -200,6 +227,7 @@ public static class RadarConfigurationStore
     private static RadarAppConfiguration CreateDiagnosticConfiguration(string diagnostic)
     {
         var configuration = RadarAppConfiguration.CreateDefault();
+        configuration.PersistenceState = RadarConfigurationPersistenceState.RejectedLoad;
         configuration.LoadWarnings.Add(diagnostic);
         return configuration;
     }
@@ -225,6 +253,48 @@ public static class RadarConfigurationStore
             screen.Sensors ??= [];
             foreach (var sensor in screen.Sensors) EnsureSensorSections(sensor);
         }
+    }
+
+    private static bool TryEnsureSections(RadarAppConfiguration configuration, out string diagnostic)
+    {
+        if (configuration.Ipc is null) return NullSection("root.ipc", out diagnostic);
+        if (configuration.Screens is null) return NullSection("root.screens", out diagnostic);
+        for (var screenIndex = 0; screenIndex < configuration.Screens.Count; screenIndex++)
+        {
+            if (configuration.Screens[screenIndex] is not { } screen) return NullSection($"root.screens[{screenIndex}]", out diagnostic);
+            var screenPath = $"root.screens[{screenIndex}]";
+            if (screen.Fusion is null) return NullSection($"{screenPath}.fusion", out diagnostic);
+            if (screen.Tracking is null) return NullSection($"{screenPath}.tracking", out diagnostic);
+            if (screen.Interaction is null) return NullSection($"{screenPath}.interaction", out diagnostic);
+            if (screen.Sensors is null) return NullSection($"{screenPath}.sensors", out diagnostic);
+            for (var sensorIndex = 0; sensorIndex < screen.Sensors.Count; sensorIndex++)
+            {
+                if (screen.Sensors[sensorIndex] is not { } sensor) return NullSection($"{screenPath}.sensors[{sensorIndex}]", out diagnostic);
+                var sensorPath = $"{screenPath}.sensors[{sensorIndex}]";
+                if (sensor.Device is null) return NullSection($"{sensorPath}.device", out diagnostic);
+                if (sensor.Transform is null) return NullSection($"{sensorPath}.transform", out diagnostic);
+                if (sensor.Range is null) return NullSection($"{sensorPath}.range", out diagnostic);
+                if (sensor.Clustering is null) return NullSection($"{sensorPath}.clustering", out diagnostic);
+                if (sensor.Calibration is null) return NullSection($"{sensorPath}.calibration", out diagnostic);
+                if (sensor.Range.ActivePolygon is null) return NullSection($"{sensorPath}.range.activePolygon", out diagnostic);
+                if (sensor.Range.MaskedPolygons is null) return NullSection($"{sensorPath}.range.maskedPolygons", out diagnostic);
+                for (var polygonIndex = 0; polygonIndex < sensor.Range.MaskedPolygons.Count; polygonIndex++)
+                    if (sensor.Range.MaskedPolygons[polygonIndex] is null) return NullSection($"{sensorPath}.range.maskedPolygons[{polygonIndex}]", out diagnostic);
+                if (sensor.Range.EdgeDeadZones is null) return NullSection($"{sensorPath}.range.edgeDeadZones", out diagnostic);
+                if (sensor.Calibration.PhysicalCorners is null) return NullSection($"{sensorPath}.calibration.physicalCorners", out diagnostic);
+                if (sensor.Calibration.HomographyMatrix is null) return NullSection($"{sensorPath}.calibration.homographyMatrix", out diagnostic);
+                if (sensor.Calibration.TransformSnapshot is null) return NullSection($"{sensorPath}.calibration.transformSnapshot", out diagnostic);
+            }
+        }
+
+        diagnostic = string.Empty;
+        return true;
+    }
+
+    private static bool NullSection(string path, out string diagnostic)
+    {
+        diagnostic = $"{path} must not be null; the file was not migrated or overwritten.";
+        return false;
     }
 
     private static void EnsureSensorSections(RadarSensorConfiguration sensor)

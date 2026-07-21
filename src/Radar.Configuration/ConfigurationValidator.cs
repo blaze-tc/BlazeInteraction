@@ -25,11 +25,12 @@ public static partial class ConfigurationValidator
         var screenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var associatedPrimaryCount = 0;
         var hasAssociatedScreen = false;
-        foreach (var screen in configuration.Screens)
+        for (var screenIndex = 0; screenIndex < configuration.Screens.Count; screenIndex++)
         {
+            var screen = configuration.Screens[screenIndex];
             var screenPath = ScreenPath(screen);
             if (!IdPattern().IsMatch(screen.ScreenId ?? string.Empty)) errors.Add($"{screenPath}.screenId must match ^[a-z0-9_-]{{1,64}}$.");
-            if (!screenIds.Add(screen.ScreenId ?? string.Empty)) errors.Add($"{screenPath}.screenId is a duplicate screenId.");
+            if (!screenIds.Add(screen.ScreenId ?? string.Empty)) errors.Add($"screens[{screenIndex}](id='{screen.ScreenId ?? "<missing>"}').screenId is a duplicate screenId.");
             hasAssociatedScreen |= screen.IsAssociated;
             if (screen.IsAssociated && screen.IsPrimary) associatedPrimaryCount++;
             ValidateScreen(screen, screenPath, errors, warnings);
@@ -77,11 +78,12 @@ public static partial class ConfigurationValidator
         }
 
         var sensorIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var sensor in screen.Sensors)
+        for (var sensorIndex = 0; sensorIndex < screen.Sensors.Count; sensorIndex++)
         {
+            var sensor = screen.Sensors[sensorIndex];
             var sensorPath = $"{path}.sensors[{sensor.SensorId ?? "<missing>"}]";
             if (!IdPattern().IsMatch(sensor.SensorId ?? string.Empty)) errors.Add($"{sensorPath}.sensorId must match ^[a-z0-9_-]{{1,64}}$.");
-            if (!sensorIds.Add(sensor.SensorId ?? string.Empty)) errors.Add($"{sensorPath}.sensorId is a duplicate sensorId.");
+            if (!sensorIds.Add(sensor.SensorId ?? string.Empty)) errors.Add($"{path}.sensors[{sensorIndex}](id='{sensor.SensorId ?? "<missing>"}').sensorId is a duplicate sensorId.");
             ValidateSensor(sensor, sensorPath, width, height, errors, warnings);
         }
     }

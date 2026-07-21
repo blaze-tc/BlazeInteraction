@@ -13,6 +13,13 @@ public sealed class RadarAppConfiguration
     [JsonIgnore]
     public List<string> LoadWarnings { get; } = [];
 
+    /// <summary>Controls whether this in-memory configuration may replace its source file.</summary>
+    [JsonIgnore]
+    public RadarConfigurationPersistenceState PersistenceState { get; internal set; } = RadarConfigurationPersistenceState.Writable;
+
+    [JsonIgnore]
+    public bool CanPersist => PersistenceState == RadarConfigurationPersistenceState.Writable;
+
     [Obsolete("Temporary build bridge; use Screens.")]
     [JsonIgnore]
     public RadarDeviceConfiguration Device { get => MainSensor.Device; set => MainSensor.Device = value ?? new(); }
@@ -68,6 +75,12 @@ public sealed class RadarAppConfiguration
             return sensor;
         }
     }
+}
+
+public enum RadarConfigurationPersistenceState
+{
+    Writable = 0,
+    RejectedLoad = 1
 }
 
 public sealed class RadarDeviceConfiguration

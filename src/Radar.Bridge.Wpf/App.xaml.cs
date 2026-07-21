@@ -78,7 +78,7 @@ public partial class App : Application
     {
         try
         {
-            if (_configuration is not null && _configurationPath is not null)
+            if (_configuration is not null && _configurationPath is not null && ShouldAutoSaveConfiguration(_configuration))
             {
                 RadarConfigurationStore.SaveAsync(_configurationPath, _configuration).GetAwaiter().GetResult();
             }
@@ -95,6 +95,12 @@ public partial class App : Application
                 base.OnExit(eventArgs);
             }
         }
+    }
+
+    public static bool ShouldAutoSaveConfiguration(RadarAppConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        return configuration.CanPersist;
     }
 
     private async Task MonitorParentProcessAsync(int processId)
