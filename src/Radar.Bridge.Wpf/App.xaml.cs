@@ -43,7 +43,12 @@ public partial class App : Application
                 .AddConsole()
                 .AddProvider(new AsyncFileLoggerProvider(AsyncFileLoggerProvider.GetDefaultLogPath())));
             services.AddSingleton(_configuration);
-            services.AddSingleton<IRadarBridgeRuntime, RadarBridgeRuntime>();
+            services.AddSingleton<IRadarSensorPipelineFactory, RadarSensorPipelineFactory>();
+            services.AddSingleton<IRadarBridgeRuntime>(provider => new RadarBridgeCoordinator(
+                _configuration,
+                provider.GetRequiredService<ILogger<RadarBridgeCoordinator>>(),
+                provider.GetRequiredService<IRadarSensorPipelineFactory>(),
+                _configurationPath));
             services.AddSingleton<MainViewModel>();
             services.AddSingleton<MainWindow>();
             _services = services.BuildServiceProvider(validateScopes: true);

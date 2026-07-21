@@ -56,18 +56,7 @@ public sealed record IpcEnvelope(
 public sealed record HelloPayload(
     int UnityProcessId,
     string UnityVersion,
-    IReadOnlyList<RadarScreenDefinitionPayload> Screens)
-{
-    [JsonIgnore]
-    public int ScreenWidth => Screens.FirstOrDefault(screen => screen.IsPrimary)?.DefaultWidthPixels ?? 0;
-
-    [JsonIgnore]
-    public int ScreenHeight => Screens.FirstOrDefault(screen => screen.IsPrimary)?.DefaultHeightPixels ?? 0;
-
-    [Obsolete("Temporary build bridge; use the multi-screen constructor.")]
-    public HelloPayload(int processId, string unityVersion, int screenWidth, int screenHeight)
-        : this(processId, unityVersion, [new("main", "Main", screenWidth, screenHeight, true, 0)]) { }
-}
+    IReadOnlyList<RadarScreenDefinitionPayload> Screens);
 
 [method: JsonConstructor]
 public sealed record HelloAckPayload(
@@ -75,12 +64,7 @@ public sealed record HelloAckPayload(
     int ProtocolVersion,
     bool Connected,
     string Capability,
-    IReadOnlyList<RadarScreenInfo> Screens)
-{
-    [Obsolete("Temporary build bridge; use the IPC v2 constructor.")]
-    public HelloAckPayload(string bridgeVersion, string ignoredDeviceModel, bool connected)
-        : this(bridgeVersion, 2, connected, "multi-screen", []) { }
-}
+    IReadOnlyList<RadarScreenInfo> Screens);
 
 internal sealed record PointerFramePayload(IReadOnlyList<RadarPointer> Pointers);
 public sealed record PointerBatchPayload(IReadOnlyList<RadarScreenPointerFrame> Screens);

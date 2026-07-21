@@ -20,9 +20,9 @@ public sealed class PackageIdentityTests
         Assert.Contains($"Value = \"{expectedVersion}\"", unityVersionSource, StringComparison.Ordinal);
 
         var repositoryRoot = FindRepositoryRoot();
-        var bridgeRuntimeSource = File.ReadAllText(Path.Combine(
-            repositoryRoot, "src", "Radar.Bridge.Wpf", "Services", "RadarBridgeRuntime.cs"));
-        Assert.Contains($"Value = \"{expectedVersion}\"", bridgeRuntimeSource, StringComparison.Ordinal);
+        var bridgeCoordinatorSource = File.ReadAllText(Path.Combine(
+            repositoryRoot, "src", "Radar.Bridge.Wpf", "BridgeVersion.cs"));
+        Assert.Contains($"Value = \"{expectedVersion}\"", bridgeCoordinatorSource, StringComparison.Ordinal);
         var mainWindow = File.ReadAllText(Path.Combine(repositoryRoot, "src", "Radar.Bridge.Wpf", "MainWindow.xaml"));
         Assert.Contains($"Bridge {expectedVersion}", mainWindow, StringComparison.Ordinal);
 

@@ -7,8 +7,19 @@ public sealed class RadarPipeServerOptions
 {
     public string PipeName { get; set; } = "Yuexin.RadarBridge";
     public TimeSpan HeartbeatTimeout { get; set; } = TimeSpan.FromSeconds(3);
-    public Func<HelloAckPayload> HelloAckFactory { get; set; } =
-        () => new HelloAckPayload("1.2.0", IpcProtocolVersion.Current, false, "multi-screen", []);
+    public Func<HelloPayload, CancellationToken, ValueTask<HelloAuthenticationResult>> AuthenticateHelloAsync { get; set; } =
+        (_, _) => ValueTask.FromResult(HelloAuthenticationResult.Reject(
+            "hello_handler_missing",
+            "Hello handler is not configured."));
+}
+
+public sealed record HelloAuthenticationResult(HelloAckPayload? Ack, ErrorPayload? Error)
+{
+    public bool Accepted => Ack is not null && Error is null;
+
+    public static HelloAuthenticationResult Accept(HelloAckPayload ack) => new(ack, null);
+
+    public static HelloAuthenticationResult Reject(string code, string message) => new(null, new ErrorPayload(code, message));
 }
 
 public sealed class RadarPipeServer : IAsyncDisposable
@@ -184,9 +195,31 @@ public sealed class RadarPipeServer : IAsyncDisposable
         }
 
         var hello = first.DeserializePayload<HelloPayload>();
+        if (!TryValidateTopology(hello, out var topologyError))
+        {
+            await WriteLockedAsync(
+                pipe,
+                IpcEnvelope.Create(IpcMessageType.Error, NextSequence(), topologyError),
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var authentication = await _options.AuthenticateHelloAsync(hello, cancellationToken).ConfigureAwait(false);
+        if (!authentication.Accepted)
+        {
+            var error = authentication.Error ?? new ErrorPayload(
+                "hello_rejected",
+                "Hello authentication did not return an acknowledgement.");
+            await WriteLockedAsync(
+                pipe,
+                IpcEnvelope.Create(IpcMessageType.Error, NextSequence(), error),
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         await WriteLockedAsync(
             pipe,
-            IpcEnvelope.Create(IpcMessageType.HelloAck, NextSequence(), _options.HelloAckFactory()),
+            IpcEnvelope.Create(IpcMessageType.HelloAck, NextSequence(), authentication.Ack!),
             cancellationToken).ConfigureAwait(false);
         authenticated();
         InvokeSafely(ClientConnected, hello);
@@ -262,6 +295,41 @@ public sealed class RadarPipeServer : IAsyncDisposable
     }
 
     private long NextSequence() => Interlocked.Increment(ref _sequence);
+
+    private static bool TryValidateTopology(HelloPayload hello, out ErrorPayload error)
+    {
+        if (hello.Screens is null || hello.Screens.Count == 0)
+        {
+            error = new ErrorPayload("invalid_screen_topology", "Hello must contain at least one screen.");
+            return false;
+        }
+
+        var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var primaryCount = 0;
+        foreach (var screen in hello.Screens)
+        {
+            if (!IsConfigurationId(screen.ScreenId) || !ids.Add(screen.ScreenId) ||
+                string.IsNullOrWhiteSpace(screen.Name) || screen.DefaultWidthPixels <= 0 || screen.DefaultHeightPixels <= 0)
+            {
+                error = new ErrorPayload("invalid_screen_topology", "Hello contains an empty, duplicate, or invalid screen definition.");
+                return false;
+            }
+
+            if (screen.IsPrimary) primaryCount++;
+        }
+
+        if (primaryCount != 1)
+        {
+            error = new ErrorPayload("invalid_screen_topology", "Hello must contain exactly one primary screen.");
+            return false;
+        }
+
+        error = null!;
+        return true;
+    }
+
+    private static bool IsConfigurationId(string? value) => value is { Length: >= 1 and <= 64 } &&
+        value.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '-');
 
     private void DisposeResources()
     {
