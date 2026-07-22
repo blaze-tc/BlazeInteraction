@@ -12,6 +12,15 @@ namespace Yuexin.Radar.Bridge.Wpf.Tests;
 public sealed class RadarBridgeCoordinatorTests
 {
     [Fact]
+    public void RuntimeContract_DoesNotExposePrimarySensorFacade()
+    {
+        var forbidden = new[] { "SnapshotUpdated", "ConnectionStateChanged", "ConnectionState" };
+
+        Assert.DoesNotContain(typeof(IRadarBridgeRuntime).GetMembers(), member => forbidden.Contains(member.Name, StringComparer.Ordinal));
+        Assert.DoesNotContain(typeof(RadarBridgeCoordinator).GetMembers(), member => forbidden.Contains(member.Name, StringComparer.Ordinal));
+    }
+
+    [Fact]
     public async Task Coordinator_PublishesAllEnabledScreensAndMergesFrontOverlap()
     {
         var factory = new FakePipelineFactory();

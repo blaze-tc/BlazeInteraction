@@ -59,12 +59,9 @@ public sealed class MainWindowBindingTests
 
     private sealed class TestRuntime : IRadarBridgeRuntime
     {
-        public event Action<RadarRuntimeSnapshot>? SnapshotUpdated { add { } remove { } }
         public event Action<string>? LogReceived { add { } remove { } }
-        public event Action<RadarConnectionState>? ConnectionStateChanged { add { } remove { } }
         public event Action<UnityClientStatus>? UnityStatusChanged { add { } remove { } }
 
-        public RadarConnectionState ConnectionState => RadarConnectionState.Disconnected;
         public UnityClientStatus UnityStatus { get; } = UnityClientStatus.Disconnected;
 
         public Task StartInfrastructureAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;

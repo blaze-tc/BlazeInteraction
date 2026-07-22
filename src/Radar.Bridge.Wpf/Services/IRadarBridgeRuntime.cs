@@ -3,6 +3,7 @@ using Yuexin.Radar.Processing;
 
 namespace Yuexin.Radar.Bridge.Wpf.Services;
 
+/// <summary>Temporary Task 7 UI visualization DTO. It is not a runtime event contract.</summary>
 public sealed record RadarRuntimeSnapshot(
     long Sequence,
     DateTimeOffset Timestamp,
@@ -50,12 +51,9 @@ public interface IRadarBridgeRuntime : IAsyncDisposable
     event Action<RadarSensorRuntimeSnapshot>? SensorSnapshotUpdated { add { } remove { } }
     event Action<RadarScreenRuntimeSnapshot>? ScreenSnapshotUpdated { add { } remove { } }
     event Action<RadarSensorRuntimeStateChanged>? SensorStateChanged { add { } remove { } }
-    event Action<RadarRuntimeSnapshot>? SnapshotUpdated;
     event Action<string>? LogReceived;
-    event Action<RadarConnectionState>? ConnectionStateChanged;
     event Action<UnityClientStatus>? UnityStatusChanged;
 
-    RadarConnectionState ConnectionState { get; }
     UnityClientStatus UnityStatus { get; }
 
     Task StartInfrastructureAsync(CancellationToken cancellationToken = default);

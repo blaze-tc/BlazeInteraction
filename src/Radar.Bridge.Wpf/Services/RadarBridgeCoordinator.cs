@@ -53,18 +53,8 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     public event Action<RadarSensorRuntimeSnapshot>? SensorSnapshotUpdated;
     public event Action<RadarScreenRuntimeSnapshot>? ScreenSnapshotUpdated;
     public event Action<RadarSensorRuntimeStateChanged>? SensorStateChanged;
-    public event Action<RadarRuntimeSnapshot>? SnapshotUpdated;
     public event Action<string>? LogReceived;
-    public event Action<RadarConnectionState>? ConnectionStateChanged;
     public event Action<UnityClientStatus>? UnityStatusChanged;
-
-    public RadarConnectionState ConnectionState => PrimaryPipeline?.Pipeline.State switch
-    {
-        RadarSensorRuntimeState.Running or RadarSensorRuntimeState.Starting => RadarConnectionState.Connected,
-        RadarSensorRuntimeState.Reconnecting => RadarConnectionState.Reconnecting,
-        RadarSensorRuntimeState.Faulted => RadarConnectionState.Faulted,
-        _ => RadarConnectionState.Disconnected
-    };
 
     public UnityClientStatus UnityStatus => Volatile.Read(ref _unityStatus);
 
@@ -641,18 +631,12 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     {
         binding.LastSnapshot = snapshot;
         InvokeSafely(SensorSnapshotUpdated, snapshot);
-        if (runtime.Info.IsPrimary && string.Equals(binding.Configuration.SensorId, runtime.Pipelines.Keys.FirstOrDefault(), StringComparison.OrdinalIgnoreCase))
-        {
-            InvokeSafely(SnapshotUpdated, new RadarRuntimeSnapshot(snapshot.Sequence, snapshot.Timestamp, snapshot.RawPoints, snapshot.ValidPoints,
-                snapshot.Clusters, [], [], snapshot.ScanFrequencyHz, snapshot.ReceivedBytesPerSecond, snapshot.CrcErrorCount, snapshot.DiscardedByteCount));
-        }
     }
 
     private void OnPipelineStateChanged(ScreenRuntime runtime, PipelineRuntime binding, RadarSensorRuntimeState state)
     {
         if (state == RadarSensorRuntimeState.Faulted) PublishLog($"[{runtime.Info.ScreenId}/{binding.Configuration.SensorId}] pipeline faulted.");
         InvokeSafely(SensorStateChanged, new RadarSensorRuntimeStateChanged(runtime.Info.ScreenId, binding.Configuration.SensorId, state, state == RadarSensorRuntimeState.Faulted ? "Pipeline faulted" : null));
-        if (runtime.Info.IsPrimary && ReferenceEquals(PrimaryPipeline?.Pipeline, binding.Pipeline)) InvokeSafely(ConnectionStateChanged, ConnectionState);
     }
 
     private void PublishScreenSnapshot(ScreenRuntime runtime, RadarScreenFusionResult result, DateTimeOffset timestamp)
@@ -983,9 +967,6 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             if (--runtime.OperationCount == 0) runtime.OperationsDrained.TrySetResult();
         }
     }
-
-    private PipelineRuntime? PrimaryPipeline => AssociatedRuntimes().OrderBy(runtime => runtime.Info.Order).ThenBy(runtime => runtime.Info.ScreenId, StringComparer.OrdinalIgnoreCase)
-        .FirstOrDefault(runtime => runtime.Info.IsPrimary)?.Pipelines.Values.FirstOrDefault();
 
     private ScreenRuntime[] AssociatedRuntimes() => Volatile.Read(ref _associatedSnapshot);
 

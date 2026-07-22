@@ -293,9 +293,7 @@ public sealed class MainViewModelTests
     {
         public event Action<RadarSensorRuntimeSnapshot>? SensorSnapshotUpdated;
         event Action<RadarScreenRuntimeSnapshot>? IRadarBridgeRuntime.ScreenSnapshotUpdated { add { } remove { } }
-        public event Action<RadarRuntimeSnapshot>? SnapshotUpdated { add { } remove { } }
         public event Action<string>? LogReceived;
-        public event Action<RadarConnectionState>? ConnectionStateChanged { add { } remove { } }
         public event Action<UnityClientStatus>? UnityStatusChanged { add { } remove { } }
         public (string ScreenId, string SensorId)? LastConnectedSensor { get; private set; }
         public (string ScreenId, string SensorId)? LastDisconnectedSensor { get; private set; }
@@ -304,7 +302,6 @@ public sealed class MainViewModelTests
         public int StartRecordingCallCount { get; private set; }
         public Exception? ConnectSensorException { get; init; }
         public TaskCompletionSource? ConnectGate { get; init; }
-        public RadarConnectionState ConnectionState => RadarConnectionState.Disconnected;
         public UnityClientStatus UnityStatus => UnityClientStatus.Disconnected;
         public Task StartInfrastructureAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task ConnectSensorAsync(string screenId, string sensorId, CancellationToken cancellationToken = default)
