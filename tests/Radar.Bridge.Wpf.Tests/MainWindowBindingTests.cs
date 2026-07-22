@@ -24,8 +24,6 @@ public sealed class MainWindowBindingTests
         {
             try
             {
-                var application = new App();
-                application.InitializeComponent();
                 var listener = new BindingTraceListener();
                 var source = PresentationTraceSources.DataBindingSource;
                 var previousLevel = source.Switch.Level;
