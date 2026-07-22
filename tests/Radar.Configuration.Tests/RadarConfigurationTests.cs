@@ -24,21 +24,21 @@ public sealed class RadarConfigurationTests
     public void Validator_ClampsMaximumDistanceToSelectedModel()
     {
         var f10 = RadarAppConfiguration.CreateDefault();
-        f10.Range.MaximumDistanceMeters = 99f;
+        f10.Screens[0].Sensors[0].Range.MaximumDistanceMeters = 99f;
 
         var f10Result = ConfigurationValidator.ValidateAndNormalize(f10);
 
         Assert.True(f10Result.IsValid);
-        Assert.Equal(10f, f10.Range.MaximumDistanceMeters);
+        Assert.Equal(10f, f10.Screens[0].Sensors[0].Range.MaximumDistanceMeters);
 
         var f20 = RadarAppConfiguration.CreateDefault();
-        f20.Device.DeviceModel = RadarModel.F20;
-        f20.Range.MaximumDistanceMeters = 99f;
+        f20.Screens[0].Sensors[0].Device.DeviceModel = RadarModel.F20;
+        f20.Screens[0].Sensors[0].Range.MaximumDistanceMeters = 99f;
 
         var f20Result = ConfigurationValidator.ValidateAndNormalize(f20);
 
         Assert.True(f20Result.IsValid);
-        Assert.Equal(40f, f20.Range.MaximumDistanceMeters);
+        Assert.Equal(40f, f20.Screens[0].Sensors[0].Range.MaximumDistanceMeters);
     }
 
     [Fact]
@@ -75,16 +75,16 @@ public sealed class RadarConfigurationTests
         try
         {
             var configuration = RadarAppConfiguration.CreateDefault();
-            configuration.Device.DeviceModel = RadarModel.F20;
-            configuration.Range.MaximumDistanceMeters = 20f;
-            configuration.Range.VisualizationRangeMeters = 7.5f;
+            configuration.Screens[0].Sensors[0].Device.DeviceModel = RadarModel.F20;
+            configuration.Screens[0].Sensors[0].Range.MaximumDistanceMeters = 20f;
+            configuration.Screens[0].Sensors[0].Range.VisualizationRangeMeters = 7.5f;
 
             await RadarConfigurationStore.SaveAsync(path, configuration);
             var loaded = await RadarConfigurationStore.LoadAsync(path);
 
-            Assert.Equal(RadarModel.F20, loaded.Device.DeviceModel);
-            Assert.Equal(20f, loaded.Range.MaximumDistanceMeters);
-            Assert.Equal(7.5f, loaded.Range.VisualizationRangeMeters);
+            Assert.Equal(RadarModel.F20, loaded.Screens[0].Sensors[0].Device.DeviceModel);
+            Assert.Equal(20f, loaded.Screens[0].Sensors[0].Range.MaximumDistanceMeters);
+            Assert.Equal(7.5f, loaded.Screens[0].Sensors[0].Range.VisualizationRangeMeters);
         }
         finally
         {
@@ -99,9 +99,9 @@ public sealed class RadarConfigurationTests
     public void Validator_RejectsInvalidEndpointAndRanges()
     {
         var configuration = RadarAppConfiguration.CreateDefault();
-        configuration.Device.RadarIp = "not-an-ip";
-        configuration.Device.Port = 0;
-        configuration.Range.MinimumDistanceMeters = -1f;
+        configuration.Screens[0].Sensors[0].Device.RadarIp = "not-an-ip";
+        configuration.Screens[0].Sensors[0].Device.Port = 0;
+        configuration.Screens[0].Sensors[0].Range.MinimumDistanceMeters = -1f;
 
         var result = ConfigurationValidator.ValidateAndNormalize(configuration);
 
@@ -131,7 +131,7 @@ public sealed class RadarConfigurationTests
             Assert.Equal(2, migrated.SchemaVersion);
             Assert.Equal(RadarModel.F20, migrated.Screens[0].Sensors[0].Device.DeviceModel);
             Assert.Equal("10.0.0.8", migrated.Screens[0].Sensors[0].Device.RadarIp);
-            Assert.Equal(0.7f, migrated.Tracking.MaximumAssociationDistanceMeters);
+            Assert.Equal(0.7f, migrated.Screens[0].Tracking.MaximumAssociationDistanceMeters);
             Assert.Single(Directory.GetFiles(directory, "config.schema1.*.bak"));
             using var savedDocument = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(path));
             Assert.False(savedDocument.RootElement.TryGetProperty("device", out _));
@@ -212,7 +212,7 @@ public sealed class RadarConfigurationTests
         try
         {
             var configuration = RadarAppConfiguration.CreateDefault();
-            configuration.Device.DeviceModel = RadarModel.F20;
+            configuration.Screens[0].Sensors[0].Device.DeviceModel = RadarModel.F20;
 
             await RadarConfigurationStore.SaveAsync(path, configuration);
 
@@ -236,7 +236,7 @@ public sealed class RadarConfigurationTests
         try
         {
             var configuration = RadarAppConfiguration.CreateDefault();
-            configuration.Calibration = new RadarCalibrationConfiguration
+            configuration.Screens[0].Sensors[0].Calibration = new RadarCalibrationConfiguration
             {
                 IsValid = true,
                 DeviceModel = RadarModel.F10,
@@ -245,16 +245,16 @@ public sealed class RadarConfigurationTests
                 CreatedAt = DateTimeOffset.FromUnixTimeMilliseconds(1000),
                 MaximumCornerError = 0.001
             };
-            configuration.Device.DeviceModel = RadarModel.F20;
+            configuration.Screens[0].Sensors[0].Device.DeviceModel = RadarModel.F20;
 
             await RadarConfigurationStore.SaveAsync(path, configuration);
             var loaded = await RadarConfigurationStore.LoadAsync(path);
 
-            Assert.Equal(RadarModel.F20, loaded.Device.DeviceModel);
-            Assert.True(loaded.Calibration.IsValid);
-            Assert.Equal(RadarModel.F10, loaded.Calibration.DeviceModel);
-            Assert.Equal(4, loaded.Calibration.PhysicalCorners.Count);
-            Assert.Equal(9, loaded.Calibration.HomographyMatrix.Count);
+            Assert.Equal(RadarModel.F20, loaded.Screens[0].Sensors[0].Device.DeviceModel);
+            Assert.True(loaded.Screens[0].Sensors[0].Calibration.IsValid);
+            Assert.Equal(RadarModel.F10, loaded.Screens[0].Sensors[0].Calibration.DeviceModel);
+            Assert.Equal(4, loaded.Screens[0].Sensors[0].Calibration.PhysicalCorners.Count);
+            Assert.Equal(9, loaded.Screens[0].Sensors[0].Calibration.HomographyMatrix.Count);
         }
         finally
         {
@@ -397,11 +397,11 @@ public sealed class RadarConfigurationTests
     }
 
     [Fact]
-    public async Task FlatBridge_CreatesMainSensorDelegatesWithoutSerializingSecondState()
+    public async Task SchemaTwoConfiguration_PersistsOnlyNestedScreenSensorSections()
     {
-        var configuration = new RadarAppConfiguration { Screens = [] };
-        configuration.Device = new RadarDeviceConfiguration { RadarIp = "10.0.0.12", Port = 8487 };
-        configuration.Tracking = new RadarScreenTrackingConfiguration { MaximumAssociationDistancePixels = 222f };
+        var configuration = RadarAppConfiguration.CreateDefault();
+        configuration.Screens[0].Sensors[0].Device = new RadarDeviceConfiguration { RadarIp = "10.0.0.12", Port = 8487 };
+        configuration.Screens[0].Tracking = new RadarScreenTrackingConfiguration { MaximumAssociationDistancePixels = 222f };
 
         await WithTemporaryConfigurationAsync(async (_, path) =>
         {

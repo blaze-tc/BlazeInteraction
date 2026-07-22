@@ -25,18 +25,6 @@ public sealed record UnityClientStatus(
     long LastBatchSequence,
     string? LastError)
 {
-    [Obsolete("Use Screens.")]
-    public int ScreenWidth => Screens.FirstOrDefault(screen => screen.IsPrimary)?.WidthPixels ?? 0;
-
-    [Obsolete("Use Screens.")]
-    public int ScreenHeight => Screens.FirstOrDefault(screen => screen.IsPrimary)?.HeightPixels ?? 0;
-
-    [Obsolete("Use LastBatchSentAt.")]
-    public DateTimeOffset? LastFrameSentAt => LastBatchSentAt;
-
-    [Obsolete("Use screen pointer frames.")]
-    public int PointerCount { get; init; }
-
     public static UnityClientStatus Disconnected { get; } = new(
         false,
         0,
@@ -85,26 +73,4 @@ public interface IRadarBridgeRuntime : IAsyncDisposable
     Task StopReplayAsync(string screenId, string sensorId) => Task.FromException(new NotSupportedException());
     Task ApplyConfigurationAsync(CancellationToken cancellationToken = default) => Task.FromException(new NotSupportedException());
 
-    [Obsolete("Use ConnectSensorAsync or ConnectScreenAsync.")]
-    Task ConnectAsync(CancellationToken cancellationToken = default);
-    [Obsolete("Use DisconnectSensorAsync or DisconnectScreenAsync.")]
-    Task DisconnectAsync();
-    [Obsolete("Use StartAllSimulationAsync.")]
-    Task StartSimulationAsync(CancellationToken cancellationToken = default);
-    [Obsolete("Use DisconnectAllAsync.")]
-    Task StopSimulationAsync();
-    [Obsolete("Use StartRecordingAsync(screenId, sensorId, path).")]
-    Task StartRecordingAsync(string path, CancellationToken cancellationToken = default);
-    [Obsolete("Use StopRecordingAsync(screenId, sensorId).")]
-    Task StopRecordingAsync();
-    [Obsolete("Use ReplaySensorAsync.")]
-    Task ReplayAsync(string path, double speed, bool loop, CancellationToken cancellationToken = default);
-    [Obsolete("Use PauseReplay(screenId, sensorId).")]
-    void PauseReplay();
-    [Obsolete("Use ResumeReplay(screenId, sensorId).")]
-    void ResumeReplay();
-    [Obsolete("Use StepReplay(screenId, sensorId).")]
-    void StepReplay();
-    [Obsolete("Use StopReplayAsync(screenId, sensorId).")]
-    Task StopReplayAsync();
 }

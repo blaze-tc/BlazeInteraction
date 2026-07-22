@@ -322,37 +322,6 @@ public sealed class RadarBridgeCoordinatorTests
     }
 
     [Fact]
-    public async Task Coordinator_LegacyStartRecordingLeaseDefersRetirementAndBecomesSafeAfterRetirement()
-    {
-        var configuration = new RadarAppConfiguration { Screens = [ScreenConfiguration("front", "f1", 1920, 1080)] };
-        var factory = new FakePipelineFactory();
-        await using var coordinator = CreateCoordinator(configuration, factory);
-        await coordinator.ApplyUnityTopologyAsync(Hello(Screen("front", "Front", true, 1920, 1080, 0)));
-        var retiringPipeline = factory["front", "f1"];
-        retiringPipeline.BlockRecording(ignoreCancellation: true);
-
-#pragma warning disable CS0618
-        var recording = coordinator.StartRecordingAsync("capture.rdr");
-#pragma warning restore CS0618
-        await retiringPipeline.RecordingEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
-
-        await coordinator.ApplyConfigurationAsync();
-        coordinator.TickForTest(DateTimeOffset.UnixEpoch.AddSeconds(1));
-        coordinator.TickForTest(DateTimeOffset.UnixEpoch.AddSeconds(2), waitForRetirement: false);
-
-        Assert.False(retiringPipeline.Disposed);
-#pragma warning disable CS0618
-        await coordinator.StartRecordingAsync("obsolete-safe.rdr");
-#pragma warning restore CS0618
-        Assert.Equal(1, retiringPipeline.RecordingCallCount);
-
-        retiringPipeline.ReleaseRecording();
-        await recording;
-        await WaitUntilAsync(() => retiringPipeline.Disposed, new CancellationTokenSource(TimeSpan.FromSeconds(1)).Token);
-        Assert.False(retiringPipeline.DisposedDuringOperation);
-    }
-
-    [Fact]
     public async Task Coordinator_StartStopAndDisposeAreConcurrentSafe()
     {
         var factory = new FakePipelineFactory();

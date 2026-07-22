@@ -10,12 +10,11 @@ namespace Yuexin.Radar.Bridge.Wpf;
 public partial class MainWindow : Window
 {
     private readonly MainViewModel _viewModel;
-    private readonly IRadarBridgeRuntime _runtime;
 
     public MainWindow(MainViewModel viewModel, IRadarBridgeRuntime runtime)
     {
         _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
-        _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        ArgumentNullException.ThrowIfNull(runtime);
         InitializeComponent();
         DataContext = viewModel;
     }
@@ -37,13 +36,13 @@ public partial class MainWindow : Window
         };
         if (dialog.ShowDialog(this) == true)
         {
-            await ExecuteUiActionAsync(() => _runtime.StartRecordingAsync(dialog.FileName));
+            await ExecuteUiActionAsync(() => _viewModel.StartRecordingAsync(dialog.FileName));
         }
     }
 
     private async void OnStopRecordingClick(object sender, RoutedEventArgs eventArgs)
     {
-        await ExecuteUiActionAsync(_runtime.StopRecordingAsync);
+        await ExecuteUiActionAsync(_viewModel.StopRecordingAsync);
     }
 
     private async void OnReplayClick(object sender, RoutedEventArgs eventArgs)
@@ -61,16 +60,16 @@ public partial class MainWindow : Window
 
         var speedText = (ReplaySpeedCombo.SelectedItem as System.Windows.Controls.ComboBoxItem)?.Tag?.ToString() ?? "1";
         var speed = double.Parse(speedText, CultureInfo.InvariantCulture);
-        await ExecuteUiActionAsync(() => _runtime.ReplayAsync(dialog.FileName, speed, ReplayLoopCheckBox.IsChecked == true));
+        await ExecuteUiActionAsync(() => _viewModel.ReplaySelectedSensorAsync(dialog.FileName, speed, ReplayLoopCheckBox.IsChecked == true));
     }
 
-    private void OnPauseReplayClick(object sender, RoutedEventArgs eventArgs) => _runtime.PauseReplay();
-    private void OnResumeReplayClick(object sender, RoutedEventArgs eventArgs) => _runtime.ResumeReplay();
-    private void OnStepReplayClick(object sender, RoutedEventArgs eventArgs) => _runtime.StepReplay();
+    private void OnPauseReplayClick(object sender, RoutedEventArgs eventArgs) => _viewModel.PauseSelectedReplay();
+    private void OnResumeReplayClick(object sender, RoutedEventArgs eventArgs) => _viewModel.ResumeSelectedReplay();
+    private void OnStepReplayClick(object sender, RoutedEventArgs eventArgs) => _viewModel.StepSelectedReplay();
 
     private async void OnStopReplayClick(object sender, RoutedEventArgs eventArgs)
     {
-        await ExecuteUiActionAsync(_runtime.StopReplayAsync);
+        await ExecuteUiActionAsync(_viewModel.StopSelectedReplayAsync);
     }
 
     private static async Task ExecuteUiActionAsync(Func<Task> action)

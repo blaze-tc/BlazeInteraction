@@ -281,28 +281,6 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     public void StepReplay(string screenId, string sensorId) => UsePipeline(screenId, sensorId, pipeline => pipeline.StepReplay());
     public Task StopReplayAsync(string screenId, string sensorId) => UsePipelineAsync(screenId, sensorId, (pipeline, _) => pipeline.StopReplayAsync(), CancellationToken.None);
 
-    [Obsolete("Use ConnectSensorAsync or ConnectScreenAsync.")]
-    public Task ConnectAsync(CancellationToken cancellationToken = default) => ConnectPrimarySensorAsync(cancellationToken);
-    [Obsolete("Use DisconnectSensorAsync or DisconnectScreenAsync.")]
-    public Task DisconnectAsync() => PrimarySensorAddress() is { } address ? DisconnectSensorAsync(address.ScreenId, address.SensorId) : Task.CompletedTask;
-    [Obsolete("Use StartAllSimulationAsync.")]
-    public Task StartSimulationAsync(CancellationToken cancellationToken = default) => StartAllSimulationAsync(cancellationToken);
-    [Obsolete("Use DisconnectAllAsync.")]
-    public Task StopSimulationAsync() => DisconnectAllAsync();
-    [Obsolete("Use StartRecordingAsync(screenId, sensorId, path).")]
-    public Task StartRecordingAsync(string path, CancellationToken cancellationToken = default) => PrimarySensorAddress() is { } address ? StartRecordingAsync(address.ScreenId, address.SensorId, path, cancellationToken) : Task.CompletedTask;
-    [Obsolete("Use StopRecordingAsync(screenId, sensorId).")]
-    public Task StopRecordingAsync() => PrimarySensorAddress() is { } address ? StopRecordingAsync(address.ScreenId, address.SensorId) : Task.CompletedTask;
-    [Obsolete("Use ReplaySensorAsync.")]
-    public Task ReplayAsync(string path, double speed, bool loop, CancellationToken cancellationToken = default) => PrimarySensorAddress() is { } address ? ReplaySensorAsync(address.ScreenId, address.SensorId, path, speed, loop, cancellationToken) : Task.CompletedTask;
-    [Obsolete("Use PauseReplay(screenId, sensorId).")]
-    public void PauseReplay() { if (PrimarySensorAddress() is { } address) PauseReplay(address.ScreenId, address.SensorId); }
-    [Obsolete("Use ResumeReplay(screenId, sensorId).")]
-    public void ResumeReplay() { if (PrimarySensorAddress() is { } address) ResumeReplay(address.ScreenId, address.SensorId); }
-    [Obsolete("Use StepReplay(screenId, sensorId).")]
-    public void StepReplay() { if (PrimarySensorAddress() is { } address) StepReplay(address.ScreenId, address.SensorId); }
-    [Obsolete("Use StopReplayAsync(screenId, sensorId).")]
-    public Task StopReplayAsync() => PrimarySensorAddress() is { } address ? StopReplayAsync(address.ScreenId, address.SensorId) : Task.CompletedTask;
 
     internal PointerBatchPayload TickForTest(DateTimeOffset timestamp, bool delivered = true, bool waitForRetirement = true)
     {
@@ -900,14 +878,6 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         if (completed.IsFaulted) PublishLog($"[{screenId}/{sensorId}] quarantined {operation} fault: {completed.Exception?.GetBaseException().Message}");
     }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
 
-    private async Task ConnectPrimarySensorAsync(CancellationToken cancellationToken)
-    {
-        var primary = AssociatedRuntimes().FirstOrDefault(runtime => runtime.Info.IsPrimary);
-        if (primary is null) return;
-        var sensor = SnapshotSensorIds(primary).FirstOrDefault();
-        if (sensor is not null) await ConnectSensorAsync(primary.Info.ScreenId, sensor, cancellationToken).ConfigureAwait(false);
-    }
-
     private ScreenRuntime GetRuntime(string screenId)
     {
         var runtime = AssociatedRuntimes().FirstOrDefault(value => string.Equals(value.Info.ScreenId, screenId, StringComparison.OrdinalIgnoreCase));
@@ -1014,13 +984,6 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
 
     private PipelineRuntime? PrimaryPipeline => AssociatedRuntimes().OrderBy(runtime => runtime.Info.Order).ThenBy(runtime => runtime.Info.ScreenId, StringComparer.OrdinalIgnoreCase)
         .FirstOrDefault(runtime => runtime.Info.IsPrimary)?.Pipelines.Values.FirstOrDefault();
-
-    private (string ScreenId, string SensorId)? PrimarySensorAddress()
-    {
-        var runtime = AssociatedRuntimes().FirstOrDefault(value => value.Info.IsPrimary);
-        var sensorId = runtime is null ? null : SnapshotSensorIds(runtime).FirstOrDefault();
-        return runtime is null || sensorId is null ? null : (runtime.Info.ScreenId, sensorId);
-    }
 
     private ScreenRuntime[] AssociatedRuntimes() => Volatile.Read(ref _associatedSnapshot);
 
