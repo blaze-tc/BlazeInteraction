@@ -9,11 +9,23 @@ using UnityEngine;
 
 namespace Blaze.Radar.Editor
 {
-    public sealed class RadarBuildProcessor : IPostprocessBuildWithReport
+    public sealed class RadarBuildProcessor : IPreprocessBuildWithReport, IPostprocessBuildWithReport
     {
         private const string BridgeVersionFileName = "bridge-version.txt";
 
         public int callbackOrder => 1000;
+
+        public void OnPreprocessBuild(BuildReport report)
+        {
+            var settings = RadarRuntimeSettings.LoadOrCreateRuntimeDefaults();
+            var validation = RadarScreenTopologyValidator.Validate(settings.Screens);
+            if (!validation.IsValid)
+            {
+                throw new BuildFailedException(
+                    "Blaze Radar screen topology is invalid:" + Environment.NewLine +
+                    string.Join(Environment.NewLine, validation.Errors));
+            }
+        }
 
         public void OnPostprocessBuild(BuildReport report)
         {

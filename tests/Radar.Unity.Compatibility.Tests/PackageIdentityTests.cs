@@ -167,6 +167,72 @@ public sealed class PackageIdentityTests
         Assert.Contains("ComputeSha256", buildProcessorSource, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void PackageTopology_RemainsUnity2021CompatibleAndPreservesSerializedSettings()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var packageRoot = Path.Combine(repositoryRoot, "UnityPackage", "com.blaze.radar");
+        using var packageJson = JsonDocument.Parse(File.ReadAllText(Path.Combine(packageRoot, "package.json")));
+        Assert.Equal("com.blaze.radar", packageJson.RootElement.GetProperty("name").GetString());
+        Assert.Equal("1.1.5", packageJson.RootElement.GetProperty("version").GetString());
+        Assert.Equal("2021.3", packageJson.RootElement.GetProperty("unity").GetString());
+
+        var definitionSource = File.ReadAllText(Path.Combine(packageRoot, "Runtime", "RadarScreenDefinition.cs"));
+        var validatorSource = File.ReadAllText(Path.Combine(packageRoot, "Runtime", "RadarScreenTopologyValidator.cs"));
+        Assert.Contains("namespace Blaze.Radar", definitionSource, StringComparison.Ordinal);
+        Assert.Contains("namespace Blaze.Radar", validatorSource, StringComparison.Ordinal);
+
+        var settingsSource = File.ReadAllText(Path.Combine(packageRoot, "Runtime", "RadarRuntimeSettings.cs"));
+        foreach (var serializedField in new[]
+                 {
+                     "autoStart", "exitBridgeWithUnity", "pipeName", "editorBridgeExecutable", "profilePath",
+                     "connectTimeoutMilliseconds", "reconnectDelayMilliseconds", "inputMode", "showDebugOverlay"
+                 })
+        {
+            Assert.Contains($" {serializedField}", settingsSource, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("private List<RadarScreenDefinition> screens", settingsSource, StringComparison.Ordinal);
+        Assert.Contains("PrimaryScreen", settingsSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PlayerBuild_ValidatesScreenTopologyBeforeRetainingCopySafeguards()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(), "UnityPackage", "com.blaze.radar", "Editor", "RadarBuildProcessor.cs"));
+
+        Assert.Contains("IPreprocessBuildWithReport", source, StringComparison.Ordinal);
+        Assert.Contains("IPostprocessBuildWithReport", source, StringComparison.Ordinal);
+        Assert.Contains("OnPreprocessBuild", source, StringComparison.Ordinal);
+        Assert.Contains("RadarScreenTopologyValidator.Validate", source, StringComparison.Ordinal);
+        Assert.Contains("BuildFailedException", source, StringComparison.Ordinal);
+        Assert.Contains("PackageInfo.FindForAssembly", source, StringComparison.Ordinal);
+        Assert.Contains("UnitySdkVersion.Value", source, StringComparison.Ordinal);
+        Assert.Contains("bridge-version.txt", source, StringComparison.Ordinal);
+        Assert.Contains("Directory.Delete(destinationDirectory, recursive: true)", source, StringComparison.Ordinal);
+        Assert.Contains("ComputeSha256", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UnityPackageTestRunner_UsesSafeVersionedTemporaryProjectAndStrictFailureChecks()
+    {
+        var source = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "scripts", "test-unity-package.ps1"));
+
+        Assert.Contains("tmp\\unity-package-tests", source, StringComparison.Ordinal);
+        Assert.Contains("com.blaze.radar\": \"file:../../../UnityPackage/com.blaze.radar", source, StringComparison.Ordinal);
+        Assert.Contains("com.unity.test-framework\": \"1.1.33", source, StringComparison.Ordinal);
+        Assert.Contains("com.unity.ugui\": \"1.0.0", source, StringComparison.Ordinal);
+        Assert.Contains("com.unity.nuget.newtonsoft-json\": \"3.0.2", source, StringComparison.Ordinal);
+        Assert.Contains("^2021\\.3\\.", source, StringComparison.Ordinal);
+        Assert.Contains("packageJson.version", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("Samples/Blaze Radar SDK/1.1.5", source, StringComparison.Ordinal);
+        Assert.Contains("Remove-Item -LiteralPath $temporaryProject", source, StringComparison.Ordinal);
+        Assert.Contains("malformed test result XML", source, StringComparison.Ordinal);
+        Assert.Contains("inconclusive", source, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("error CS", source, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string FindRepositoryRoot()
     {
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory);
