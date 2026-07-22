@@ -6,6 +6,7 @@ using Yuexin.Radar.Processing;
 using Yuexin.Radar.Contracts;
 using Yuexin.Radar.Device;
 using RadarPixelRect = Yuexin.Radar.Configuration.RadarPixelRect;
+using System.Windows.Threading;
 
 namespace Yuexin.Radar.Bridge.Wpf.ViewModels;
 
@@ -15,7 +16,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private const int MaximumLogEntries = 500;
     private readonly RadarAppConfiguration _configuration;
     private readonly IRadarBridgeRuntime _runtime;
-    private readonly SynchronizationContext? _uiContext;
+    private readonly SynchronizationContext _uiContext;
     private readonly Queue<string> _rawLogs = [];
     private readonly Dictionary<string, DateTimeOffset> _lastMoveLogAt = new(StringComparer.OrdinalIgnoreCase);
     private ScreenItemViewModel? _selectedScreen;
@@ -29,7 +30,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
-        _uiContext = SynchronizationContext.Current;
+        _uiContext = SynchronizationContext.Current ?? new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher);
         _unityStatus = runtime.UnityStatus;
         Screens = new ObservableCollection<ScreenItemViewModel>(_configuration.Screens.Select(screen => new ScreenItemViewModel(screen)));
         SelectedScreen = Screens.FirstOrDefault();
@@ -320,10 +321,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         return false;
     }
     private static string NormalizeFilter(string? value) => string.IsNullOrWhiteSpace(value) ? "*" : value.Trim();
-    private void Dispatch(Action action) { if (_disposed) return; if (_uiContext is null || SynchronizationContext.Current == _uiContext) action(); else _uiContext.Post(_ => { if (!_disposed) action(); }, null); }
+    private void Dispatch(Action action) { if (_disposed) return; if (SynchronizationContext.Current == _uiContext) action(); else _uiContext.Post(_ => { if (!_disposed) action(); }, null); }
     private void NotifyCommandState()
     {
-        foreach (var command in new[] { AddSensorCommand, DeleteSensorCommand, DeleteOrphanedScreenConfigurationCommand, RestoreUnityResolutionCommand, ConnectSensorCommand, DisconnectSensorCommand, ConnectScreenCommand, DisconnectScreenCommand, StartReplayCommand, PauseReplayCommand, ResumeReplayCommand, StepReplayCommand, StopReplayCommand, SaveConfigurationCommand })
+        foreach (var command in new[] { AddSensorCommand, DeleteSensorCommand, DeleteOrphanedScreenConfigurationCommand, RestoreUnityResolutionCommand, ConnectSensorCommand, DisconnectSensorCommand, ConnectScreenCommand, DisconnectScreenCommand, StartReplayCommand, PauseReplayCommand, ResumeReplayCommand, StepReplayCommand, StopReplayCommand, SaveConfigurationCommand, ResetRegionCommand, BeginCalibrationCommand, CaptureCalibrationPointCommand, UndoCalibrationPointCommand, SaveCalibrationCommand, ClearCalibrationCommand, AddMaskedRegionCommand, DeleteMaskedRegionCommand })
             if (command is RelayCommand relay) relay.NotifyCanExecuteChanged(); else if (command is AsyncRelayCommand asyncRelay) asyncRelay.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(CanEditSelectedScreen));
     }

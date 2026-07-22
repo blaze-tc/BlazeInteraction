@@ -114,9 +114,9 @@ public sealed class SensorItemViewModel : ObservableObject
     private bool TryGetPhysicalTarget(out Point2 point)
     {
         point = default;
-        var detection = Snapshot?.Detections.FirstOrDefault();
-        if (detection is null) return false;
-        var cluster = Snapshot!.Clusters.FirstOrDefault(candidate => candidate.ClusterIndex == detection.Value.DetectionId);
+        if (Snapshot is not { Detections.Count: > 0 } snapshot) return false;
+        var detection = snapshot.Detections[0];
+        var cluster = snapshot.Clusters.FirstOrDefault(candidate => candidate.ClusterIndex == detection.DetectionId);
         if (cluster is null) return false;
         point = new Point2(cluster.CenterX, cluster.CenterY);
         return true;
