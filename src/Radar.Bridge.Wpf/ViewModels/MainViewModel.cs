@@ -218,11 +218,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private async Task SaveConfigurationAsync(CancellationToken token)
     {
-        if (!_configuration.CanPersist) { ReceiveLog("[SYSTEM] Configuration save skipped: rejected load state."); return; }
+        if (!_configuration.CanPersist) { ReceiveLog("[GLOBAL/SYSTEM] Configuration save skipped: rejected load state."); return; }
         var validation = ConfigurationValidator.ValidateAndNormalize(_configuration);
-        if (!validation.IsValid) { ReceiveLog("[SYSTEM] Configuration validation failed: " + string.Join(" | ", validation.Errors)); return; }
+        if (!validation.IsValid) { ReceiveLog("[GLOBAL/SYSTEM] Configuration validation failed: " + string.Join(" | ", validation.Errors)); return; }
         await _runtime.ApplyConfigurationAsync(token).ConfigureAwait(true);
-        ReceiveLog(SelectedScreen is null ? "[SYSTEM] Configuration applied." : $"[{SelectedScreen.ScreenId}/FUSION] Configuration applied.");
+        ReceiveLog(SelectedScreen is null ? "[GLOBAL/SYSTEM] Configuration applied." : $"[{SelectedScreen.ScreenId}/FUSION] Configuration applied.");
     }
 
     private bool CanOperateSelectedSensor() => SelectedScreen is { IsAssociated: true } && SelectedSensor is not null && SelectedScreen.Sensors.Contains(SelectedSensor);
@@ -290,7 +290,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
         OnPropertyChanged(nameof(CanEditSelectedScreen));
     }
-    private string CurrentLogTag() => SelectedScreen is null ? "[SYSTEM]" : SelectedSensor is null ? $"[{SelectedScreen.ScreenId}/FUSION]" : $"[{SelectedScreen.ScreenId}/{SelectedSensor.SensorId}]";
+    private string CurrentLogTag() => SelectedScreen is null ? "[GLOBAL/SYSTEM]" : SelectedSensor is null ? $"[{SelectedScreen.ScreenId}/FUSION]" : $"[{SelectedScreen.ScreenId}/{SelectedSensor.SensorId}]";
 
     public void Dispose()
     {

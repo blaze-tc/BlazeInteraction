@@ -23,6 +23,13 @@ public sealed class RadarPointCloudView : FrameworkElement
     private static readonly Brush ValidPointBrush = Frozen(Color.FromRgb(56, 211, 214));
     private static readonly Brush RegionBrush = Frozen(Color.FromRgb(126, 231, 135));
     private static readonly Brush MaskBrush = Frozen(Color.FromArgb(48, 245, 93, 91));
+    private static readonly Brush ClusterBrush = Frozen(Color.FromRgb(192, 132, 252));
+    private static readonly Brush MaskBorderBrush = Frozen(Color.FromArgb(190, 245, 93, 91));
+    private static readonly Pen GridPen = FrozenPen(GridBrush, 1d);
+    private static readonly Pen ClusterPen = FrozenPen(ClusterBrush, 1.2d);
+    private static readonly Pen RegionPen = FrozenPen(RegionBrush, 1.5d, DashStyles.Dash);
+    private static readonly Pen RegionVertexPen = FrozenPen(RegionBrush, 2d);
+    private static readonly Pen MaskPen = FrozenPen(MaskBorderBrush, 1.2d);
     private static readonly TimeSpan PointPersistenceDuration = TimeSpan.FromMilliseconds(220);
     private readonly RadarPointPersistenceBuffer _rawPointFrames = new(PointPersistenceDuration, 6);
     private readonly RadarPointPersistenceBuffer _validPointFrames = new(PointPersistenceDuration, 6);
@@ -145,7 +152,7 @@ public sealed class RadarPointCloudView : FrameworkElement
         var center = new Point(ActualWidth / 2d, ActualHeight / 2d);
         var maximum = Math.Max(.1f, MaximumRangeMeters);
         var scale = RadarViewportTransform.CalculateScale(ActualWidth, ActualHeight, maximum);
-        var pen = new Pen(GridBrush, 1d);
+        var pen = GridPen;
         for (var radius = maximum <= 10f ? 1f : 5f; radius <= maximum + .001f; radius += maximum <= 10f ? 1f : 5f)
             context.DrawEllipse(null, pen, center, radius * scale, radius * scale);
         context.DrawLine(pen, new Point(0d, center.Y), new Point(ActualWidth, center.Y));
@@ -159,7 +166,7 @@ public sealed class RadarPointCloudView : FrameworkElement
         {
             var center = ToScreen(new Point2(cluster.CenterX, cluster.CenterY));
             var size = Math.Max(10d, cluster.WidthMeters * scale);
-            context.DrawRectangle(null, new Pen(Frozen(Color.FromRgb(192, 132, 252)), 1.2d), new Rect(center.X - size / 2d, center.Y - size / 2d, size, size));
+            context.DrawRectangle(null, ClusterPen, new Rect(center.X - size / 2d, center.Y - size / 2d, size, size));
         }
     }
     private void DrawPointLayers(DrawingContext context, IReadOnlyList<RadarPointPersistenceLayer> layers, Brush brush, double radius)
@@ -175,18 +182,18 @@ public sealed class RadarPointCloudView : FrameworkElement
     {
         var vertices = RegionVertices;
         if (vertices is null || vertices.Count < 3) return;
-        var pen = new Pen(RegionBrush, 1.5d) { DashStyle = DashStyles.Dash };
+        var pen = RegionPen;
         for (var index = 0; index < vertices.Count; index++)
         {
             var current = ToScreen(vertices[index]);
             context.DrawLine(pen, current, ToScreen(vertices[(index + 1) % vertices.Count]));
-            context.DrawEllipse(BackgroundBrush, new Pen(RegionBrush, 2d), current, 6d, 6d);
+            context.DrawEllipse(BackgroundBrush, RegionVertexPen, current, 6d, 6d);
         }
     }
     private void DrawMasks(DrawingContext context)
     {
         if (MaskedRegions is null) return;
-        var pen = new Pen(Frozen(Color.FromArgb(190, 245, 93, 91)), 1.2d);
+        var pen = MaskPen;
         foreach (var polygon in MaskedRegions.Where(region => region.Count >= 3))
         {
             var geometry = new StreamGeometry();
@@ -203,6 +210,13 @@ public sealed class RadarPointCloudView : FrameworkElement
     private void DrawText(DrawingContext context, string text, Point origin, Brush brush, double size) =>
         context.DrawText(new FormattedText(text, System.Globalization.CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, new Typeface("Segoe UI"), size, brush, VisualTreeHelper.GetDpi(this).PixelsPerDip), origin);
     private static Brush Frozen(Color color) { var brush = new SolidColorBrush(color); brush.Freeze(); return brush; }
+    private static Pen FrozenPen(Brush brush, double thickness, DashStyle? dashStyle = null)
+    {
+        var pen = new Pen(brush, thickness);
+        if (dashStyle is not null) pen.DashStyle = dashStyle;
+        pen.Freeze();
+        return pen;
+    }
     private static void OnSnapshotChanged(DependencyObject dependencyObject, DependencyPropertyChangedEventArgs args)
     {
         var control = (RadarPointCloudView)dependencyObject;

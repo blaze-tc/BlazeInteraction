@@ -43,6 +43,9 @@ public sealed class MainWindowBindingTests
                     42, timestamp);
 
                 window.Show();
+                window.Width = window.MinWidth;
+                window.Height = window.MinHeight;
+                window.UpdateLayout();
                 runtime.PublishSensorSnapshot(sensorSnapshot);
                 runtime.PublishScreenSnapshot(screenSnapshot);
                 window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
@@ -52,6 +55,12 @@ public sealed class MainWindowBindingTests
                 Assert.Same(sensorSnapshot, raw.Snapshot);
                 Assert.Same(screenSnapshot, fusion.Snapshot);
                 Assert.Same(viewModel.SelectedScreen!.Sensors, fusion.Sensors);
+                foreach (var name in new[] { "ScreenList", "SensorList", "RawRadarView", "ScreenFusionView", "ScreenParameterScroll" })
+                {
+                    var element = Assert.IsAssignableFrom<FrameworkElement>(window.FindName(name));
+                    Assert.True(double.IsFinite(element.ActualWidth) && element.ActualWidth > 0d);
+                    Assert.True(double.IsFinite(element.ActualHeight) && element.ActualHeight > 0d);
+                }
 
                 window.WindowState = WindowState.Minimized;
                 window.WindowState = WindowState.Normal;
