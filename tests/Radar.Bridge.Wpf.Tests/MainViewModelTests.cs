@@ -83,6 +83,20 @@ public sealed class MainViewModelTests
     }
 
     [Fact]
+    public void GlobalIpcLogs_UseTwoPartTagAndAppearOnlyInGlobalFilter()
+    {
+        using var viewModel = new MainViewModel(ThreeScreenFourSensorConfiguration(), new TestRuntime());
+        viewModel.ReceiveLogForTest("[GLOBAL/IPC] Unity requested shutdown.");
+        viewModel.ReceiveLogForTest("[front/f1] sensor frame");
+
+        Assert.Contains("[GLOBAL/IPC] Unity requested shutdown.", viewModel.VisibleLogEntries);
+        viewModel.SelectedLogScreenId = "front";
+        Assert.DoesNotContain(viewModel.VisibleLogEntries, entry => entry.StartsWith("[GLOBAL/", StringComparison.Ordinal));
+        viewModel.SelectedLogScreenId = "*";
+        Assert.Contains("[GLOBAL/IPC] Unity requested shutdown.", viewModel.VisibleLogEntries);
+    }
+
+    [Fact]
     public void MoveLogs_AreThrottledWithoutSuppressingErrors()
     {
         using var viewModel = new MainViewModel(ThreeScreenFourSensorConfiguration(), new TestRuntime());

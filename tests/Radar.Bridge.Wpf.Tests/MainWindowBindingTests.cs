@@ -19,47 +19,52 @@ public sealed class MainWindowBindingTests
     [Fact]
     public void BindingDiagnostics_ReportsDeliberatelyBrokenBinding()
     {
-        ExceptionDispatchInfo? captured = null;
-        var thread = new Thread(() =>
+        WpfTestHost.Instance.Invoke(() =>
         {
+            var listener = new BindingTraceListener();
+            var source = PresentationTraceSources.DataBindingSource;
+            var previousLevel = source.Switch.Level;
+            source.Listeners.Add(listener);
             try
             {
-                var listener = new BindingTraceListener();
-                var source = PresentationTraceSources.DataBindingSource;
-                var previousLevel = source.Switch.Level;
-                source.Listeners.Add(listener);
-                try
-                {
-                    source.Switch.Level = SourceLevels.All;
-                    var text = new TextBlock();
-                    PresentationTraceSources.SetTraceLevel(text, PresentationTraceLevel.High);
-                    BindingOperations.SetBinding(text, TextBlock.TextProperty, new System.Windows.Data.Binding("MissingProperty") { Source = new object() });
-                    var window = new Window { Content = text, Width = 100d, Height = 30d };
-                    window.Show();
-                    window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
-                    source.TraceEvent(TraceEventType.Error, 1, "Binding diagnostics negative probe.");
-                    Assert.NotEmpty(listener.Messages);
-                    window.Close();
-                }
-                finally { source.Listeners.Remove(listener); source.Switch.Level = previousLevel; }
+                source.Switch.Level = SourceLevels.All;
+                PresentationTraceSources.Refresh();
+                source.Switch.Level = SourceLevels.All;
+                var text = new TextBlock();
+                var broken = new System.Windows.Data.Binding("MissingProperty") { Source = new object() };
+                PresentationTraceSources.SetTraceLevel(broken, PresentationTraceLevel.High);
+                BindingOperations.SetBinding(text, TextBlock.TextProperty, broken);
+                var window = new Window { Content = text, Width = 100d, Height = 30d };
+                window.Show();
+                var expression = BindingOperations.GetBindingExpression(text, TextBlock.TextProperty)!;
+                PresentationTraceSources.SetTraceLevel(expression, PresentationTraceLevel.High);
+                expression.UpdateTarget();
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                source.Flush();
+                Assert.Contains(listener.Messages, message => message.Contains("MissingProperty", StringComparison.Ordinal));
+                window.Close();
             }
-            catch (Exception exception) { captured = ExceptionDispatchInfo.Capture(exception); }
+            finally
+            {
+                source.Listeners.Remove(listener);
+                source.Switch.Level = previousLevel;
+            }
         });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(10)));
-        captured?.Throw();
     }
     [Fact]
     public void Show_BindsSelectedSensorAndScreenSnapshotsToTheirSeparateViews()
     {
-        ExceptionDispatchInfo? capturedException = null;
-        var thread = new Thread(() =>
+        WpfTestHost.Instance.Invoke(() =>
         {
+            var listener = new BindingTraceListener();
+            var bindingSource = PresentationTraceSources.DataBindingSource;
+            var previousLevel = bindingSource.Switch.Level;
+            bindingSource.Listeners.Add(listener);
             try
             {
-                var application = new App();
-                application.InitializeComponent();
+                bindingSource.Switch.Level = SourceLevels.Error;
+                PresentationTraceSources.Refresh();
+                bindingSource.Switch.Level = SourceLevels.Error;
                 var runtime = new TestRuntime();
                 using var viewModel = new MainViewModel(RadarAppConfiguration.CreateDefault(), runtime);
                 var window = new MainWindow(viewModel, runtime);
@@ -103,18 +108,56 @@ public sealed class MainWindowBindingTests
                 window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
                 Assert.NotNull(window.FindName("RawRadarView"));
                 Assert.NotNull(window.FindName("ScreenFusionView"));
+                Assert.True(listener.Messages.Count == 0, string.Join(Environment.NewLine, listener.Messages));
                 window.Close();
             }
-            catch (Exception exception)
+            finally
             {
-                capturedException = ExceptionDispatchInfo.Capture(exception);
+                bindingSource.Listeners.Remove(listener);
+                bindingSource.Switch.Level = previousLevel;
             }
         });
+    }
 
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "WPF window startup timed out.");
-        capturedException?.Throw();
+    private sealed class WpfTestHost
+    {
+        private Dispatcher _dispatcher = null!;
+
+        private WpfTestHost()
+        {
+            var initialized = new ManualResetEventSlim();
+            ExceptionDispatchInfo? initializationException = null;
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    var application = new App();
+                    application.InitializeComponent();
+                    _dispatcher = Dispatcher.CurrentDispatcher;
+                }
+                catch (Exception exception)
+                {
+                    initializationException = ExceptionDispatchInfo.Capture(exception);
+                }
+                finally
+                {
+                    initialized.Set();
+                }
+
+                if (initializationException is null)
+                {
+                    Dispatcher.Run();
+                }
+            }) { IsBackground = true };
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            Assert.True(initialized.Wait(TimeSpan.FromSeconds(10)), "WPF test host startup timed out.");
+            initializationException?.Throw();
+        }
+
+        public static WpfTestHost Instance { get; } = new();
+
+        public void Invoke(Action action) => _dispatcher.Invoke(action);
     }
 
     private sealed class TestRuntime : IRadarBridgeRuntime
@@ -136,5 +179,32 @@ public sealed class MainWindowBindingTests
         public List<string> Messages { get; } = [];
         public override void Write(string? message) { if (!string.IsNullOrWhiteSpace(message)) Messages.Add(message); }
         public override void WriteLine(string? message) { if (!string.IsNullOrWhiteSpace(message)) Messages.Add(message); }
+        public override void Fail(string? message, string? detailMessage)
+        {
+            if (!string.IsNullOrWhiteSpace(message)) Messages.Add(message);
+            if (!string.IsNullOrWhiteSpace(detailMessage)) Messages.Add(detailMessage);
+        }
+        public override void TraceEvent(TraceEventCache? eventCache, string source, TraceEventType eventType, int id, string? message)
+        {
+            if (!string.IsNullOrWhiteSpace(message)) Messages.Add(message);
+        }
+        public override void TraceEvent(TraceEventCache? eventCache, string source, TraceEventType eventType, int id, string? format, params object?[]? args)
+        {
+            var message = args is { Length: > 0 }
+                ? string.Format(format ?? string.Empty, args)
+                : format;
+            if (!string.IsNullOrWhiteSpace(message)) Messages.Add(message);
+        }
+        public override void TraceData(TraceEventCache? eventCache, string source, TraceEventType eventType, int id, object? data)
+        {
+            if (data is not null) Messages.Add(data.ToString()!);
+        }
+        public override void TraceData(TraceEventCache? eventCache, string source, TraceEventType eventType, int id, params object?[]? data)
+        {
+            foreach (var item in data ?? [])
+            {
+                if (item is not null) Messages.Add(item.ToString()!);
+            }
+        }
     }
 }

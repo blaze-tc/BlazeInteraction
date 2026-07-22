@@ -20,6 +20,7 @@
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel VerticalAlignment="Center">
                     <TextBlock Text="RADARBRIDGE" FontSize="18" FontWeight="Bold"/>
+                    <TextBlock Text="Bridge 1.1.5" Style="{StaticResource CaptionStyle}" Margin="0,1,0,0"/>
                     <TextBlock Text="多屏幕 · 多雷达 · 融合诊断" Style="{StaticResource CaptionStyle}" Margin="0,2,0,0"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
@@ -143,7 +144,7 @@
                 <TabControl>
                     <TabItem Header="屏幕参数">
                         <ScrollViewer x:Name="ScreenParameterScroll" VerticalScrollBarVisibility="Auto" Background="{StaticResource PanelBrush}">
-                            <StackPanel Margin="4,10,4,4" IsEnabled="{Binding SelectedScreen}">
+                            <StackPanel Margin="4,10,4,4" IsEnabled="{Binding HasSelectedScreen}">
                                 <TextBlock Text="{Binding SelectedScreen.UnityDisplayName}" Style="{StaticResource SectionTitleStyle}"/>
                                 <TextBlock Text="有效分辨率" Style="{StaticResource CaptionStyle}"/>
                                 <TextBlock Text="{Binding SelectedScreen.EffectiveResolutionText}" FontWeight="SemiBold"/>
@@ -171,7 +172,7 @@
                     </TabItem>
                     <TabItem Header="雷达参数">
                         <ScrollViewer x:Name="SensorParameterScroll" VerticalScrollBarVisibility="Auto" Background="{StaticResource PanelBrush}">
-                            <StackPanel Margin="4,10,4,4" IsEnabled="{Binding SelectedSensor}">
+                            <StackPanel Margin="4,10,4,4" IsEnabled="{Binding HasSelectedSensor}">
                                 <TextBlock Text="{Binding SelectedSensor.DisplayName}" Style="{StaticResource SectionTitleStyle}"/>
                                 <TextBlock Text="数据源 / 型号" Style="{StaticResource CaptionStyle}"/>
                                 <ComboBox ItemsSource="{Binding SelectedSensor.AvailableModels}" SelectedItem="{Binding SelectedSensor.DeviceModel}"/>

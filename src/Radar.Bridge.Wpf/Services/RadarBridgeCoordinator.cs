@@ -81,7 +81,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             _pipeTask = server.RunAsync(_lifetime.Token);
             _schedulerTask = SchedulerAsync(_lifetime.Token);
             Volatile.Write(ref _started, 1);
-            PublishLog($"[IPC] server started: {_configuration.Ipc.PipeName} / protocol v{IpcProtocolVersion.Current}");
+            PublishLog($"[GLOBAL/IPC] server started: {_configuration.Ipc.PipeName} / protocol v{IpcProtocolVersion.Current}");
         }
         catch
         {
@@ -346,7 +346,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            PublishLog($"[IPC] topology rejected: {exception.Message}");
+            PublishLog($"[GLOBAL/IPC] topology rejected: {exception.Message}");
             return HelloAuthenticationResult.Reject("topology_reconciliation_failed", exception.Message);
         }
     }
@@ -368,7 +368,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch (Exception exception)
         {
-            PublishLog($"[IPC] scheduler fault: {exception.Message}");
+            PublishLog($"[GLOBAL/IPC] scheduler fault: {exception.Message}");
         }
     }
 
@@ -469,7 +469,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             return;
         }
         SetUnityStatus(UnityStatus with { LastBatchSentAt = batch.Timestamp, LastBatchSequence = batch.Sequence, LastError = null });
-        PublishLog($"[IPC] batch={batch.Sequence} screens={batch.Payload.Screens.Count} pointers={batch.Payload.Screens.Sum(frame => frame.Pointers.Count)} latencyMs=0.0");
+        PublishLog($"[GLOBAL/IPC] batch={batch.Sequence} screens={batch.Payload.Screens.Count} pointers={batch.Payload.Screens.Sum(frame => frame.Pointers.Count)} latencyMs=0.0");
         var cleanup = await ConfirmTransitionAsync(batch, cancellationToken).ConfigureAwait(false);
         if (cleanup is not null) TrackRetirement(cleanup);
     }
@@ -519,8 +519,8 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         lock (_retirementTasks) pending = _retirementTasks.ToArray();
         if (pending.Length == 0) return;
         try { await Task.WhenAll(pending).WaitAsync(PipelineCleanupTimeout).ConfigureAwait(false); }
-        catch (TimeoutException) { PublishLog("[IPC] retirement cleanup remains quarantined during shutdown."); }
-        catch (Exception exception) { PublishLog($"[IPC] retirement cleanup shutdown fault: {exception.Message}"); }
+        catch (TimeoutException) { PublishLog("[GLOBAL/IPC] retirement cleanup remains quarantined during shutdown."); }
+        catch (Exception exception) { PublishLog($"[GLOBAL/IPC] retirement cleanup shutdown fault: {exception.Message}"); }
     }
 
     private static RadarScreenConfiguration FindOrCreateScreenConfiguration(RadarAppConfiguration configurationRoot, RadarScreenDefinitionPayload definition)
@@ -1019,7 +1019,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         AssociatedRuntimes().Select(runtime => runtime.Info).ToArray(), UnityStatus.LastBatchSentAt, UnityStatus.LastBatchSequence, null));
     private void OnUnityDisconnected() => SetUnityStatus(UnityClientStatus.Disconnected with { LastBatchSequence = UnityStatus.LastBatchSequence, LastBatchSentAt = UnityStatus.LastBatchSentAt });
     private void OnPipeError(Exception exception) => SetUnityStatus(UnityStatus with { LastError = exception.Message });
-    private void OnPipeMessage(IpcEnvelope envelope) { if (envelope.MessageType == IpcMessageType.Shutdown) PublishLog("[IPC] Unity requested shutdown."); }
+    private void OnPipeMessage(IpcEnvelope envelope) { if (envelope.MessageType == IpcMessageType.Shutdown) PublishLog("[GLOBAL/IPC] Unity requested shutdown."); }
     private void SetUnityStatus(UnityClientStatus value) { Volatile.Write(ref _unityStatus, value); InvokeSafely(UnityStatusChanged, value); }
     private void PublishLog(string message) { _logger.LogInformation("{Message}", message); InvokeSafely(LogReceived, message); }
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);

@@ -74,6 +74,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ObservableCollection<string> VisibleLogEntries { get; } = [];
     public UnityClientStatus UnityStatus { get => _unityStatus; private set => SetProperty(ref _unityStatus, value); }
     public bool CanEditSelectedScreen => SelectedScreen is { IsAssociated: false };
+    public bool HasSelectedScreen => SelectedScreen is not null;
+    public bool HasSelectedSensor => SelectedSensor is not null;
 
     public ScreenItemViewModel? SelectedScreen
     {
@@ -82,6 +84,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             if (!SetProperty(ref _selectedScreen, value)) return;
             SelectedSensor = value?.Sensors.FirstOrDefault();
+            OnPropertyChanged(nameof(HasSelectedScreen));
             NotifyCommandState();
         }
     }
@@ -97,6 +100,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             if (!SetProperty(ref _selectedSensor, owned)) return;
             if (_selectedSensor is not null) _selectedSensor.PropertyChanged += OnSelectedSensorPropertyChanged;
             OnPropertyChanged(string.Empty);
+            OnPropertyChanged(nameof(HasSelectedSensor));
             NotifyCommandState();
         }
     }

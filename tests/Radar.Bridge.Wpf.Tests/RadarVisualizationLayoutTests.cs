@@ -92,6 +92,15 @@ public sealed class RadarVisualizationLayoutTests
         }
     }
 
+    [Fact]
+    public void BridgeGlobalLogs_UseTwoPartTags()
+    {
+        var source = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "src", "Radar.Bridge.Wpf", "Services", "RadarBridgeCoordinator.cs"));
+        Assert.DoesNotContain("[IPC]", source);
+        Assert.DoesNotContain("[SYSTEM]", source);
+        Assert.Contains("[GLOBAL/IPC]", source);
+    }
+
     private static string FindRepositoryRoot()
     {
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory);
