@@ -2,6 +2,7 @@ using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Windows.Threading;
 using System.Text.RegularExpressions;
+using Yuexin.Radar.Bridge.Wpf.Controls;
 using Yuexin.Radar.Bridge.Wpf.Services;
 using Yuexin.Radar.Bridge.Wpf.ViewModels;
 using Yuexin.Radar.Configuration;
@@ -27,7 +28,7 @@ public sealed class MainWindowBindingTests
         Assert.IsAssignableFrom<System.Windows.Input.ICommand>(typeof(MainViewModel).GetProperty("ConnectCommand")!.GetValue(new MainViewModel(RadarAppConfiguration.CreateDefault(), new TestRuntime())));
     }
     [Fact]
-    public void Show_DoesNotCreateTwoWayBindingsForReadOnlyMetrics()
+    public void Show_BindsSelectedSensorSnapshotToBothPointCloudViews()
     {
         ExceptionDispatchInfo? capturedException = null;
         var thread = new Thread(() =>
@@ -37,11 +38,37 @@ public sealed class MainWindowBindingTests
                 var application = new App();
                 application.InitializeComponent();
                 var runtime = new TestRuntime();
-                var viewModel = new MainViewModel(RadarAppConfiguration.CreateDefault(), runtime);
+                using var viewModel = new MainViewModel(RadarAppConfiguration.CreateDefault(), runtime);
                 var window = new MainWindow(viewModel, runtime);
+                var timestamp = DateTimeOffset.UnixEpoch.AddSeconds(42);
+                var snapshot = new RadarSensorRuntimeSnapshot(
+                    "main", "sensor-1", 42, timestamp,
+                    [new RadarPoint(100, 10, 1f, 1f, 2f)],
+                    [new RadarPoint(90, 9, .9f, .8f, 1.8f)],
+                    [new RadarCluster(7, [], 1.2f, 2.3f, .4f, 2.6f)], [],
+                    12.5d, 345d, 6, 7, 8);
 
                 window.Show();
+                runtime.PublishSensorSnapshot(snapshot);
                 window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+
+                var latest = Assert.IsType<RadarRuntimeSnapshot>(viewModel.LatestSnapshot);
+                Assert.Equal(snapshot.Sequence, latest.Sequence);
+                Assert.Equal(snapshot.Timestamp, latest.Timestamp);
+                Assert.Same(snapshot.RawPoints, latest.RawPoints);
+                Assert.Same(snapshot.ValidPoints, latest.ValidPoints);
+                Assert.Same(snapshot.Clusters, latest.Clusters);
+                Assert.Equal(snapshot.ScanFrequencyHz, latest.ScanFrequencyHz);
+                Assert.Equal(snapshot.ReceivedBytesPerSecond, latest.ReceivedBytesPerSecond);
+                Assert.Equal(snapshot.CrcErrorCount, latest.CrcErrorCount);
+                Assert.Equal(snapshot.DiscardedByteCount, latest.DiscardedByteCount);
+                Assert.Empty(latest.Targets);
+                Assert.Empty(latest.Pointers);
+
+                var raw = Assert.IsType<RadarPointCloudView>(window.FindName("RawRadarView"));
+                var output = Assert.IsType<RadarPointCloudView>(window.FindName("UnityOutputRadarView"));
+                Assert.Same(latest, raw.Snapshot);
+                Assert.Same(latest, output.Snapshot);
                 window.Close();
             }
             catch (Exception exception)
@@ -59,23 +86,14 @@ public sealed class MainWindowBindingTests
 
     private sealed class TestRuntime : IRadarBridgeRuntime
     {
+        public event Action<RadarSensorRuntimeSnapshot>? SensorSnapshotUpdated;
         public event Action<string>? LogReceived { add { } remove { } }
         public event Action<UnityClientStatus>? UnityStatusChanged { add { } remove { } }
 
         public UnityClientStatus UnityStatus { get; } = UnityClientStatus.Disconnected;
 
         public Task StartInfrastructureAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task ConnectAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task DisconnectAsync() => Task.CompletedTask;
-        public Task StartSimulationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task StopSimulationAsync() => Task.CompletedTask;
-        public Task StartRecordingAsync(string path, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task StopRecordingAsync() => Task.CompletedTask;
-        public Task ReplayAsync(string path, double speed, bool loop, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public void PauseReplay() { }
-        public void ResumeReplay() { }
-        public void StepReplay() { }
-        public Task StopReplayAsync() => Task.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public void PublishSensorSnapshot(RadarSensorRuntimeSnapshot snapshot) => SensorSnapshotUpdated?.Invoke(snapshot);
     }
 }

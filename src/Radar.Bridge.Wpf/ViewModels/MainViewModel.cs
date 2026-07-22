@@ -21,6 +21,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private readonly Dictionary<string, DateTimeOffset> _lastMoveLogAt = new(StringComparer.OrdinalIgnoreCase);
     private ScreenItemViewModel? _selectedScreen;
     private SensorItemViewModel? _selectedSensor;
+    private RadarRuntimeSnapshot? _latestSnapshot;
     private string _selectedLogScreenId = "*";
     private string _selectedLogSensorId = "*";
     private UnityClientStatus _unityStatus;
@@ -94,6 +95,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             if (_selectedSensor is not null) _selectedSensor.PropertyChanged -= OnSelectedSensorPropertyChanged;
             if (!SetProperty(ref _selectedSensor, owned)) return;
             if (_selectedSensor is not null) _selectedSensor.PropertyChanged += OnSelectedSensorPropertyChanged;
+            RefreshLatestSnapshot();
             OnPropertyChanged(string.Empty);
             NotifyCommandState();
         }
@@ -140,7 +142,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public string CalibrationStatus => SelectedSensor?.CalibrationStatus ?? "Not calibrated";
     public string CalibrationStep => SelectedSensor?.CalibrationStep ?? "Not started";
     public long LastFrameSequence => SelectedSensor?.Snapshot?.Sequence ?? 0;
-    public RadarSensorRuntimeSnapshot? LatestSnapshot => SelectedSensor?.Snapshot;
+    public RadarRuntimeSnapshot? LatestSnapshot => _latestSnapshot;
     public string ActualScanFrequency => SelectedSensor?.FrequencyText ?? "0.0 Hz";
     public string ReceiveRate => $"{SelectedSensor?.Snapshot?.ReceivedBytesPerSecond ?? 0d:0} B/s";
     public int RawPointCount => SelectedSensor?.Snapshot?.RawPoints.Count ?? 0;
@@ -214,7 +216,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         SelectedSensor?.DeleteLastMaskedRegion();
     }
-    private void OnSelectedSensorPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) { OnPropertyChanged(string.Empty); NotifyCommandState(); }
+    private void OnSelectedSensorPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(SensorItemViewModel.Snapshot)) RefreshLatestSnapshot();
+        OnPropertyChanged(string.Empty);
+        NotifyCommandState();
+    }
     public void ReceiveLogForTest(string entry) => ReceiveLog(entry);
 
     private async Task AddSensorAsync(CancellationToken _)
@@ -282,6 +289,25 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private void OnUnityStatusChanged(UnityClientStatus status) => Dispatch(() => UnityStatus = status);
     private ScreenItemViewModel? FindScreen(string id) => Screens.FirstOrDefault(screen => string.Equals(screen.ScreenId, id, StringComparison.OrdinalIgnoreCase));
     private SensorItemViewModel? FindSensor(string screenId, string sensorId) => FindScreen(screenId)?.Sensors.FirstOrDefault(sensor => string.Equals(sensor.SensorId, sensorId, StringComparison.OrdinalIgnoreCase));
+    private void RefreshLatestSnapshot()
+    {
+        var snapshot = SelectedSensor?.Snapshot;
+        _latestSnapshot = snapshot is null
+            ? null
+            : new RadarRuntimeSnapshot(
+                snapshot.Sequence,
+                snapshot.Timestamp,
+                snapshot.RawPoints,
+                snapshot.ValidPoints,
+                snapshot.Clusters,
+                [],
+                [],
+                snapshot.ScanFrequencyHz,
+                snapshot.ReceivedBytesPerSecond,
+                snapshot.CrcErrorCount,
+                snapshot.DiscardedByteCount);
+        OnPropertyChanged(nameof(LatestSnapshot));
+    }
 
     private void ReceiveLog(string entry)
     {
