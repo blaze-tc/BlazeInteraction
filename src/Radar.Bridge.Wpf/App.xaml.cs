@@ -44,6 +44,7 @@ public partial class App : Application
                 .AddProvider(new AsyncFileLoggerProvider(AsyncFileLoggerProvider.GetDefaultLogPath())));
             services.AddSingleton(_configuration);
             services.AddSingleton<IRadarSensorPipelineFactory, RadarSensorPipelineFactory>();
+            services.AddSingleton<IFileDialogService, WpfFileDialogService>();
             services.AddSingleton<IRadarBridgeRuntime>(provider => new RadarBridgeCoordinator(
                 _configuration,
                 provider.GetRequiredService<ILogger<RadarBridgeCoordinator>>(),

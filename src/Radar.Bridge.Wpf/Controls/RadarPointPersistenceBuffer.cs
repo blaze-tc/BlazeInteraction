@@ -53,6 +53,12 @@ public sealed class RadarPointPersistenceBuffer
         RemoveExpired(receivedAt);
     }
 
+    public void Clear()
+    {
+        _frames.Clear();
+        _lastSequence = null;
+    }
+
     public IReadOnlyList<RadarPointPersistenceLayer> GetLayers(DateTimeOffset now)
     {
         RemoveExpired(now);

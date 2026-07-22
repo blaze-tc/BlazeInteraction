@@ -1,4 +1,6 @@
 using System.Collections;
+using System.Collections.Specialized;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Media;
 using Yuexin.Radar.Bridge.Wpf.Services;
@@ -19,12 +21,20 @@ public sealed class RadarScreenFusionView : FrameworkElement
     private static readonly Brush PointerDownBrush = Frozen(Color.FromRgb(56, 211, 214));
     private static readonly Brush PointerUpBrush = Frozen(Color.FromRgb(245, 93, 91));
     private static readonly Brush PointerMoveBrush = Frozen(Color.FromRgb(192, 132, 252));
+    private static readonly Pen GridPen = FrozenPen(GridBrush, 1d);
+    private static readonly Pen TargetPen = FrozenPen(TargetBrush, 2d);
+    private static readonly Pen PointerDownPen = FrozenPen(PointerDownBrush, 2d);
+    private static readonly Pen PointerUpPen = FrozenPen(PointerUpBrush, 2d);
+    private static readonly Pen PointerMovePen = FrozenPen(PointerMoveBrush, 2d);
     private readonly Dictionary<string, Brush> _sensorBrushes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Pen> _sensorPens = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, FormattedText> _labelCache = [];
+    private INotifyCollectionChanged? _sensorCollection;
+    private readonly HashSet<SensorItemViewModel> _observedSensors = [];
 
     public static readonly DependencyProperty SnapshotProperty = DependencyProperty.Register(
         nameof(Snapshot), typeof(RadarScreenRuntimeSnapshot), typeof(RadarScreenFusionView),
-        new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+        new FrameworkPropertyMetadata(null, OnSensorsChanged));
 
     public static readonly DependencyProperty SensorsProperty = DependencyProperty.Register(
         nameof(Sensors), typeof(IEnumerable), typeof(RadarScreenFusionView),
@@ -42,6 +52,8 @@ public sealed class RadarScreenFusionView : FrameworkElement
         UseLayoutRounding = true;
         TextOptions.SetTextFormattingMode(this, TextFormattingMode.Display);
         TextOptions.SetTextRenderingMode(this, TextRenderingMode.ClearType);
+        Loaded += (_, _) => AttachSensors();
+        Unloaded += (_, _) => DetachSensors();
     }
 
     public RadarScreenRuntimeSnapshot? Snapshot
@@ -90,27 +102,27 @@ public sealed class RadarScreenFusionView : FrameworkElement
         foreach (var target in snapshot.Targets)
         {
             var point = ToView(target.PixelX, target.PixelY);
-            drawingContext.DrawEllipse(null, new Pen(TargetBrush, 2d), point, 6d, 6d);
+            drawingContext.DrawEllipse(null, TargetPen, point, 6d, 6d);
             DrawLabel(drawingContext, $"T{target.TrackId}", point + new Vector(8d, -15d), TargetBrush);
         }
 
         foreach (var pointer in snapshot.Pointers)
         {
             var point = ToView(pointer.PixelX, pointer.PixelY);
-            var brush = pointer.Phase switch
+            var (brush, pen) = pointer.Phase switch
             {
-                RadarPointerPhase.Down => PointerDownBrush,
-                RadarPointerPhase.Up => PointerUpBrush,
-                _ => PointerMoveBrush
+                RadarPointerPhase.Down => (PointerDownBrush, PointerDownPen),
+                RadarPointerPhase.Up => (PointerUpBrush, PointerUpPen),
+                _ => (PointerMoveBrush, PointerMovePen)
             };
-            drawingContext.DrawEllipse(null, new Pen(brush, 2d), point, 8d, 8d);
+            drawingContext.DrawEllipse(null, pen, point, 8d, 8d);
             DrawLabel(drawingContext, $"P{pointer.PointerId}", point + new Vector(10d, 5d), brush);
         }
     }
 
     private void DrawGrid(DrawingContext drawingContext, RadarScreenInfo screen)
     {
-        var pen = new Pen(GridBrush, 1d);
+        var pen = GridPen;
         var viewport = ScreenViewport();
         drawingContext.DrawRectangle(null, pen, viewport);
         for (var step = 1; step < 4; step++)
@@ -129,7 +141,7 @@ public sealed class RadarScreenFusionView : FrameworkElement
         var viewport = ScreenViewport();
         var width = outputRect.Width / Math.Max(1d, Snapshot!.Screen.WidthPixels) * viewport.Width;
         var height = outputRect.Height / Math.Max(1d, Snapshot.Screen.HeightPixels) * viewport.Height;
-        drawingContext.DrawRectangle(null, new Pen(brush, 1.4d), new Rect(topLeft.X, topLeft.Y, width, height));
+        drawingContext.DrawRectangle(null, SensorPen(brush), new Rect(topLeft.X, topLeft.Y, width, height));
     }
 
     private Point ToView(float pixelX, float pixelY)
@@ -149,6 +161,44 @@ public sealed class RadarScreenFusionView : FrameworkElement
         var height = screen.HeightPixels * scale;
         return new Rect((ActualWidth - width) / 2d, (ActualHeight - height) / 2d, width, height);
     }
+
+    private static void OnSensorsChanged(DependencyObject dependencyObject, DependencyPropertyChangedEventArgs args)
+    {
+        var control = (RadarScreenFusionView)dependencyObject;
+        control.DetachSensors();
+        if (control.IsLoaded) control.AttachSensors();
+        control.InvalidateVisual();
+    }
+
+    private void AttachSensors()
+    {
+        if (Sensors is INotifyCollectionChanged collection)
+        {
+            _sensorCollection = collection;
+            _sensorCollection.CollectionChanged += OnSensorsCollectionChanged;
+        }
+        foreach (var sensor in Sensors?.Cast<object>().OfType<SensorItemViewModel>() ?? [])
+        {
+            if (_observedSensors.Add(sensor)) sensor.PropertyChanged += OnSensorPropertyChanged;
+        }
+    }
+
+    private void DetachSensors()
+    {
+        if (_sensorCollection is not null) _sensorCollection.CollectionChanged -= OnSensorsCollectionChanged;
+        _sensorCollection = null;
+        foreach (var sensor in _observedSensors) sensor.PropertyChanged -= OnSensorPropertyChanged;
+        _observedSensors.Clear();
+    }
+
+    private void OnSensorsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs args)
+    {
+        DetachSensors();
+        AttachSensors();
+        InvalidateVisual();
+    }
+
+    private void OnSensorPropertyChanged(object? sender, PropertyChangedEventArgs args) => InvalidateVisual();
 
     private SensorItemViewModel? FindSensor(string sensorId) => Sensors?.Cast<object>()
         .OfType<SensorItemViewModel>()
@@ -178,6 +228,14 @@ public sealed class RadarScreenFusionView : FrameworkElement
         _sensorBrushes[sensorId] = brush;
         return brush;
     }
+    private Pen SensorPen(Brush brush)
+    {
+        var key = brush.ToString();
+        if (_sensorPens.TryGetValue(key, out var pen)) return pen;
+        pen = FrozenPen(brush, 1.4d);
+        _sensorPens[key] = pen;
+        return pen;
+    }
 
     private static Color Hsv(int hue, double saturation, double value)
     {
@@ -197,5 +255,11 @@ public sealed class RadarScreenFusionView : FrameworkElement
         var brush = new SolidColorBrush(color);
         brush.Freeze();
         return brush;
+    }
+    private static Pen FrozenPen(Brush brush, double thickness)
+    {
+        var pen = new Pen(brush, thickness);
+        pen.Freeze();
+        return pen;
     }
 }

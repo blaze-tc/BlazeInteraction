@@ -26,6 +26,11 @@
         <SolidColorBrush x:Key="InputBackgroundBrush" Color="{StaticResource InputBackgroundColor}"/>
         <SolidColorBrush x:Key="InputForegroundBrush" Color="{StaticResource InputForegroundColor}"/>
         <SolidColorBrush x:Key="DangerBrush" Color="{StaticResource DangerColor}"/>
+        <ControlTemplate x:Key="ValidationErrorTemplate">
+            <Border BorderBrush="{StaticResource DangerBrush}" BorderThickness="2" CornerRadius="3" ToolTip="{Binding ElementName=adorner, Path=AdornedElement.(Validation.Errors)[0].ErrorContent}">
+                <AdornedElementPlaceholder x:Name="adorner"/>
+            </Border>
+        </ControlTemplate>
 
         <Style TargetType="Window">
             <Setter Property="Background" Value="{StaticResource AppBackgroundBrush}"/>
@@ -76,9 +81,12 @@
             <Setter Property="Padding" Value="8,5"/>
             <Setter Property="MinHeight" Value="30"/>
             <Setter Property="CaretBrush" Value="{StaticResource PrimaryBrush}"/>
+            <Setter Property="Validation.ErrorTemplate" Value="{StaticResource ValidationErrorTemplate}"/>
+            <Setter Property="ToolTip" Value="{Binding RelativeSource={RelativeSource Self}, Path=(Validation.Errors)[0].ErrorContent}"/>
             <Style.Triggers>
                 <Trigger Property="IsKeyboardFocusWithin" Value="True"><Setter Property="BorderBrush" Value="{StaticResource PrimaryBrush}"/></Trigger>
                 <Trigger Property="IsEnabled" Value="False"><Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/><Setter Property="Opacity" Value="0.62"/></Trigger>
+                <Trigger Property="Validation.HasError" Value="True"><Setter Property="BorderBrush" Value="{StaticResource DangerBrush}"/><Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/></Trigger>
             </Style.Triggers>
         </Style>
 

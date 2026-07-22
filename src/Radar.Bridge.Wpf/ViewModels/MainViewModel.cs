@@ -13,6 +13,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private const int MaximumLogEntries = 500;
     private readonly RadarAppConfiguration _configuration;
     private readonly IRadarBridgeRuntime _runtime;
+    private readonly IFileDialogService _fileDialogs;
     private readonly SynchronizationContext _uiContext;
     private readonly Queue<string> _rawLogs = [];
     private readonly Dictionary<string, DateTimeOffset> _lastMoveLogAt = new(StringComparer.OrdinalIgnoreCase);
@@ -23,10 +24,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private UnityClientStatus _unityStatus;
     private bool _disposed;
 
-    public MainViewModel(RadarAppConfiguration configuration, IRadarBridgeRuntime runtime)
+    public MainViewModel(RadarAppConfiguration configuration, IRadarBridgeRuntime runtime, IFileDialogService? fileDialogs = null)
     {
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+        _fileDialogs = fileDialogs ?? new WpfFileDialogService();
         _uiContext = SynchronizationContext.Current ?? new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher);
         _unityStatus = runtime.UnityStatus;
         Screens = new ObservableCollection<ScreenItemViewModel>(_configuration.Screens.Select(screen => new ScreenItemViewModel(screen)));
@@ -49,6 +51,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         StepReplayCommand = new RelayCommand(() => WithSelectedReplaySensor((screen, sensor) => _runtime.StepReplay(screen.ScreenId, sensor.SensorId)), HasSelectedReplaySensor);
         StopReplayCommand = CreateCommand(_ => WithSelectedReplaySensorAsync((screen, sensor) => _runtime.StopReplayAsync(screen.ScreenId, sensor.SensorId)), HasSelectedReplaySensor);
         SaveConfigurationCommand = CreateCommand(SaveConfigurationAsync, () => _configuration.CanPersist);
+        StartRecordingCommand = CreateCommand(StartRecordingFromDialogAsync, CanOperateSelectedSensor);
+        StopRecordingCommand = CreateCommand(_ => StopRecordingAsync(), CanOperateSelectedSensor);
+        SelectReplayFileCommand = CreateCommand(ReplayFromDialogAsync, HasSelectedReplaySensor);
         ResetRegionCommand = new RelayCommand(() => SelectedSensor?.ResetRegion(), () => SelectedSensor is not null);
         BeginCalibrationCommand = new RelayCommand(() => SelectedSensor?.BeginCalibration(), () => SelectedSensor is not null);
         CaptureCalibrationPointCommand = new RelayCommand(() => SelectedSensor?.CaptureCurrentTargetForCalibration(), () => SelectedSensor?.HasMatchedPhysicalTarget == true);
@@ -125,6 +130,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ICommand StepReplayCommand { get; }
     public ICommand StopReplayCommand { get; }
     public ICommand SaveConfigurationCommand { get; }
+    public ICommand StartRecordingCommand { get; }
+    public ICommand StopRecordingCommand { get; }
+    public ICommand SelectReplayFileCommand { get; }
     public ICommand ResetRegionCommand { get; }
     public ICommand BeginCalibrationCommand { get; }
     public ICommand CaptureCalibrationPointCommand { get; }
@@ -156,10 +164,21 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
     public void ReceiveLogForTest(string entry) => ReceiveLog(entry);
 
+    private Task StartRecordingFromDialogAsync(CancellationToken token)
+    {
+        var path = _fileDialogs.SelectRecordingPath();
+        return string.IsNullOrWhiteSpace(path) ? Task.CompletedTask : StartRecordingAsync(path, token);
+    }
+    private Task ReplayFromDialogAsync(CancellationToken token)
+    {
+        var path = _fileDialogs.SelectReplayPath();
+        return string.IsNullOrWhiteSpace(path) ? Task.CompletedTask : ReplaySelectedSensorAsync(path, 1d, false, token);
+    }
+
     private AsyncRelayCommand CreateCommand(Func<CancellationToken, Task> action, Func<bool>? canExecute = null)
     {
         var command = new AsyncRelayCommand(() => action(CancellationToken.None), canExecute);
-        command.ExecutionFailed += exception => ReceiveLog($"Operation failed: {exception.Message}");
+        command.ExecutionFailed += exception => ReceiveLog($"{CurrentLogTag()} Operation failed: {exception.Message}");
         return command;
     }
 
@@ -199,11 +218,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     private async Task SaveConfigurationAsync(CancellationToken token)
     {
-        if (!_configuration.CanPersist) { ReceiveLog("Configuration save skipped: rejected load state."); return; }
+        if (!_configuration.CanPersist) { ReceiveLog("[SYSTEM] Configuration save skipped: rejected load state."); return; }
         var validation = ConfigurationValidator.ValidateAndNormalize(_configuration);
-        if (!validation.IsValid) { ReceiveLog($"Configuration validation failed: {string.Join(" | ", validation.Errors)}"); return; }
+        if (!validation.IsValid) { ReceiveLog("[SYSTEM] Configuration validation failed: " + string.Join(" | ", validation.Errors)); return; }
         await _runtime.ApplyConfigurationAsync(token).ConfigureAwait(true);
-        ReceiveLog("Configuration applied.");
+        ReceiveLog(SelectedScreen is null ? "[SYSTEM] Configuration applied." : $"[{SelectedScreen.ScreenId}/FUSION] Configuration applied.");
     }
 
     private bool CanOperateSelectedSensor() => SelectedScreen is { IsAssociated: true } && SelectedSensor is not null && SelectedScreen.Sensors.Contains(SelectedSensor);
@@ -264,13 +283,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
     private void NotifyCommandState()
     {
-        foreach (var command in new ICommand[] { AddSensorCommand, DeleteSensorCommand, DeleteOrphanedScreenConfigurationCommand, RestoreUnityResolutionCommand, ConnectSensorCommand, DisconnectSensorCommand, ConnectScreenCommand, DisconnectScreenCommand, StartReplayCommand, PauseReplayCommand, ResumeReplayCommand, StepReplayCommand, StopReplayCommand, SaveConfigurationCommand, ResetRegionCommand, BeginCalibrationCommand, CaptureCalibrationPointCommand, UndoCalibrationPointCommand, SaveCalibrationCommand, ClearCalibrationCommand, AddMaskedRegionCommand, DeleteMaskedRegionCommand })
+        foreach (var command in new ICommand[] { AddSensorCommand, DeleteSensorCommand, DeleteOrphanedScreenConfigurationCommand, RestoreUnityResolutionCommand, ConnectSensorCommand, DisconnectSensorCommand, ConnectScreenCommand, DisconnectScreenCommand, StartReplayCommand, PauseReplayCommand, ResumeReplayCommand, StepReplayCommand, StopReplayCommand, SaveConfigurationCommand, StartRecordingCommand, StopRecordingCommand, SelectReplayFileCommand, ResetRegionCommand, BeginCalibrationCommand, CaptureCalibrationPointCommand, UndoCalibrationPointCommand, SaveCalibrationCommand, ClearCalibrationCommand, AddMaskedRegionCommand, DeleteMaskedRegionCommand })
         {
             if (command is RelayCommand relay) relay.NotifyCanExecuteChanged();
             else if (command is AsyncRelayCommand asyncRelay) asyncRelay.NotifyCanExecuteChanged();
         }
         OnPropertyChanged(nameof(CanEditSelectedScreen));
     }
+    private string CurrentLogTag() => SelectedScreen is null ? "[SYSTEM]" : SelectedSensor is null ? $"[{SelectedScreen.ScreenId}/FUSION]" : $"[{SelectedScreen.ScreenId}/{SelectedSensor.SensorId}]";
 
     public void Dispose()
     {

@@ -11,6 +11,26 @@ namespace Yuexin.Radar.Bridge.Wpf.Tests;
 public sealed class MainViewModelTests
 {
     [Fact]
+    public async Task ReplayDialogCommand_OnlyOpensForAssociatedReplaySensor()
+    {
+        var dialogs = new FakeDialogs { ReplayPath = "sample.radarrec" };
+        var runtime = new TestRuntime();
+        using var viewModel = new MainViewModel(ThreeScreenFourSensorConfiguration(), runtime, dialogs);
+
+        viewModel.SelectedScreen = viewModel.Screens.Single(screen => screen.ScreenId == "left");
+        Assert.False(viewModel.SelectReplayFileCommand.CanExecute(null));
+        Assert.Equal(0, dialogs.ReplayDialogCount);
+
+        viewModel.SelectedScreen = viewModel.Screens.Single(screen => screen.ScreenId == "front");
+        viewModel.SelectedSensor!.SourceMode = RadarSensorSourceMode.Replay;
+        Assert.True(viewModel.SelectReplayFileCommand.CanExecute(null));
+        viewModel.SelectReplayFileCommand.Execute(null);
+        await Task.Delay(25);
+
+        Assert.Equal(1, dialogs.ReplayDialogCount);
+        Assert.Equal(1, runtime.ReplayCallCount);
+    }
+    [Fact]
     public async Task ConnectSensorCommand_TargetsCurrentScreenAndSensor()
     {
         var runtime = new TestRuntime();
@@ -332,5 +352,13 @@ public sealed class MainViewModelTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         public void PublishLog(string entry) => LogReceived?.Invoke(entry);
         public void PublishSensorSnapshot(RadarSensorRuntimeSnapshot snapshot) => SensorSnapshotUpdated?.Invoke(snapshot);
+    }
+
+    private sealed class FakeDialogs : IFileDialogService
+    {
+        public string? ReplayPath { get; init; }
+        public int ReplayDialogCount { get; private set; }
+        public string? SelectRecordingPath() => null;
+        public string? SelectReplayPath() { ReplayDialogCount++; return ReplayPath; }
     }
 }

@@ -24,6 +24,10 @@ public sealed class RadarVisualizationLayoutTests
         Assert.Equal("{Binding SelectedScreen.LatestSnapshot}", (string?)fusion.Attribute("Snapshot"));
         Assert.Equal("{Binding SelectedScreen.Sensors}", (string?)fusion.Attribute("Sensors"));
         Assert.Equal("{Binding SelectedSensor.SensorId}", (string?)fusion.Attribute("SelectedSensorId"));
+        Assert.Equal("{Binding SelectedSensor.RegionVertices}", (string?)raw.Attribute("RegionVertices"));
+        Assert.Equal("{Binding SelectedSensor.MaskedPolygons}", (string?)raw.Attribute("MaskedRegions"));
+        Assert.Equal("True", (string?)raw.Attribute("IsRegionEditable"));
+        Assert.Equal("OnRegionVertexMoved", (string?)raw.Attribute("RegionVertexMoved"));
     }
 
     [Fact]
@@ -48,6 +52,25 @@ public sealed class RadarVisualizationLayoutTests
         Assert.DoesNotContain("RadarRuntimeSnapshot", viewModel);
         Assert.DoesNotContain("public string RadarIp", viewModel);
         Assert.DoesNotContain("record RadarRuntimeSnapshot", runtime);
+    }
+
+    [Fact]
+    public void MainWindow_ExposesScopedConfigurationAndFileCommands()
+    {
+        var xaml = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "src", "Radar.Bridge.Wpf", "MainWindow.xaml"));
+        foreach (var binding in new[]
+        {
+            "SelectedSensor.Enabled", "SelectedSensor.SourceMode", "SelectedSensor.LocalIp",
+            "SelectedSensor.BaseGapMeters", "SelectedSensor.OutputX", "SelectedScreen.InteractionMode",
+            "SaveConfigurationCommand", "BeginCalibrationCommand", "UndoCalibrationPointCommand",
+            "ClearCalibrationCommand", "DeleteMaskedRegionCommand", "StartRecordingCommand",
+            "SelectReplayFileCommand", "PauseReplayCommand", "StepReplayCommand", "StopReplayCommand"
+        })
+        {
+            Assert.Contains(binding, xaml);
+        }
+        Assert.DoesNotContain("Click=\"OnReplayClick\"", xaml);
+        Assert.DoesNotContain("Click=\"OnStartRecordingClick\"", xaml);
     }
 
     private static string FindRepositoryRoot()

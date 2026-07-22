@@ -19,6 +19,7 @@ public sealed class ScreenItemViewModel : ObservableObject
     }
 
     public RadarScreenConfiguration Configuration => _configuration;
+    public IReadOnlyList<RadarInteractionMode> AvailableInteractionModes { get; } = Enum.GetValues<RadarInteractionMode>();
     public string ScreenId => _configuration.ScreenId;
     public string UnityDisplayName => _configuration.UnityDisplayName;
     public int UnityOrder => _configuration.UnityOrder;

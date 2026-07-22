@@ -26,6 +26,7 @@ public sealed class SensorItemViewModel : ObservableObject
 
     public RadarSensorConfiguration Configuration => _configuration;
     public IReadOnlyList<RadarModel> AvailableModels { get; } = [RadarModel.F10, RadarModel.F20];
+    public IReadOnlyList<RadarSensorSourceMode> AvailableSourceModes { get; } = Enum.GetValues<RadarSensorSourceMode>();
     public string SensorId => _configuration.SensorId;
     public string DisplayName { get => _configuration.DisplayName; set => Set(value, () => _configuration.DisplayName, item => _configuration.DisplayName = item); }
     public bool Enabled { get => _configuration.Enabled; set => Set(value, () => _configuration.Enabled, item => _configuration.Enabled = item); }

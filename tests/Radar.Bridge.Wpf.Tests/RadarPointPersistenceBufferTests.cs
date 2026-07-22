@@ -6,6 +6,23 @@ namespace Yuexin.Radar.Bridge.Wpf.Tests;
 public sealed class RadarPointPersistenceBufferTests
 {
     [Fact]
+    public void Clear_AllowsFirstFrameFromAnotherSensorToReuseSequence()
+    {
+        var buffer = new RadarPointPersistenceBuffer(TimeSpan.FromMilliseconds(220), 6);
+        var timestamp = DateTimeOffset.UtcNow;
+        var first = new RadarPoint(1, 1, 1, 1, 1);
+        var second = new RadarPoint(2, 2, 1, 1, 1);
+
+        buffer.Add(10, timestamp, [first]);
+        buffer.Clear();
+        buffer.Add(10, timestamp, [second]);
+
+        var layer = Assert.Single(buffer.GetLayers(timestamp));
+        Assert.Single(layer.Points);
+        Assert.Equal(second, layer.Points[0]);
+        Assert.Empty(buffer.GetLayers(timestamp.AddMilliseconds(221)));
+    }
+    [Fact]
     public void GetLayers_KeepsRecentFramesWithNewestFrameFullyOpaque()
     {
         var buffer = new RadarPointPersistenceBuffer(TimeSpan.FromMilliseconds(220), maximumFrames: 6);

@@ -112,8 +112,11 @@
                             <controls:RadarPointCloudView x:Name="RawRadarView"
                                                           Snapshot="{Binding SelectedSensor.Snapshot}"
                                                           MaximumRangeMeters="{Binding SelectedSensor.VisualizationRangeMeters}"
+                                                          RegionVertices="{Binding SelectedSensor.RegionVertices}"
+                                                          MaskedRegions="{Binding SelectedSensor.MaskedPolygons}"
                                                           ShowRawPoints="True" ShowValidPoints="True" ShowClusters="False"
-                                                          ShowFilterOverlay="False" ShowBlindZone="False" IsRegionEditable="False"/>
+                                                          ShowFilterOverlay="True" ShowBlindZone="False" IsRegionEditable="True"
+                                                          RegionVertexMoved="OnRegionVertexMoved"/>
                         </Border>
                         <TextBlock Grid.Row="2" Text="{Binding SelectedSensor.Snapshot.RawPoints.Count, StringFormat=原始点：{0}}" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center"/>
                     </Grid>
@@ -161,6 +164,7 @@
                                 </Grid>
                                 <TextBlock Text="最大关联距离 (px)" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedScreen.MaximumAssociationDistancePixels, UpdateSourceTrigger=PropertyChanged}"/>
                                 <TextBlock Text="平滑系数" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedScreen.SmoothingAlpha, UpdateSourceTrigger=PropertyChanged}"/>
+                                <TextBlock Text="交互模式" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><ComboBox ItemsSource="{Binding SelectedScreen.AvailableInteractionModes}" SelectedItem="{Binding SelectedScreen.InteractionMode}"/>
                                 <TextBlock Text="停留时长 (ms)" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedScreen.DwellMilliseconds, UpdateSourceTrigger=PropertyChanged}"/>
                             </StackPanel>
                         </ScrollViewer>
@@ -171,11 +175,16 @@
                                 <TextBlock Text="{Binding SelectedSensor.DisplayName}" Style="{StaticResource SectionTitleStyle}"/>
                                 <TextBlock Text="数据源 / 型号" Style="{StaticResource CaptionStyle}"/>
                                 <ComboBox ItemsSource="{Binding SelectedSensor.AvailableModels}" SelectedItem="{Binding SelectedSensor.DeviceModel}"/>
+                                <CheckBox Content="启用此雷达" IsChecked="{Binding SelectedSensor.Enabled}"/>
+                                <TextBlock Text="数据源模式" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/>
+                                <ComboBox ItemsSource="{Binding SelectedSensor.AvailableSourceModes}" SelectedItem="{Binding SelectedSensor.SourceMode}"/>
                                 <TextBlock Text="雷达 IP / 端口" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/>
                                 <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="80"/></Grid.ColumnDefinitions>
                                     <TextBox Text="{Binding SelectedSensor.RadarIp, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,4,0"/>
                                     <TextBox Grid.Column="1" Text="{Binding SelectedSensor.Port, UpdateSourceTrigger=PropertyChanged}" Margin="4,0,0,0"/>
                                 </Grid>
+                                <TextBlock Text="本机网卡 IP" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/>
+                                <TextBox Text="{Binding SelectedSensor.LocalIp, UpdateSourceTrigger=PropertyChanged}"/>
                                 <CheckBox Content="自动重连" IsChecked="{Binding SelectedSensor.AutoReconnect}"/>
                                 <Separator/>
                                 <TextBlock Text="物理范围 / 变换" Style="{StaticResource SectionTitleStyle}"/>
@@ -187,6 +196,14 @@
                                 <TextBlock Text="旋转角度" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedSensor.RotationDegrees, UpdateSourceTrigger=PropertyChanged}"/>
                                 <StackPanel Orientation="Horizontal"><CheckBox Content="翻转 X" IsChecked="{Binding SelectedSensor.FlipX}" Margin="0,5,16,0"/><CheckBox Content="翻转 Y" IsChecked="{Binding SelectedSensor.FlipY}" Margin="0,5,0,0"/></StackPanel>
                                 <Separator/>
+                                <TextBlock Text="聚类" Style="{StaticResource SectionTitleStyle}"/>
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,4,0"><TextBlock Text="基础间隙" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.BaseGapMeters, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}"/></StackPanel>
+                                    <StackPanel Grid.Column="1" Margin="4,0,0,0"><TextBlock Text="距离缩放" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.DistanceScale, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}"/></StackPanel>
+                                </Grid>
+                                <TextBlock Text="最少点数" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedSensor.MinimumClusterPointCount, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}"/>
+                                <TextBlock Text="最大宽度" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedSensor.MaximumClusterWidthMeters, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}"/>
+                                <Separator/>
                                 <TextBlock Text="输出矩形 (px)" Style="{StaticResource SectionTitleStyle}"/>
                                 <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
                                     <StackPanel Margin="0,0,4,4"><TextBlock Text="X" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.OutputX, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
@@ -196,14 +213,15 @@
                                 </Grid>
                                 <Separator/>
                                 <TextBlock Text="区域 / 校准" Style="{StaticResource SectionTitleStyle}"/>
-                                <StackPanel Orientation="Horizontal"><Button Content="重置区域" Command="{Binding ResetRegionCommand}" Margin="0,0,5,0"/><Button Content="添加屏蔽" Command="{Binding AddMaskedRegionCommand}"/></StackPanel>
-                                <StackPanel Orientation="Horizontal" Margin="0,6,0,0"><Button Content="开始标定" Command="{Binding BeginCalibrationCommand}" Margin="0,0,5,0"/><Button Content="采集点" Command="{Binding CaptureCalibrationPointCommand}" Margin="0,0,5,0"/><Button Content="保存" Command="{Binding SaveCalibrationCommand}"/></StackPanel>
+                                <StackPanel Orientation="Horizontal"><Button Content="重置区域" Command="{Binding ResetRegionCommand}" Margin="0,0,5,0"/><Button Content="添加屏蔽" Command="{Binding AddMaskedRegionCommand}" Margin="0,0,5,0"/><Button Content="删除屏蔽" Command="{Binding DeleteMaskedRegionCommand}"/></StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,6,0,0"><Button Content="开始标定" Command="{Binding BeginCalibrationCommand}" Margin="0,0,5,0"/><Button Content="采集点" Command="{Binding CaptureCalibrationPointCommand}" Margin="0,0,5,0"/><Button Content="撤销" Command="{Binding UndoCalibrationPointCommand}" Margin="0,0,5,0"/><Button Content="保存" Command="{Binding SaveCalibrationCommand}" Margin="0,0,5,0"/><Button Content="清除" Command="{Binding ClearCalibrationCommand}"/></StackPanel>
                                 <TextBlock Text="{Binding SelectedSensor.CalibrationStatus}" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/>
                                 <Separator/>
                                 <TextBlock Text="录制 / 回放" Style="{StaticResource SectionTitleStyle}"/>
-                                <Button Content="开始录制" Click="OnStartRecordingClick"/><Button Content="停止录制" Click="OnStopRecordingClick" Margin="0,6,0,0"/>
-                                <Button Content="选择回放文件" Click="OnReplayClick" Margin="0,6,0,0"/>
-                                <StackPanel Orientation="Horizontal" Margin="0,6,0,0"><Button Content="暂停" Click="OnPauseReplayClick" Margin="0,0,5,0"/><Button Content="继续" Click="OnResumeReplayClick" Margin="0,0,5,0"/><Button Content="停止" Click="OnStopReplayClick"/></StackPanel>
+                                <Button Content="开始录制" Command="{Binding StartRecordingCommand}"/><Button Content="停止录制" Command="{Binding StopRecordingCommand}" Margin="0,6,0,0"/>
+                                <Button Content="选择回放文件" Command="{Binding SelectReplayFileCommand}" Margin="0,6,0,0"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,6,0,0"><Button Content="暂停" Command="{Binding PauseReplayCommand}" Margin="0,0,5,0"/><Button Content="继续" Command="{Binding ResumeReplayCommand}" Margin="0,0,5,0"/><Button Content="单步" Command="{Binding StepReplayCommand}" Margin="0,0,5,0"/><Button Content="停止" Command="{Binding StopReplayCommand}"/></StackPanel>
+                                <Button Content="保存并应用配置" Command="{Binding SaveConfigurationCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,10,0,0"/>
                             </StackPanel>
                         </ScrollViewer>
                     </TabItem>

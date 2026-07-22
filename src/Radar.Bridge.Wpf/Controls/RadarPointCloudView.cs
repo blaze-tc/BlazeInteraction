@@ -27,6 +27,7 @@ public sealed class RadarPointCloudView : FrameworkElement
     private readonly RadarPointPersistenceBuffer _rawPointFrames = new(PointPersistenceDuration, 6);
     private readonly RadarPointPersistenceBuffer _validPointFrames = new(PointPersistenceDuration, 6);
     private readonly DispatcherTimer _persistenceTimer;
+    private string? _snapshotSensorId;
     private int _draggedVertex = -1;
 
     public static readonly DependencyProperty SnapshotProperty = DependencyProperty.Register(
@@ -74,7 +75,11 @@ public sealed class RadarPointCloudView : FrameworkElement
                 InvalidateVisual();
         };
         Loaded += (_, _) => _persistenceTimer.Start();
-        Unloaded += (_, _) => _persistenceTimer.Stop();
+        Unloaded += (_, _) =>
+        {
+            _persistenceTimer.Stop();
+            ClearPersistence();
+        };
     }
 
     public RadarSensorRuntimeSnapshot? Snapshot { get => (RadarSensorRuntimeSnapshot?)GetValue(SnapshotProperty); set => SetValue(SnapshotProperty, value); }
@@ -203,11 +208,26 @@ public sealed class RadarPointCloudView : FrameworkElement
         var control = (RadarPointCloudView)dependencyObject;
         if (args.NewValue is RadarSensorRuntimeSnapshot snapshot)
         {
+            if (!string.Equals(control._snapshotSensorId, snapshot.SensorId, StringComparison.OrdinalIgnoreCase))
+            {
+                control.ClearPersistence();
+                control._snapshotSensorId = snapshot.SensorId;
+            }
             var at = DateTimeOffset.UtcNow;
             if (control.ShowRawPoints) control._rawPointFrames.Add(snapshot.Sequence, at, snapshot.RawPoints);
             if (control.ShowValidPoints) control._validPointFrames.Add(snapshot.Sequence, at, snapshot.ValidPoints);
         }
+        else
+        {
+            control.ClearPersistence();
+            control._snapshotSensorId = null;
+        }
         control.InvalidateVisual();
+    }
+    private void ClearPersistence()
+    {
+        _rawPointFrames.Clear();
+        _validPointFrames.Clear();
     }
     private static void OnRegionVerticesChanged(DependencyObject dependencyObject, DependencyPropertyChangedEventArgs args)
     {
