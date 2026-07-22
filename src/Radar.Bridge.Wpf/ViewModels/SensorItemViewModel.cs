@@ -2,6 +2,9 @@ using Yuexin.Radar.Bridge.Wpf.Services;
 using Yuexin.Radar.Configuration;
 using Yuexin.Radar.Contracts;
 using RadarPixelRect = Yuexin.Radar.Configuration.RadarPixelRect;
+using Yuexin.Radar.Processing;
+using System.Collections.ObjectModel;
+using Yuexin.Radar.Device;
 
 namespace Yuexin.Radar.Bridge.Wpf.ViewModels;
 
@@ -13,10 +16,12 @@ public sealed class SensorItemViewModel : ObservableObject
     private RadarSensorRuntimeState _runtimeState;
     private string _calibrationStatus = "Not calibrated";
     private string _calibrationStep = "Not started";
+    private readonly List<Point2> _capturedCalibrationPoints = [];
 
     public SensorItemViewModel(RadarSensorConfiguration configuration)
     {
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+        RegionVertices = new ObservableCollection<Point2>(_configuration.Range.ActivePolygon.Select(point => new Point2(point.X, point.Y)));
     }
 
     public RadarSensorConfiguration Configuration => _configuration;
@@ -40,6 +45,7 @@ public sealed class SensorItemViewModel : ObservableObject
     public float MinimumAngleDegrees { get => _configuration.Range.MinimumAngleDegrees; set => Set(value, () => _configuration.Range.MinimumAngleDegrees, item => _configuration.Range.MinimumAngleDegrees = item); }
     public float MaximumAngleDegrees { get => _configuration.Range.MaximumAngleDegrees; set => Set(value, () => _configuration.Range.MaximumAngleDegrees, item => _configuration.Range.MaximumAngleDegrees = item); }
     public IReadOnlyList<RadarPoint2> ActivePolygon => _configuration.Range.ActivePolygon;
+    public ObservableCollection<Point2> RegionVertices { get; }
     public IReadOnlyList<IReadOnlyList<RadarPoint2>> MaskedPolygons => _configuration.Range.MaskedPolygons;
     public float BaseGapMeters { get => _configuration.Clustering.BaseGapMeters; set => Set(value, () => _configuration.Clustering.BaseGapMeters, item => _configuration.Clustering.BaseGapMeters = item); }
     public float DistanceScale { get => _configuration.Clustering.DistanceScale; set => Set(value, () => _configuration.Clustering.DistanceScale, item => _configuration.Clustering.DistanceScale = item); }
@@ -72,7 +78,41 @@ public sealed class SensorItemViewModel : ObservableObject
     }
 
     public void ApplyRuntimeState(RadarSensorRuntimeState state) => RuntimeState = state;
-    public void NotifyRegionChanged() => OnPropertyChanged(nameof(ActivePolygon));
+    public void UpdateRegionVertex(int index, Point2 value)
+    {
+        if (index < 0 || index >= RegionVertices.Count) throw new ArgumentOutOfRangeException(nameof(index));
+        RegionVertices[index] = value;
+        SyncRegion();
+    }
+    public void ResetRegion()
+    {
+        var extent = MathF.Min(5f, RadarModelProfileFactory.Create(DeviceModel).MaximumDistanceMeters) / 2f;
+        RegionVertices.Clear();
+        RegionVertices.Add(new(-extent, extent)); RegionVertices.Add(new(extent, extent)); RegionVertices.Add(new(extent, -extent)); RegionVertices.Add(new(-extent, -extent));
+        SyncRegion();
+    }
+    public bool AddMaskedRegionAtCurrentTarget()
+    {
+        var target = Snapshot?.Detections.FirstOrDefault();
+        if (target is null) return false;
+        var center = new Point2(target.Value.PixelX, target.Value.PixelY);
+        const float half = .2f;
+        _configuration.Range.MaskedPolygons.Add([new(center.X-half, center.Y+half), new(center.X+half, center.Y+half), new(center.X+half, center.Y-half), new(center.X-half, center.Y-half)]);
+        OnPropertyChanged(nameof(MaskedPolygons)); return true;
+    }
+    public bool DeleteLastMaskedRegion() { if (_configuration.Range.MaskedPolygons.Count == 0) return false; _configuration.Range.MaskedPolygons.RemoveAt(_configuration.Range.MaskedPolygons.Count-1); OnPropertyChanged(nameof(MaskedPolygons)); return true; }
+    public void BeginCalibration() { _capturedCalibrationPoints.Clear(); CalibrationStatus = "Calibration in progress 0/4"; CalibrationStep = "Collect top-left"; }
+    public bool CaptureCalibrationPoint(Point2 point) { if (_capturedCalibrationPoints.Count >= 4) return false; _capturedCalibrationPoints.Add(point); CalibrationStatus = $"Calibration in progress {_capturedCalibrationPoints.Count}/4"; CalibrationStep = _capturedCalibrationPoints.Count == 4 ? "Four points collected" : "Collect next corner"; return true; }
+    public bool CaptureCurrentTargetForCalibration() { var target = Snapshot?.Detections.FirstOrDefault(); return target is not null && CaptureCalibrationPoint(new(target.Value.PixelX, target.Value.PixelY)); }
+    public void UndoCalibrationPoint() { if (_capturedCalibrationPoints.Count > 0) _capturedCalibrationPoints.RemoveAt(_capturedCalibrationPoints.Count-1); CalibrationStatus = $"Calibration in progress {_capturedCalibrationPoints.Count}/4"; }
+    public bool SaveCalibration()
+    {
+        if (!HomographyCalibration.TryCreate(_capturedCalibrationPoints, out var calibration, out var error)) { CalibrationStatus = error ?? "Calibration failed"; return false; }
+        _configuration.Calibration = new RadarCalibrationConfiguration { IsValid = true, DeviceModel = DeviceModel, PhysicalCorners = _capturedCalibrationPoints.Select(point => new RadarPoint2(point.X, point.Y)).ToList(), HomographyMatrix = calibration!.Matrix.ToList(), CreatedAt = DateTimeOffset.UtcNow, MaximumCornerError = calibration.MaximumCornerError, TransformSnapshot = new RadarTransformConfiguration { RotationDegrees = RotationDegrees, FlipX = FlipX, FlipY = FlipY, OffsetXMeters = OffsetXMeters, OffsetYMeters = OffsetYMeters } };
+        CalibrationStatus = "Calibrated"; CalibrationStep = "Calibration complete"; return true;
+    }
+    public void ClearCalibration() { _capturedCalibrationPoints.Clear(); _configuration.Calibration = new RadarCalibrationConfiguration(); CalibrationStatus = "Not calibrated"; CalibrationStep = "Not started"; }
+    private void SyncRegion() { _configuration.Range.ActivePolygon = RegionVertices.Select(point => new RadarPoint2(point.X, point.Y)).ToList(); OnPropertyChanged(nameof(ActivePolygon)); }
     private static bool ValidateCopy(RadarAppConfiguration configuration)
     {
         var json = System.Text.Json.JsonSerializer.Serialize(configuration);

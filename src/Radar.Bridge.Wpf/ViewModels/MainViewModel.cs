@@ -24,7 +24,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private string _selectedLogSensorId = "*";
     private UnityClientStatus _unityStatus;
     private bool _disposed;
-    private readonly ObservableCollection<Point2> _regionVertices = [];
 
     public MainViewModel(RadarAppConfiguration configuration, IRadarBridgeRuntime runtime)
     {
@@ -57,12 +56,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         StartSimulationCommand = StartAllSimulationCommand;
         StopSimulationCommand = DisconnectAllCommand;
         ResetRegionCommand = new RelayCommand(ResetSelectedRegion, () => SelectedSensor is not null);
-        BeginCalibrationCommand = new RelayCommand(() => { if (SelectedSensor is not null) SelectedSensor.CalibrationStep = "Collect calibration corners"; }, () => SelectedSensor is not null);
-        CaptureCalibrationPointCommand = new RelayCommand(() => { if (SelectedSensor is not null) SelectedSensor.CalibrationStatus = "Capture a point in the selected sensor view"; }, () => SelectedSensor is not null);
-        UndoCalibrationPointCommand = new RelayCommand(() => { if (SelectedSensor is not null) SelectedSensor.CalibrationStatus = "Calibration point removed"; }, () => SelectedSensor is not null);
-        SaveCalibrationCommand = new RelayCommand(() => { if (SelectedSensor is not null) SelectedSensor.CalibrationStatus = "Calibration saved"; }, () => SelectedSensor is not null);
-        ClearCalibrationCommand = new RelayCommand(() => { if (SelectedSensor is not null) SelectedSensor.Configuration.Calibration = new RadarCalibrationConfiguration(); }, () => SelectedSensor is not null);
-        AddMaskedRegionCommand = new RelayCommand(AddSelectedMaskedRegion, () => SelectedSensor is not null);
+        BeginCalibrationCommand = new RelayCommand(() => SelectedSensor?.BeginCalibration(), () => SelectedSensor is not null);
+        CaptureCalibrationPointCommand = new RelayCommand(() => SelectedSensor?.CaptureCurrentTargetForCalibration(), () => SelectedSensor?.Snapshot?.Detections.Count > 0);
+        UndoCalibrationPointCommand = new RelayCommand(() => SelectedSensor?.UndoCalibrationPoint(), () => SelectedSensor is not null);
+        SaveCalibrationCommand = new RelayCommand(() => SelectedSensor?.SaveCalibration(), () => SelectedSensor is not null);
+        ClearCalibrationCommand = new RelayCommand(() => SelectedSensor?.ClearCalibration(), () => SelectedSensor is not null);
+        AddMaskedRegionCommand = new RelayCommand(() => SelectedSensor?.AddMaskedRegionAtCurrentTarget(), () => SelectedSensor?.Snapshot?.Detections.Count > 0);
         DeleteMaskedRegionCommand = new RelayCommand(DeleteSelectedMaskedRegion, () => SelectedSensor?.Configuration.Range.MaskedPolygons.Count > 0);
 
         _runtime.SensorSnapshotUpdated += OnSensorSnapshotUpdated;
@@ -90,8 +89,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         set
         {
             var owned = value is null || SelectedScreen?.Sensors.Contains(value) == true ? value : null;
+            if (ReferenceEquals(_selectedSensor, owned)) return;
+            if (_selectedSensor is not null) _selectedSensor.PropertyChanged -= OnSelectedSensorPropertyChanged;
             if (!SetProperty(ref _selectedSensor, owned)) return;
-            RebuildRegionVertices();
+            if (_selectedSensor is not null) _selectedSensor.PropertyChanged += OnSelectedSensorPropertyChanged;
             OnPropertyChanged(string.Empty);
             NotifyCommandState();
         }
@@ -147,7 +148,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public long CrcErrorCount => SelectedSensor?.CrcErrorCount ?? 0;
     public long DiscardedByteCount => SelectedSensor?.Snapshot?.DiscardedByteCount ?? 0;
     public ObservableCollection<string> LogEntries => VisibleLogEntries;
-    public ObservableCollection<Point2> RegionVertices => _regionVertices;
+    public ObservableCollection<Point2> RegionVertices => SelectedSensor?.RegionVertices ?? [];
     public int MaskedRegionCount => SelectedSensor?.Configuration.Range.MaskedPolygons.Count ?? 0;
     public IReadOnlyList<IReadOnlyList<RadarPoint2>> MaskedRegions => SelectedSensor?.MaskedPolygons ?? [];
 
@@ -195,36 +196,23 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public void UpdateRegionVertex(int index, Point2 value)
     {
         if (SelectedSensor is null || index < 0 || index >= SelectedSensor.Configuration.Range.ActivePolygon.Count) return;
-        SelectedSensor.Configuration.Range.ActivePolygon[index] = new RadarPoint2(value.X, value.Y);
-        SelectedSensor.NotifyRegionChanged();
+        SelectedSensor.UpdateRegionVertex(index, value);
     }
 
     private void ResetSelectedRegion()
     {
         if (SelectedSensor is null) return;
-        var range = MathF.Min(5f, ModelMaximumDistanceMeters) / 2f;
-        SelectedSensor.Configuration.Range.ActivePolygon = [new(-range, range), new(range, range), new(range, -range), new(-range, -range)];
-        RebuildRegionVertices();
-        SelectedSensor.NotifyRegionChanged();
+        SelectedSensor.ResetRegion();
     }
     private void AddSelectedMaskedRegion()
     {
-        if (SelectedSensor is null) return;
-        SelectedSensor.Configuration.Range.MaskedPolygons.Add([new(-.2f, .2f), new(.2f, .2f), new(.2f, -.2f), new(-.2f, -.2f)]);
-        OnPropertyChanged(nameof(MaskedRegionCount)); OnPropertyChanged(nameof(MaskedRegions));
+        SelectedSensor?.AddMaskedRegionAtCurrentTarget();
     }
     private void DeleteSelectedMaskedRegion()
     {
-        if (SelectedSensor?.Configuration.Range.MaskedPolygons is not { Count: > 0 } polygons) return;
-        polygons.RemoveAt(polygons.Count - 1);
-        OnPropertyChanged(nameof(MaskedRegionCount)); OnPropertyChanged(nameof(MaskedRegions));
+        SelectedSensor?.DeleteLastMaskedRegion();
     }
-    private void RebuildRegionVertices()
-    {
-        _regionVertices.Clear();
-        if (SelectedSensor is not null) foreach (var point in SelectedSensor.Configuration.Range.ActivePolygon) _regionVertices.Add(new Point2(point.X, point.Y));
-        OnPropertyChanged(nameof(RegionVertices));
-    }
+    private void OnSelectedSensorPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) { OnPropertyChanged(string.Empty); NotifyCommandState(); }
     public void ReceiveLogForTest(string entry) => ReceiveLog(entry);
 
     private async Task AddSensorAsync(CancellationToken _)
@@ -356,5 +344,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _runtime.SensorStateChanged -= OnSensorStateChanged;
         _runtime.LogReceived -= OnLogReceived;
         _runtime.UnityStatusChanged -= OnUnityStatusChanged;
+        if (_selectedSensor is not null) _selectedSensor.PropertyChanged -= OnSelectedSensorPropertyChanged;
     }
 }
