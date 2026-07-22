@@ -6,7 +6,7 @@ using Yuexin.Radar.Contracts;
 namespace Yuexin.Radar.Bridge.Wpf.ViewModels;
 
 /// <summary>Owns the editable configuration and derived state of one Unity screen.</summary>
-public sealed class ScreenItemViewModel : ObservableObject
+public sealed class ScreenItemViewModel : ObservableObject, System.ComponentModel.IDataErrorInfo
 {
     private readonly RadarScreenConfiguration _configuration;
     private RadarScreenRuntimeSnapshot? _latestSnapshot;
@@ -45,6 +45,17 @@ public sealed class ScreenItemViewModel : ObservableObject
     public int OnlineSensorCount => Sensors.Count(sensor => sensor.RuntimeState == Services.RadarSensorRuntimeState.Running);
     public int FusedTargetCount { get; private set; }
     public bool HasValidationErrors => !ValidateCopy(new RadarAppConfiguration { Screens = [_configuration] });
+    public string Error => string.Empty;
+    public string this[string columnName] => columnName switch
+    {
+        nameof(WidthPixels) or nameof(HeightPixels) when WidthPixels is < 1 or > 32768 || HeightPixels is < 1 or > 32768 => "Resolution must be between 1 and 32768 pixels.",
+        nameof(OutputRateHz) when OutputRateHz is < 1 or > 240 => "Output rate must be between 1 and 240 Hz.",
+        nameof(SensorDataMaxAgeMilliseconds) when SensorDataMaxAgeMilliseconds is < 10 or > 5000 => "Sensor data age must be between 10 and 5000 ms.",
+        nameof(FusionDistancePixels) when !float.IsFinite(FusionDistancePixels) || FusionDistancePixels <= 0f => "Fusion distance must be positive.",
+        nameof(MaximumAssociationDistancePixels) when !float.IsFinite(MaximumAssociationDistancePixels) || MaximumAssociationDistancePixels <= 0f => "Association distance must be positive.",
+        nameof(SmoothingAlpha) when !float.IsFinite(SmoothingAlpha) || SmoothingAlpha is <= 0f or > 1f => "Smoothing alpha must be in (0, 1].",
+        _ => string.Empty
+    };
 
     public SensorItemViewModel AddSensor(RadarSensorConfiguration sensor)
     {

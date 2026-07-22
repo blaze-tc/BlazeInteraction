@@ -9,7 +9,7 @@ using Yuexin.Radar.Device;
 namespace Yuexin.Radar.Bridge.Wpf.ViewModels;
 
 /// <summary>Owns the editable configuration and live state of one sensor.</summary>
-public sealed class SensorItemViewModel : ObservableObject
+public sealed class SensorItemViewModel : ObservableObject, System.ComponentModel.IDataErrorInfo
 {
     private readonly RadarSensorConfiguration _configuration;
     private RadarSensorRuntimeSnapshot? _snapshot;
@@ -71,6 +71,18 @@ public sealed class SensorItemViewModel : ObservableObject
     public string CalibrationStatus { get => _calibrationStatus; set => SetProperty(ref _calibrationStatus, value); }
     public string CalibrationStep { get => _calibrationStep; set => SetProperty(ref _calibrationStep, value); }
     public bool HasValidationErrors => !ValidateCopy(new RadarAppConfiguration { Screens = [new RadarScreenConfiguration { IsAssociated = false, Sensors = [_configuration] }] });
+    public string Error => string.Empty;
+    public string this[string columnName] => columnName switch
+    {
+        nameof(Port) when Port is < 1 or > 65535 => "Port must be between 1 and 65535.",
+        nameof(MinimumDistanceMeters) or nameof(MaximumDistanceMeters) when !float.IsFinite(MinimumDistanceMeters) || !float.IsFinite(MaximumDistanceMeters) || MinimumDistanceMeters < 0f || MaximumDistanceMeters <= MinimumDistanceMeters => "Range is invalid.",
+        nameof(VisualizationRangeMeters) when !float.IsFinite(VisualizationRangeMeters) || VisualizationRangeMeters <= 0f => "Visualization range must be positive.",
+        nameof(RotationDegrees) when !float.IsFinite(RotationDegrees) => "Rotation must be finite.",
+        nameof(OutputX) or nameof(OutputY) when OutputX < 0 || OutputY < 0 => "Output origin cannot be negative.",
+        nameof(OutputWidth) or nameof(OutputHeight) when OutputWidth < 1 || OutputHeight < 1 => "Output size must be positive.",
+        nameof(BaseGapMeters) or nameof(DistanceScale) when !float.IsFinite(BaseGapMeters) || !float.IsFinite(DistanceScale) || BaseGapMeters <= 0f || DistanceScale <= 0f => "Clustering values must be positive.",
+        _ => string.Empty
+    };
 
     public void ApplySnapshot(RadarSensorRuntimeSnapshot snapshot)
     {

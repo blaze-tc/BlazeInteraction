@@ -148,15 +148,15 @@
                                 <TextBlock Text="有效分辨率" Style="{StaticResource CaptionStyle}"/>
                                 <TextBlock Text="{Binding SelectedScreen.EffectiveResolutionText}" FontWeight="SemiBold"/>
                                 <Grid Margin="0,8,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-                                    <StackPanel Margin="0,0,4,0"><TextBlock Text="宽度" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedScreen.WidthPixels, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
-                                    <StackPanel Grid.Column="1" Margin="4,0,0,0"><TextBlock Text="高度" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedScreen.HeightPixels, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                                    <StackPanel Margin="0,0,4,0"><TextBlock Text="宽度" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedScreen.WidthPixels, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                    <StackPanel Grid.Column="1" Margin="4,0,0,0"><TextBlock Text="高度" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedScreen.HeightPixels, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
                                 </Grid>
                                 <Button Content="恢复 Unity 默认分辨率" Command="{Binding RestoreUnityResolutionCommand}" Margin="0,8,0,0"/>
                                 <Separator/>
                                 <TextBlock Text="融合" Style="{StaticResource SectionTitleStyle}"/>
-                                <TextBlock Text="输出频率 (Hz)" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedScreen.OutputRateHz, UpdateSourceTrigger=PropertyChanged}"/>
-                                <TextBlock Text="数据最大年龄 (ms)" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedScreen.SensorDataMaxAgeMilliseconds, UpdateSourceTrigger=PropertyChanged}"/>
-                                <TextBlock Text="跨雷达融合距离 (px)" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedScreen.FusionDistancePixels, UpdateSourceTrigger=PropertyChanged}"/>
+                                <TextBlock Text="输出频率 (Hz)" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedScreen.OutputRateHz, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/>
+                                <TextBlock Text="数据最大年龄 (ms)" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedScreen.SensorDataMaxAgeMilliseconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/>
+                                <TextBlock Text="跨雷达融合距离 (px)" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedScreen.FusionDistancePixels, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/>
                                 <TextBlock Text="跟踪与交互" Style="{StaticResource SectionTitleStyle}" Margin="0,12,0,8"/>
                                 <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
                                     <StackPanel Margin="0,0,4,0"><TextBlock Text="确认帧" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedScreen.ConfirmFrames, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
@@ -181,7 +181,7 @@
                                 <TextBlock Text="雷达 IP / 端口" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/>
                                 <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="80"/></Grid.ColumnDefinitions>
                                     <TextBox Text="{Binding SelectedSensor.RadarIp, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,4,0"/>
-                                    <TextBox Grid.Column="1" Text="{Binding SelectedSensor.Port, UpdateSourceTrigger=PropertyChanged}" Margin="4,0,0,0"/>
+                                    <TextBox Grid.Column="1" Text="{Binding SelectedSensor.Port, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}" Margin="4,0,0,0"/>
                                 </Grid>
                                 <TextBlock Text="本机网卡 IP" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/>
                                 <TextBox Text="{Binding SelectedSensor.LocalIp, UpdateSourceTrigger=PropertyChanged}"/>
@@ -189,8 +189,8 @@
                                 <Separator/>
                                 <TextBlock Text="物理范围 / 变换" Style="{StaticResource SectionTitleStyle}"/>
                                 <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-                                    <StackPanel Margin="0,0,4,0"><TextBlock Text="最小距离" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.MinimumDistanceMeters, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
-                                    <StackPanel Grid.Column="1" Margin="4,0,0,0"><TextBlock Text="最大距离" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.MaximumDistanceMeters, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                                    <StackPanel Margin="0,0,4,0"><TextBlock Text="最小距离" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.MinimumDistanceMeters, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                    <StackPanel Grid.Column="1" Margin="4,0,0,0"><TextBlock Text="最大距离" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.MaximumDistanceMeters, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
                                 </Grid>
                                 <TextBlock Text="显示最大范围" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedSensor.VisualizationRangeMeters, UpdateSourceTrigger=PropertyChanged}"/>
                                 <TextBlock Text="旋转角度" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedSensor.RotationDegrees, UpdateSourceTrigger=PropertyChanged}"/>
@@ -206,10 +206,10 @@
                                 <Separator/>
                                 <TextBlock Text="输出矩形 (px)" Style="{StaticResource SectionTitleStyle}"/>
                                 <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
-                                    <StackPanel Margin="0,0,4,4"><TextBlock Text="X" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.OutputX, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
-                                    <StackPanel Grid.Column="1" Margin="4,0,0,4"><TextBlock Text="Y" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.OutputY, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
-                                    <StackPanel Grid.Row="1" Margin="0,4,4,0"><TextBlock Text="宽" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.OutputWidth, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
-                                    <StackPanel Grid.Row="1" Grid.Column="1" Margin="4,4,0,0"><TextBlock Text="高" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.OutputHeight, UpdateSourceTrigger=PropertyChanged}"/></StackPanel>
+                                    <StackPanel Margin="0,0,4,4"><TextBlock Text="X" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.OutputX, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                    <StackPanel Grid.Column="1" Margin="4,0,0,4"><TextBlock Text="Y" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.OutputY, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                    <StackPanel Grid.Row="1" Margin="0,4,4,0"><TextBlock Text="宽" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.OutputWidth, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                    <StackPanel Grid.Row="1" Grid.Column="1" Margin="4,4,0,0"><TextBlock Text="高" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.OutputHeight, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
                                 </Grid>
                                 <Separator/>
                                 <TextBlock Text="区域 / 校准" Style="{StaticResource SectionTitleStyle}"/>

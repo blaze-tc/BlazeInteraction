@@ -34,11 +34,11 @@ public sealed class RadarScreenFusionView : FrameworkElement
 
     public static readonly DependencyProperty SnapshotProperty = DependencyProperty.Register(
         nameof(Snapshot), typeof(RadarScreenRuntimeSnapshot), typeof(RadarScreenFusionView),
-        new FrameworkPropertyMetadata(null, OnSensorsChanged));
+        new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
 
     public static readonly DependencyProperty SensorsProperty = DependencyProperty.Register(
         nameof(Sensors), typeof(IEnumerable), typeof(RadarScreenFusionView),
-        new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+        new FrameworkPropertyMetadata(null, OnSensorsChanged));
 
     public static readonly DependencyProperty SelectedSensorIdProperty = DependencyProperty.Register(
         nameof(SelectedSensorId), typeof(string), typeof(RadarScreenFusionView),
