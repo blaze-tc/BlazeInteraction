@@ -94,7 +94,7 @@ namespace Blaze.Radar.Editor
             if (settings.MigrateLegacyScreenTopology())
             {
                 EditorUtility.SetDirty(settings);
-                AssetDatabase.SaveAssets();
+                AssetDatabase.SaveAssetIfDirty(settings);
             }
 
             if (activeSettings == settings && serializedSettings != null && screenList != null)
@@ -210,7 +210,7 @@ namespace Blaze.Radar.Editor
             Directory.CreateDirectory(Path.GetDirectoryName(SettingsAssetPath) ?? "Assets/Resources");
             settings = ScriptableObject.CreateInstance<RadarRuntimeSettings>();
             AssetDatabase.CreateAsset(settings, SettingsAssetPath);
-            AssetDatabase.SaveAssets();
+            AssetDatabase.SaveAssetIfDirty(settings);
             return settings;
         }
     }

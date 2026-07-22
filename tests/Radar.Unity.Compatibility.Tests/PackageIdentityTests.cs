@@ -227,9 +227,13 @@ public sealed class PackageIdentityTests
         Assert.Contains("com.unity.ugui\": \"1.0.0", source, StringComparison.Ordinal);
         Assert.Contains("com.unity.nuget.newtonsoft-json\": \"3.0.2", source, StringComparison.Ordinal);
         Assert.Contains("\"testables\": [\"com.blaze.radar\"]", source, StringComparison.Ordinal);
-        Assert.Contains("$parsedVersion.Major -ne 2021", source, StringComparison.Ordinal);
-        Assert.Contains("$parsedVersion.Minor -ne 3", source, StringComparison.Ordinal);
+        Assert.Contains("$selectedVersion.Major -ne 2021", source, StringComparison.Ordinal);
+        Assert.Contains("$selectedVersion.Minor -ne 3", source, StringComparison.Ordinal);
         Assert.Contains("Parse-UnityVersion", source, StringComparison.Ordinal);
+        Assert.Contains("Select-UnityEditorVersion", source, StringComparison.Ordinal);
+        Assert.Contains("ExplicitlyRequested", source, StringComparison.Ordinal);
+        Assert.Contains("must expose a parseable ProductVersion", source, StringComparison.Ordinal);
+        Assert.Contains("explicit editor ProductVersion rejection", source, StringComparison.Ordinal);
         Assert.Contains("2021.3.9f10", source, StringComparison.Ordinal);
         Assert.Contains("2021.3.45f1c1", source, StringComparison.Ordinal);
         Assert.Contains("2021.3.46f1", source, StringComparison.Ordinal);
@@ -268,6 +272,13 @@ public sealed class PackageIdentityTests
         Assert.Contains("new RadarBuildProcessor().OnPreprocessBuild(null)", source, StringComparison.Ordinal);
         Assert.Contains("AssetDatabase.MoveAsset", source, StringComparison.Ordinal);
         Assert.Contains("BuildFailedException", source, StringComparison.Ordinal);
+
+        var providerSource = File.ReadAllText(Path.Combine(packageRoot, "Editor", "RadarSettingsProvider.cs"));
+        Assert.DoesNotContain("AssetDatabase.SaveAssets()", providerSource, StringComparison.Ordinal);
+        Assert.Contains("AssetDatabase.SaveAssetIfDirty(settings)", providerSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("AssetDatabase.SaveAssets()", source, StringComparison.Ordinal);
+        Assert.Contains("AssetDatabase.SaveAssetIfDirty(testSettings)", source, StringComparison.Ordinal);
+        Assert.Contains("EditorUtility.IsDirty(existingSettings)", source, StringComparison.Ordinal);
     }
 
     private static string FindRepositoryRoot()

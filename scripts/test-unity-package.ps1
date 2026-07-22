@@ -96,10 +96,48 @@ function Find-VersionDirectoryFallback {
     return $null
 }
 
+function Select-UnityEditorVersion {
+    param(
+        [string]$EditorPath,
+        [string]$ProductVersion,
+        [object]$DirectoryVersion,
+        [bool]$ExplicitlyRequested
+    )
+
+    $productVersionInfo = Parse-UnityVersion -Text $ProductVersion
+    if ($ExplicitlyRequested -and $null -eq $productVersionInfo) {
+        throw "Explicitly provided Unity editor '$EditorPath' must expose a parseable ProductVersion; directory fallback is disabled for explicit paths."
+    }
+
+    $selectedVersion = if ($null -ne $productVersionInfo) {
+        $productVersionInfo
+    }
+    else {
+        $DirectoryVersion
+    }
+    $versionSource = if ($null -ne $productVersionInfo) {
+        "ProductVersion '$ProductVersion'"
+    }
+    else {
+        "automatic Hub version directory"
+    }
+
+    if ($null -eq $selectedVersion) {
+        throw "Unity 2021.3 is required, but '$EditorPath' exposes no parseable ProductVersion or automatic Hub version directory."
+    }
+
+    if ($selectedVersion.Major -ne 2021 -or $selectedVersion.Minor -ne 3) {
+        throw "Unity 2021.3 is required, but '$EditorPath' resolves to '$($selectedVersion.Version)' from $versionSource."
+    }
+
+    return $selectedVersion
+}
+
 function Resolve-UnityEditor {
     param([string]$RequestedEditor)
 
-    if ([string]::IsNullOrWhiteSpace($RequestedEditor)) {
+    $explicitlyRequested = -not [string]::IsNullOrWhiteSpace($RequestedEditor)
+    if (-not $explicitlyRequested) {
         $hubRoot = "C:\Program Files\Unity\Hub\Editor"
         if (-not (Test-Path -LiteralPath $hubRoot -PathType Container)) {
             throw "Unity Hub editor directory was not found at '$hubRoot'. Install a Unity 2021.3 editor or pass -UnityEditor <path>."
@@ -133,20 +171,17 @@ function Resolve-UnityEditor {
 
     $resolvedEditor = (Resolve-Path -LiteralPath $RequestedEditor).Path
     $productVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($resolvedEditor).ProductVersion
-    $parsedVersion = Parse-UnityVersion -Text $productVersion
-    $versionSource = "ProductVersion '$productVersion'"
-    if ($null -eq $parsedVersion) {
-        $parsedVersion = Find-VersionDirectoryFallback -EditorPath $resolvedEditor
-        $versionSource = "version directory"
+    $directoryVersion = if ($explicitlyRequested) {
+        $null
     }
-
-    if ($null -eq $parsedVersion) {
-        throw "Unity 2021.3 is required, but '$resolvedEditor' exposes no parseable ProductVersion or version directory."
+    else {
+        Find-VersionDirectoryFallback -EditorPath $resolvedEditor
     }
-
-    if ($parsedVersion.Major -ne 2021 -or $parsedVersion.Minor -ne 3) {
-        throw "Unity 2021.3 is required, but '$resolvedEditor' resolves to '$($parsedVersion.Version)' from $versionSource."
-    }
+    $parsedVersion = Select-UnityEditorVersion `
+        -EditorPath $resolvedEditor `
+        -ProductVersion $productVersion `
+        -DirectoryVersion $directoryVersion `
+        -ExplicitlyRequested $explicitlyRequested
 
     return [pscustomobject]@{
         Path = $resolvedEditor
@@ -169,6 +204,41 @@ function Invoke-RunnerSelfTest {
     $expected = "2021.3.46f1,2021.3.45f1c1,2021.3.9f10"
     if (-not [string]::Equals($actual, $expected, [System.StringComparison]::Ordinal)) {
         throw "Runner self-test failed: expected '$expected', found '$actual'."
+    }
+
+    $fallbackVersion = Parse-UnityVersion -Text "2021.3.45f1c1"
+    $explicitVersion = Select-UnityEditorVersion `
+        -EditorPath "X:\Arbitrary\Unity.exe" `
+        -ProductVersion "2021.3.46f1 (test)" `
+        -DirectoryVersion $null `
+        -ExplicitlyRequested $true
+    if ($explicitVersion.Version -ne "2021.3.46f1") {
+        throw "Runner self-test failed: explicit ProductVersion was not authoritative."
+    }
+
+    $automaticFallback = Select-UnityEditorVersion `
+        -EditorPath "C:\Program Files\Unity\Hub\Editor\2021.3.45f1c1\Editor\Unity.exe" `
+        -ProductVersion "unparseable" `
+        -DirectoryVersion $fallbackVersion `
+        -ExplicitlyRequested $false
+    if ($automaticFallback.Version -ne "2021.3.45f1c1") {
+        throw "Runner self-test failed: automatic Hub directory fallback was not used."
+    }
+
+    $rejectedExplicitFallback = $false
+    try {
+        Select-UnityEditorVersion `
+            -EditorPath "X:\2021.3.45f1c1\Unity.exe" `
+            -ProductVersion "unparseable" `
+            -DirectoryVersion $fallbackVersion `
+            -ExplicitlyRequested $true
+    }
+    catch {
+        $rejectedExplicitFallback = $_.Exception.Message -like '*must expose a parseable ProductVersion*'
+    }
+
+    if (-not $rejectedExplicitFallback) {
+        throw "Runner self-test failed: explicit editor ProductVersion rejection contract was not enforced."
     }
 
     $selfTestId = [guid]::NewGuid().ToString("N")

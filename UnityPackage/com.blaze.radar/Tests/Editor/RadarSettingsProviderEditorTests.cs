@@ -103,6 +103,18 @@ namespace Blaze.Radar.Editor.Tests
             var movedExistingAsset = false;
             var createdTestAsset = false;
             RadarRuntimeSettings testSettings = null;
+            var existingSettings = AssetDatabase.LoadAssetAtPath<RadarRuntimeSettings>(settingsPath);
+            if (existingSettings != null && EditorUtility.IsDirty(existingSettings))
+            {
+                Assert.Ignore(
+                    "Pre-build validation test will not move a user's dirty RadarRuntimeSettings asset.");
+            }
+
+            if (existingSettings != null)
+            {
+                Assert.That(AssetDatabase.LoadMainAssetAtPath(backupPath), Is.Null,
+                    "Safe test backup path is already occupied: " + backupPath);
+            }
 
             if (createdResourcesFolder)
             {
@@ -111,11 +123,8 @@ namespace Blaze.Radar.Editor.Tests
 
             try
             {
-                var existingSettings = AssetDatabase.LoadAssetAtPath<RadarRuntimeSettings>(settingsPath);
                 if (existingSettings != null)
                 {
-                    Assert.That(AssetDatabase.LoadMainAssetAtPath(backupPath), Is.Null,
-                        "Safe test backup path is already occupied: " + backupPath);
                     Assert.That(AssetDatabase.MoveAsset(settingsPath, backupPath), Is.Empty);
                     movedExistingAsset = true;
                 }
@@ -128,8 +137,7 @@ namespace Blaze.Radar.Editor.Tests
                 serialized.FindProperty("screens").arraySize = 0;
                 serialized.ApplyModifiedPropertiesWithoutUndo();
                 EditorUtility.SetDirty(testSettings);
-                AssetDatabase.SaveAssets();
-                AssetDatabase.Refresh();
+                AssetDatabase.SaveAssetIfDirty(testSettings);
 
                 Assert.Throws<BuildFailedException>(() =>
                     new RadarBuildProcessor().OnPreprocessBuild(null));
@@ -151,8 +159,6 @@ namespace Blaze.Radar.Editor.Tests
                     AssetDatabase.DeleteAsset(resourcesFolder);
                 }
 
-                AssetDatabase.SaveAssets();
-                AssetDatabase.Refresh();
             }
         }
 
