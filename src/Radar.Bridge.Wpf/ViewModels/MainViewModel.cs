@@ -38,10 +38,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         DeleteSensorCommand = CreateCommand(DeleteSensorAsync, () => CanEditSelectedScreen && SelectedSensor is not null && SelectedScreen!.Sensors.Count > 1);
         DeleteOrphanedScreenConfigurationCommand = CreateCommand(DeleteOrphanedScreenConfigurationAsync, () => SelectedScreen is { IsAssociated: false });
         RestoreUnityResolutionCommand = new RelayCommand(() => { if (SelectedScreen is not null) SelectedScreen.ResolutionMode = RadarResolutionMode.FollowUnityDefault; }, () => SelectedScreen is not null);
-        ConnectSensorCommand = CreateCommand(token => WithSelectedSensorAsync((screen, sensor) => _runtime.ConnectSensorAsync(screen.ScreenId, sensor.SensorId, token)), () => SelectedSensor is not null);
-        DisconnectSensorCommand = CreateCommand(_ => WithSelectedSensorAsync((screen, sensor) => _runtime.DisconnectSensorAsync(screen.ScreenId, sensor.SensorId)), () => SelectedSensor is not null);
-        ConnectScreenCommand = CreateCommand(token => SelectedScreen is null ? Task.CompletedTask : _runtime.ConnectScreenAsync(SelectedScreen.ScreenId, token), () => SelectedScreen is not null);
-        DisconnectScreenCommand = CreateCommand(_ => SelectedScreen is null ? Task.CompletedTask : _runtime.DisconnectScreenAsync(SelectedScreen.ScreenId), () => SelectedScreen is not null);
+        ConnectSensorCommand = CreateCommand(token => WithSelectedSensorAsync((screen, sensor) => _runtime.ConnectSensorAsync(screen.ScreenId, sensor.SensorId, token)), CanOperateSelectedSensor);
+        DisconnectSensorCommand = CreateCommand(_ => WithSelectedSensorAsync((screen, sensor) => _runtime.DisconnectSensorAsync(screen.ScreenId, sensor.SensorId)), CanOperateSelectedSensor);
+        ConnectScreenCommand = CreateCommand(token => SelectedScreen is null || !SelectedScreen.IsAssociated ? Task.CompletedTask : _runtime.ConnectScreenAsync(SelectedScreen.ScreenId, token), () => SelectedScreen is { IsAssociated: true });
+        DisconnectScreenCommand = CreateCommand(_ => SelectedScreen is null || !SelectedScreen.IsAssociated ? Task.CompletedTask : _runtime.DisconnectScreenAsync(SelectedScreen.ScreenId), () => SelectedScreen is { IsAssociated: true });
         ConnectAllCommand = CreateCommand(token => _runtime.ConnectAllAsync(token));
         DisconnectAllCommand = CreateCommand(_ => _runtime.DisconnectAllAsync());
         StartAllSimulationCommand = CreateCommand(token => _runtime.StartAllSimulationAsync(token));
@@ -186,7 +186,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public Task StopRecordingAsync() => WithSelectedSensorAsync((screen, sensor) => _runtime.StopRecordingAsync(screen.ScreenId, sensor.SensorId));
     public Task ReplaySelectedSensorAsync(string path, double speed, bool loop, CancellationToken cancellationToken = default)
     {
-        if (SelectedSensor is not null) { SelectedSensor.ReplayFilePath = path; SelectedSensor.ReplaySpeed = speed; SelectedSensor.ReplayLoop = loop; }
+        if (!HasSelectedReplaySensor()) return Task.CompletedTask;
+        SelectedSensor!.ReplayFilePath = path; SelectedSensor.ReplaySpeed = speed; SelectedSensor.ReplayLoop = loop;
         return WithSelectedReplaySensorAsync((screen, sensor) => _runtime.ReplaySensorAsync(screen.ScreenId, sensor.SensorId, path, speed, loop, cancellationToken));
     }
     public void PauseSelectedReplay() => WithSelectedReplaySensor((screen, sensor) => _runtime.PauseReplay(screen.ScreenId, sensor.SensorId));
@@ -262,10 +263,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         return command;
     }
 
-    private Task WithSelectedSensorAsync(Func<ScreenItemViewModel, SensorItemViewModel, Task> action) => SelectedScreen is not null && SelectedSensor is not null ? action(SelectedScreen, SelectedSensor) : Task.CompletedTask;
+    private Task WithSelectedSensorAsync(Func<ScreenItemViewModel, SensorItemViewModel, Task> action) => CanOperateSelectedSensor() ? action(SelectedScreen!, SelectedSensor!) : Task.CompletedTask;
     private Task WithSelectedReplaySensorAsync(Func<ScreenItemViewModel, SensorItemViewModel, Task> action) => HasSelectedReplaySensor() ? action(SelectedScreen!, SelectedSensor!) : Task.CompletedTask;
     private void WithSelectedReplaySensor(Action<ScreenItemViewModel, SensorItemViewModel> action) { if (HasSelectedReplaySensor()) action(SelectedScreen!, SelectedSensor!); }
     private bool HasSelectedReplaySensor() => SelectedScreen is not null && SelectedSensor?.SourceMode == RadarSensorSourceMode.Replay;
+    private bool CanOperateSelectedSensor() => SelectedScreen is { IsAssociated: true } && SelectedSensor is not null && SelectedScreen.Sensors.Contains(SelectedSensor);
 
     private void OnSensorSnapshotUpdated(RadarSensorRuntimeSnapshot snapshot) => Dispatch(() =>
     {

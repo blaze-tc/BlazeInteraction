@@ -93,9 +93,7 @@ public sealed class SensorItemViewModel : ObservableObject
     }
     public bool AddMaskedRegionAtCurrentTarget()
     {
-        var target = Snapshot?.Detections.FirstOrDefault();
-        if (target is null) return false;
-        var center = new Point2(target.Value.PixelX, target.Value.PixelY);
+        if (!TryGetPhysicalTarget(out var center)) return false;
         const float half = .2f;
         _configuration.Range.MaskedPolygons.Add([new(center.X-half, center.Y+half), new(center.X+half, center.Y+half), new(center.X+half, center.Y-half), new(center.X-half, center.Y-half)]);
         OnPropertyChanged(nameof(MaskedPolygons)); return true;
@@ -103,7 +101,7 @@ public sealed class SensorItemViewModel : ObservableObject
     public bool DeleteLastMaskedRegion() { if (_configuration.Range.MaskedPolygons.Count == 0) return false; _configuration.Range.MaskedPolygons.RemoveAt(_configuration.Range.MaskedPolygons.Count-1); OnPropertyChanged(nameof(MaskedPolygons)); return true; }
     public void BeginCalibration() { _capturedCalibrationPoints.Clear(); CalibrationStatus = "Calibration in progress 0/4"; CalibrationStep = "Collect top-left"; }
     public bool CaptureCalibrationPoint(Point2 point) { if (_capturedCalibrationPoints.Count >= 4) return false; _capturedCalibrationPoints.Add(point); CalibrationStatus = $"Calibration in progress {_capturedCalibrationPoints.Count}/4"; CalibrationStep = _capturedCalibrationPoints.Count == 4 ? "Four points collected" : "Collect next corner"; return true; }
-    public bool CaptureCurrentTargetForCalibration() { var target = Snapshot?.Detections.FirstOrDefault(); return target is not null && CaptureCalibrationPoint(new(target.Value.PixelX, target.Value.PixelY)); }
+    public bool CaptureCurrentTargetForCalibration() => TryGetPhysicalTarget(out var point) && CaptureCalibrationPoint(point);
     public void UndoCalibrationPoint() { if (_capturedCalibrationPoints.Count > 0) _capturedCalibrationPoints.RemoveAt(_capturedCalibrationPoints.Count-1); CalibrationStatus = $"Calibration in progress {_capturedCalibrationPoints.Count}/4"; }
     public bool SaveCalibration()
     {
@@ -113,6 +111,16 @@ public sealed class SensorItemViewModel : ObservableObject
     }
     public void ClearCalibration() { _capturedCalibrationPoints.Clear(); _configuration.Calibration = new RadarCalibrationConfiguration(); CalibrationStatus = "Not calibrated"; CalibrationStep = "Not started"; }
     private void SyncRegion() { _configuration.Range.ActivePolygon = RegionVertices.Select(point => new RadarPoint2(point.X, point.Y)).ToList(); OnPropertyChanged(nameof(ActivePolygon)); }
+    private bool TryGetPhysicalTarget(out Point2 point)
+    {
+        point = default;
+        var detection = Snapshot?.Detections.FirstOrDefault();
+        if (detection is null) return false;
+        var cluster = Snapshot!.Clusters.FirstOrDefault(candidate => candidate.ClusterIndex == detection.Value.DetectionId);
+        if (cluster is null) return false;
+        point = new Point2(cluster.CenterX, cluster.CenterY);
+        return true;
+    }
     private static bool ValidateCopy(RadarAppConfiguration configuration)
     {
         var json = System.Text.Json.JsonSerializer.Serialize(configuration);
