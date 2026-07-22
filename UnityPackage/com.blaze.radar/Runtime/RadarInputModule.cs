@@ -15,10 +15,14 @@ namespace Blaze.Radar
         [SerializeField, Tooltip("RadarOnly for production; RadarAndMouseDebug keeps the standard mouse available for scene testing.")]
         private RadarInputMode inputMode = RadarInputMode.RadarOnly;
 
+        [SerializeField, Tooltip("Logical screen ID consumed by this EventSystem. Leave empty to consume the primary screen.")]
+        private string screenId = string.Empty;
+
         private readonly Dictionary<int, PointerEventData> _pointerData =
             new Dictionary<int, PointerEventData>();
         private readonly List<RaycastResult> _raycastResults = new List<RaycastResult>();
         private RadarPointerFrameMessage _pendingFrame;
+        private RadarScreenPointerFrame _pendingScreenFrame;
 
         public RadarFrameDispatcher Dispatcher
         {
@@ -40,6 +44,23 @@ namespace Blaze.Radar
         {
             get => inputMode;
             set => inputMode = value;
+        }
+
+        public string ScreenId
+        {
+            get => screenId;
+            set
+            {
+                var next = value == null ? string.Empty : value.Trim();
+                if (string.Equals(screenId, next, StringComparison.OrdinalIgnoreCase))
+                {
+                    screenId = next;
+                    return;
+                }
+
+                CancelAllPointers();
+                screenId = next;
+            }
         }
 
         public IReadOnlyDictionary<int, PointerEventData> ActivePointers => _pointerData;
@@ -76,6 +97,7 @@ namespace Blaze.Radar
         public void CancelAllPointers()
         {
             _pendingFrame = null;
+            _pendingScreenFrame = null;
             var activePointers = new List<PointerEventData>(_pointerData.Values);
             _pointerData.Clear();
 
@@ -102,7 +124,13 @@ namespace Blaze.Radar
 
         public override void Process()
         {
-            if (_pendingFrame != null)
+            if (_pendingScreenFrame != null)
+            {
+                var frame = _pendingScreenFrame;
+                _pendingScreenFrame = null;
+                ProcessScreenFrame(frame);
+            }
+            else if (_pendingFrame != null)
             {
                 var frame = _pendingFrame;
                 _pendingFrame = null;
@@ -117,12 +145,24 @@ namespace Blaze.Radar
 
         public void InjectFrame(RadarPointerFrameMessage frame)
         {
+            _pendingScreenFrame = null;
             _pendingFrame = frame;
         }
 
-        private void OnPointerFrameReceived(RadarPointerFrameMessage frame)
+        internal void InjectScreenFrame(RadarScreenPointerFrame frame)
         {
-            _pendingFrame = frame;
+            OnScreenFrameReceived(frame);
+        }
+
+        private void OnScreenFrameReceived(RadarScreenPointerFrame frame)
+        {
+            if (!IsSelectedScreen(frame))
+            {
+                return;
+            }
+
+            _pendingFrame = null;
+            _pendingScreenFrame = frame;
         }
 
         private void ProcessRadarFrame(RadarPointerFrameMessage frame)
@@ -135,11 +175,50 @@ namespace Blaze.Radar
             for (var index = 0; index < frame.pointers.Count; index++)
             {
                 var message = frame.pointers[index];
+                if (message == null)
+                {
+                    continue;
+                }
+
                 var screenPosition = new Vector2(
                     Mathf.Clamp01(message.normalizedX) * Screen.width,
                     Mathf.Clamp01(message.normalizedY) * Screen.height);
                 ProcessPointer(message.pointerId, screenPosition, message.phase, Vector2.zero);
             }
+        }
+
+        private void ProcessScreenFrame(RadarScreenPointerFrame frame)
+        {
+            if (frame == null || frame.pointers == null)
+            {
+                return;
+            }
+
+            for (var index = 0; index < frame.pointers.Count; index++)
+            {
+                var pointer = frame.pointers[index];
+                if (pointer == null)
+                {
+                    continue;
+                }
+
+                var eventPosition = new Vector2(
+                    Mathf.Clamp01(pointer.normalizedX) * Screen.width,
+                    Mathf.Clamp01(pointer.normalizedY) * Screen.height);
+                ProcessPointer(pointer.pointerId, eventPosition, pointer.phase, Vector2.zero);
+            }
+        }
+
+        private bool IsSelectedScreen(RadarScreenPointerFrame frame)
+        {
+            if (frame == null || frame.screen == null || string.IsNullOrWhiteSpace(frame.screen.screenId))
+            {
+                return false;
+            }
+
+            return string.IsNullOrWhiteSpace(screenId)
+                ? frame.screen.isPrimary
+                : string.Equals(frame.screen.screenId, screenId, StringComparison.OrdinalIgnoreCase);
         }
 
         private void ProcessMouseDebug()
@@ -333,8 +412,8 @@ namespace Blaze.Radar
         {
             if (dispatcher != null)
             {
-                dispatcher.PointerFrameReceived -= OnPointerFrameReceived;
-                dispatcher.PointerFrameReceived += OnPointerFrameReceived;
+                dispatcher.ScreenFrameReceived -= OnScreenFrameReceived;
+                dispatcher.ScreenFrameReceived += OnScreenFrameReceived;
                 dispatcher.ConnectionChanged -= OnConnectionChanged;
                 dispatcher.ConnectionChanged += OnConnectionChanged;
             }
@@ -344,7 +423,7 @@ namespace Blaze.Radar
         {
             if (dispatcher != null)
             {
-                dispatcher.PointerFrameReceived -= OnPointerFrameReceived;
+                dispatcher.ScreenFrameReceived -= OnScreenFrameReceived;
                 dispatcher.ConnectionChanged -= OnConnectionChanged;
             }
         }

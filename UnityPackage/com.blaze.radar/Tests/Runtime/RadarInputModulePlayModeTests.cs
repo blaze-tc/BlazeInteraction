@@ -29,8 +29,17 @@ namespace Blaze.Radar.Tests
         [UnityTearDown]
         public IEnumerator TearDown()
         {
-            Object.Destroy(_canvasObject);
-            Object.Destroy(_eventSystemObject);
+            if (Application.isPlaying)
+            {
+                Object.Destroy(_canvasObject);
+                Object.Destroy(_eventSystemObject);
+            }
+            else
+            {
+                Object.DestroyImmediate(_canvasObject);
+                Object.DestroyImmediate(_eventSystemObject);
+            }
+
             yield return null;
         }
 
@@ -130,6 +139,89 @@ namespace Blaze.Radar.Tests
             Assert.That(_module.ActivePointers, Is.Empty);
         }
 
+        [UnityTest]
+        public IEnumerator ScreenFilter_IgnoresOtherScreenAndClicksSelectedScreenButton()
+        {
+            var clicks = 0;
+            var button = CreateButton("Center", new Vector2(0.5f, 0.5f));
+            button.onClick.AddListener(() => clicks++);
+            _module.ScreenId = "front";
+            yield return null;
+
+            ProcessScreenFrame(ScreenFrame("left", false, ScreenPointer(1, 0.5f, 0.5f, RadarPointerPhase.Down)));
+            ProcessScreenFrame(ScreenFrame("left", false, ScreenPointer(1, 0.5f, 0.5f, RadarPointerPhase.Up)));
+            ProcessScreenFrame(ScreenFrame("front", true, ScreenPointer(2, 0.5f, 0.5f, RadarPointerPhase.Down)));
+            ProcessScreenFrame(ScreenFrame("front", true, ScreenPointer(2, 0.5f, 0.5f, RadarPointerPhase.Up)));
+
+            Assert.That(clicks, Is.EqualTo(1));
+            Assert.That(_module.ActivePointers, Is.Empty);
+        }
+
+        [UnityTest]
+        public IEnumerator EmptyScreenId_AcceptsOnlyPrimaryScreenFrames()
+        {
+            var clicks = 0;
+            var button = CreateButton("Center", new Vector2(0.5f, 0.5f));
+            button.onClick.AddListener(() => clicks++);
+            _module.ScreenId = string.Empty;
+            yield return null;
+
+            ProcessScreenFrame(ScreenFrame("left", false, ScreenPointer(1, 0.5f, 0.5f, RadarPointerPhase.Down)));
+            ProcessScreenFrame(ScreenFrame("left", false, ScreenPointer(1, 0.5f, 0.5f, RadarPointerPhase.Up)));
+            ProcessScreenFrame(ScreenFrame("front", true, ScreenPointer(2, 0.5f, 0.5f, RadarPointerPhase.Down)));
+            ProcessScreenFrame(ScreenFrame("front", true, ScreenPointer(2, 0.5f, 0.5f, RadarPointerPhase.Up)));
+
+            Assert.That(clicks, Is.EqualTo(1));
+        }
+
+        [UnityTest]
+        public IEnumerator ChangingScreenId_CancelsOldPressAndAcceptsNewScreen()
+        {
+            var clicks = 0;
+            var button = CreateButton("Center", new Vector2(0.5f, 0.5f));
+            button.onClick.AddListener(() => clicks++);
+            _module.ScreenId = "front";
+            yield return null;
+
+            ProcessScreenFrame(ScreenFrame("front", true, ScreenPointer(7, 0.5f, 0.5f, RadarPointerPhase.Down)));
+            Assert.That(_module.ActivePointers.Count, Is.EqualTo(1));
+
+            _module.ScreenId = "right";
+
+            Assert.That(_module.ActivePointers, Is.Empty);
+            Assert.That(clicks, Is.Zero);
+
+            ProcessScreenFrame(ScreenFrame("right", false, ScreenPointer(7, 0.5f, 0.5f, RadarPointerPhase.Down)));
+            ProcessScreenFrame(ScreenFrame("right", false, ScreenPointer(7, 0.5f, 0.5f, RadarPointerPhase.Up)));
+
+            Assert.That(clicks, Is.EqualTo(1));
+        }
+
+        [UnityTest]
+        public IEnumerator MalformedAndOtherScreenFrames_DoNotDisturbSelectedPointer()
+        {
+            var clicks = 0;
+            var button = CreateButton("Center", new Vector2(0.5f, 0.5f));
+            button.onClick.AddListener(() => clicks++);
+            _module.ScreenId = "front";
+            yield return null;
+
+            ProcessScreenFrame(ScreenFrame("front", true, ScreenPointer(9, 0.5f, 0.5f, RadarPointerPhase.Down)));
+            Assert.That(_module.ActivePointers.Count, Is.EqualTo(1));
+
+            ProcessScreenFrame(null);
+            ProcessScreenFrame(new RadarScreenPointerFrame { screen = null });
+            ProcessScreenFrame(ScreenFrame("left", false, ScreenPointer(9, 0.5f, 0.5f, RadarPointerPhase.Up)));
+
+            Assert.That(_module.ActivePointers.Count, Is.EqualTo(1));
+            Assert.That(clicks, Is.Zero);
+
+            ProcessScreenFrame(ScreenFrame("front", true, ScreenPointer(9, 0.5f, 0.5f, RadarPointerPhase.Up)));
+
+            Assert.That(_module.ActivePointers, Is.Empty);
+            Assert.That(clicks, Is.EqualTo(1));
+        }
+
         private Button CreateButton(string name, Vector2 normalizedPosition)
         {
             var gameObject = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Button));
@@ -148,6 +240,49 @@ namespace Blaze.Radar.Tests
             frame.pointers.AddRange(pointers);
             _module.InjectFrame(frame);
             _module.Process();
+        }
+
+        private void ProcessScreenFrame(RadarScreenPointerFrame frame)
+        {
+            _module.InjectScreenFrame(frame);
+            _module.Process();
+        }
+
+        private static RadarScreenPointerFrame ScreenFrame(
+            string id,
+            bool isPrimary,
+            params RadarScreenPointer[] pointers)
+        {
+            return new RadarScreenPointerFrame
+            {
+                screen = new RadarScreenInfo
+                {
+                    screenId = id,
+                    name = id,
+                    widthPixels = 1920,
+                    heightPixels = 1080,
+                    isPrimary = isPrimary
+                },
+                pointers = new System.Collections.Generic.List<RadarScreenPointer>(pointers)
+            };
+        }
+
+        private static RadarScreenPointer ScreenPointer(
+            int id,
+            float x,
+            float y,
+            RadarPointerPhase phase)
+        {
+            return new RadarScreenPointer
+            {
+                pointerId = id,
+                normalizedX = x,
+                normalizedY = y,
+                pixelX = x * 1920f,
+                pixelY = y * 1080f,
+                phase = phase,
+                confidence = 1f
+            };
         }
 
         private static RadarPointerMessage Pointer(int id, float x, float y, RadarPointerPhase phase)
