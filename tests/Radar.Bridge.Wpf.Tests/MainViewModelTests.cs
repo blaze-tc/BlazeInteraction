@@ -65,8 +65,8 @@ public sealed class MainViewModelTests
     {
         using var viewModel = new MainViewModel(ThreeScreenFourSensorConfiguration(), new TestRuntime());
 
-        viewModel.ReceiveLogForTest("[front/f1] Move 1");
-        viewModel.ReceiveLogForTest("[front/f1] Move 2");
+        viewModel.ReceiveLogForTest("[front/P1] Move 1");
+        viewModel.ReceiveLogForTest("[front/P1] Move 2");
         viewModel.ReceiveLogForTest("[front/f1] error: disconnected");
 
         Assert.Equal(2, viewModel.VisibleLogEntries.Count);

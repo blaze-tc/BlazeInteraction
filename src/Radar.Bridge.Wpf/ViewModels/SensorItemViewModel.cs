@@ -11,6 +11,8 @@ public sealed class SensorItemViewModel : ObservableObject
     private readonly RadarSensorConfiguration _configuration;
     private RadarSensorRuntimeSnapshot? _snapshot;
     private RadarSensorRuntimeState _runtimeState;
+    private string _calibrationStatus = "Not calibrated";
+    private string _calibrationStep = "Not started";
 
     public SensorItemViewModel(RadarSensorConfiguration configuration)
     {
@@ -57,7 +59,9 @@ public sealed class SensorItemViewModel : ObservableObject
     public string FrequencyText => $"{Snapshot?.ScanFrequencyHz ?? 0d:0.0} Hz";
     public long CrcErrorCount => Snapshot?.CrcErrorCount ?? 0;
     public long DroppedInputFrameCount => Snapshot?.DroppedInputFrameCount ?? 0;
-    public bool HasValidationErrors => !ConfigurationValidator.ValidateAndNormalize(new RadarAppConfiguration { Screens = [new RadarScreenConfiguration { IsAssociated = false, Sensors = [_configuration] }] }).IsValid;
+    public string CalibrationStatus { get => _calibrationStatus; set => SetProperty(ref _calibrationStatus, value); }
+    public string CalibrationStep { get => _calibrationStep; set => SetProperty(ref _calibrationStep, value); }
+    public bool HasValidationErrors => !ValidateCopy(new RadarAppConfiguration { Screens = [new RadarScreenConfiguration { IsAssociated = false, Sensors = [_configuration] }] });
 
     public void ApplySnapshot(RadarSensorRuntimeSnapshot snapshot)
     {
@@ -69,6 +73,12 @@ public sealed class SensorItemViewModel : ObservableObject
 
     public void ApplyRuntimeState(RadarSensorRuntimeState state) => RuntimeState = state;
     public void NotifyRegionChanged() => OnPropertyChanged(nameof(ActivePolygon));
+    private static bool ValidateCopy(RadarAppConfiguration configuration)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(configuration);
+        var copy = System.Text.Json.JsonSerializer.Deserialize<RadarAppConfiguration>(json) ?? throw new InvalidOperationException("Could not clone configuration for validation.");
+        return ConfigurationValidator.ValidateAndNormalize(copy).IsValid;
+    }
 
     private void Set<T>(T value, Func<T> get, Action<T> assign, [System.Runtime.CompilerServices.CallerMemberName] string? name = null)
     {

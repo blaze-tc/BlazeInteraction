@@ -43,10 +43,13 @@ public sealed record RadarScreenRuntimeSnapshot(
     long Sequence,
     DateTimeOffset Timestamp);
 
+public sealed record RadarSensorRuntimeStateChanged(string ScreenId, string SensorId, RadarSensorRuntimeState State, string? Error = null);
+
 public interface IRadarBridgeRuntime : IAsyncDisposable
 {
     event Action<RadarSensorRuntimeSnapshot>? SensorSnapshotUpdated { add { } remove { } }
     event Action<RadarScreenRuntimeSnapshot>? ScreenSnapshotUpdated { add { } remove { } }
+    event Action<RadarSensorRuntimeStateChanged>? SensorStateChanged { add { } remove { } }
     event Action<RadarRuntimeSnapshot>? SnapshotUpdated;
     event Action<string>? LogReceived;
     event Action<RadarConnectionState>? ConnectionStateChanged;

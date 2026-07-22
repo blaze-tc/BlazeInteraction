@@ -13,6 +13,7 @@ public sealed class ScreenItemViewModel : ObservableObject
     {
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         Sensors = new ObservableCollection<SensorItemViewModel>(_configuration.Sensors.Select(sensor => new SensorItemViewModel(sensor)));
+        foreach (var sensor in Sensors) sensor.PropertyChanged += OnSensorPropertyChanged;
     }
 
     public RadarScreenConfiguration Configuration => _configuration;
@@ -39,13 +40,14 @@ public sealed class ScreenItemViewModel : ObservableObject
     public ObservableCollection<SensorItemViewModel> Sensors { get; }
     public int OnlineSensorCount => Sensors.Count(sensor => sensor.RuntimeState == Services.RadarSensorRuntimeState.Running);
     public int FusedTargetCount { get; private set; }
-    public bool HasValidationErrors => !ConfigurationValidator.ValidateAndNormalize(new RadarAppConfiguration { Screens = [_configuration] }).IsValid;
+    public bool HasValidationErrors => !ValidateCopy(new RadarAppConfiguration { Screens = [_configuration] });
 
     public SensorItemViewModel AddSensor(RadarSensorConfiguration sensor)
     {
         _configuration.Sensors.Add(sensor);
         var item = new SensorItemViewModel(sensor);
         Sensors.Add(item);
+        item.PropertyChanged += OnSensorPropertyChanged;
         NotifySensorChanges();
         return item;
     }
@@ -53,12 +55,23 @@ public sealed class ScreenItemViewModel : ObservableObject
     public void RemoveSensor(SensorItemViewModel sensor)
     {
         _configuration.Sensors.Remove(sensor.Configuration);
+        sensor.PropertyChanged -= OnSensorPropertyChanged;
         Sensors.Remove(sensor);
         NotifySensorChanges();
     }
 
     public void ApplyFusedTargetCount(int count) { FusedTargetCount = count; OnPropertyChanged(nameof(FusedTargetCount)); }
     public void NotifySensorChanges() { OnPropertyChanged(nameof(OnlineSensorCount)); OnPropertyChanged(nameof(HasValidationErrors)); }
+    private void OnSensorPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(SensorItemViewModel.RuntimeState) or nameof(SensorItemViewModel.HasValidationErrors)) NotifySensorChanges();
+    }
+    private static bool ValidateCopy(RadarAppConfiguration configuration)
+    {
+        var json = System.Text.Json.JsonSerializer.Serialize(configuration);
+        var copy = System.Text.Json.JsonSerializer.Deserialize<RadarAppConfiguration>(json) ?? throw new InvalidOperationException("Could not clone configuration for validation.");
+        return ConfigurationValidator.ValidateAndNormalize(copy).IsValid;
+    }
 
     private void Set<T>(T value, Func<T> get, Action<T> assign, [System.Runtime.CompilerServices.CallerMemberName] string? name = null)
     {

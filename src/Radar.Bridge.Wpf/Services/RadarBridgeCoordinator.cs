@@ -52,6 +52,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
 
     public event Action<RadarSensorRuntimeSnapshot>? SensorSnapshotUpdated;
     public event Action<RadarScreenRuntimeSnapshot>? ScreenSnapshotUpdated;
+    public event Action<RadarSensorRuntimeStateChanged>? SensorStateChanged;
     public event Action<RadarRuntimeSnapshot>? SnapshotUpdated;
     public event Action<string>? LogReceived;
     public event Action<RadarConnectionState>? ConnectionStateChanged;
@@ -650,6 +651,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private void OnPipelineStateChanged(ScreenRuntime runtime, PipelineRuntime binding, RadarSensorRuntimeState state)
     {
         if (state == RadarSensorRuntimeState.Faulted) PublishLog($"[{runtime.Info.ScreenId}/{binding.Configuration.SensorId}] pipeline faulted.");
+        InvokeSafely(SensorStateChanged, new RadarSensorRuntimeStateChanged(runtime.Info.ScreenId, binding.Configuration.SensorId, state, state == RadarSensorRuntimeState.Faulted ? "Pipeline faulted" : null));
         if (runtime.Info.IsPrimary && ReferenceEquals(PrimaryPipeline?.Pipeline, binding.Pipeline)) InvokeSafely(ConnectionStateChanged, ConnectionState);
     }
 
