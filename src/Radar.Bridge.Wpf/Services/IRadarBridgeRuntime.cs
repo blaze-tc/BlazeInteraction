@@ -3,20 +3,6 @@ using Yuexin.Radar.Processing;
 
 namespace Yuexin.Radar.Bridge.Wpf.Services;
 
-/// <summary>Temporary Task 7 UI visualization DTO. It is not a runtime event contract.</summary>
-public sealed record RadarRuntimeSnapshot(
-    long Sequence,
-    DateTimeOffset Timestamp,
-    IReadOnlyList<RadarPoint> RawPoints,
-    IReadOnlyList<RadarPoint> ValidPoints,
-    IReadOnlyList<RadarCluster> Clusters,
-    IReadOnlyList<RadarTarget> Targets,
-    IReadOnlyList<RadarPointer> Pointers,
-    double ScanFrequencyHz,
-    double ReceivedBytesPerSecond,
-    long CrcErrorCount = 0,
-    long DiscardedByteCount = 0);
-
 public sealed record UnityClientStatus(
     bool IsConnected,
     int ProcessId,

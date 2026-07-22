@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Windows;
 using Microsoft.Win32;
 using Yuexin.Radar.Bridge.Wpf.Controls;
@@ -58,9 +57,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        var speedText = (ReplaySpeedCombo.SelectedItem as System.Windows.Controls.ComboBoxItem)?.Tag?.ToString() ?? "1";
-        var speed = double.Parse(speedText, CultureInfo.InvariantCulture);
-        await ExecuteUiActionAsync(() => _viewModel.ReplaySelectedSensorAsync(dialog.FileName, speed, ReplayLoopCheckBox.IsChecked == true));
+        await ExecuteUiActionAsync(() => _viewModel.ReplaySelectedSensorAsync(dialog.FileName, 1d, false));
     }
 
     private void OnPauseReplayClick(object sender, RoutedEventArgs eventArgs) => _viewModel.PauseSelectedReplay();

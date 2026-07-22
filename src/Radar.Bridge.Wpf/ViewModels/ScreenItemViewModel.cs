@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using Yuexin.Radar.Bridge.Wpf.Services;
 using Yuexin.Radar.Configuration;
 using Yuexin.Radar.Contracts;
 
@@ -8,6 +9,7 @@ namespace Yuexin.Radar.Bridge.Wpf.ViewModels;
 public sealed class ScreenItemViewModel : ObservableObject
 {
     private readonly RadarScreenConfiguration _configuration;
+    private RadarScreenRuntimeSnapshot? _latestSnapshot;
 
     public ScreenItemViewModel(RadarScreenConfiguration configuration)
     {
@@ -38,6 +40,7 @@ public sealed class ScreenItemViewModel : ObservableObject
     public RadarInteractionMode InteractionMode { get => _configuration.Interaction.Mode; set => Set(value, () => _configuration.Interaction.Mode, item => _configuration.Interaction.Mode = item); }
     public int DwellMilliseconds { get => _configuration.Interaction.DwellMilliseconds; set => Set(value, () => _configuration.Interaction.DwellMilliseconds, item => _configuration.Interaction.DwellMilliseconds = item); }
     public ObservableCollection<SensorItemViewModel> Sensors { get; }
+    public RadarScreenRuntimeSnapshot? LatestSnapshot { get => _latestSnapshot; private set => SetProperty(ref _latestSnapshot, value); }
     public int OnlineSensorCount => Sensors.Count(sensor => sensor.RuntimeState == Services.RadarSensorRuntimeState.Running);
     public int FusedTargetCount { get; private set; }
     public bool HasValidationErrors => !ValidateCopy(new RadarAppConfiguration { Screens = [_configuration] });
@@ -61,6 +64,11 @@ public sealed class ScreenItemViewModel : ObservableObject
     }
 
     public void ApplyFusedTargetCount(int count) { FusedTargetCount = count; OnPropertyChanged(nameof(FusedTargetCount)); }
+    public void ApplySnapshot(RadarScreenRuntimeSnapshot snapshot)
+    {
+        LatestSnapshot = snapshot;
+        ApplyFusedTargetCount(snapshot.Targets.Count);
+    }
     public void NotifySensorChanges() { OnPropertyChanged(nameof(OnlineSensorCount)); OnPropertyChanged(nameof(HasValidationErrors)); }
     private void OnSensorPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {

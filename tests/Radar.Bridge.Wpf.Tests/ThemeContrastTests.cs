@@ -5,6 +5,31 @@ namespace Yuexin.Radar.Bridge.Wpf.Tests;
 
 public sealed class ThemeContrastTests
 {
+    [Theory]
+    [InlineData("ListBox")]
+    [InlineData("ListBoxItem")]
+    [InlineData("TabControl")]
+    [InlineData("TabItem")]
+    [InlineData("CheckBox")]
+    [InlineData("Button")]
+    [InlineData("TextBox")]
+    public void ApplicationTheme_GivesInteractiveControlsExplicitDarkSurfaces(string targetType)
+    {
+        var document = XDocument.Load(Path.Combine(FindRepositoryRoot(), "src", "Radar.Bridge.Wpf", "App.xaml"));
+        var presentation = XNamespace.Get("http://schemas.microsoft.com/winfx/2006/xaml/presentation");
+        var xaml = XNamespace.Get("http://schemas.microsoft.com/winfx/2006/xaml");
+        var style = document.Descendants(presentation + "Style").Single(element =>
+            (string?)element.Attribute("TargetType") == targetType &&
+            element.Attribute(xaml + "Key") is null);
+        var setters = style.Elements(presentation + "Setter").ToArray();
+
+        Assert.Contains(setters, setter => (string?)setter.Attribute("Property") == "Foreground");
+        Assert.Contains(setters, setter => (string?)setter.Attribute("Property") == "Background");
+        Assert.Contains(style.Descendants(presentation + "Trigger"), trigger =>
+            (string?)trigger.Attribute("Property") == "IsEnabled" &&
+            (string?)trigger.Attribute("Value") == "False");
+    }
+
     [Fact]
     public void ApplicationTheme_GivesTextAndComboBoxesReadableForegrounds()
     {

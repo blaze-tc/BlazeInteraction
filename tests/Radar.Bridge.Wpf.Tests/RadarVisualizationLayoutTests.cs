@@ -5,39 +5,49 @@ namespace Yuexin.Radar.Bridge.Wpf.Tests;
 public sealed class RadarVisualizationLayoutTests
 {
     [Fact]
-    public void MainWindow_SeparatesRawObservationFromUnityOutput()
+    public void MainWindow_ContainsScreenSensorListsAndScopedParameterTabs()
     {
         var document = XDocument.Load(Path.Combine(FindRepositoryRoot(), "src", "Radar.Bridge.Wpf", "MainWindow.xaml"));
         var presentation = XNamespace.Get("http://schemas.microsoft.com/winfx/2006/xaml/presentation");
         var controls = XNamespace.Get("clr-namespace:Yuexin.Radar.Bridge.Wpf.Controls");
-        var xaml = XNamespace.Get("http://schemas.microsoft.com/winfx/2006/xaml");
-        var views = document.Descendants(controls + "RadarPointCloudView").ToArray();
 
-        Assert.Equal(2, views.Length);
-        var raw = views.Single(element => (string?)element.Attribute(xaml + "Name") == "RawRadarView");
-        var output = views.Single(element => (string?)element.Attribute(xaml + "Name") == "UnityOutputRadarView");
+        var lists = document.Descendants(presentation + "ListBox").ToArray();
+        var tabs = document.Descendants(presentation + "TabItem").ToArray();
+        var raw = document.Descendants(controls + "RadarPointCloudView").Single();
+        var fusion = document.Descendants(controls + "RadarScreenFusionView").Single();
 
-        Assert.Equal("True", (string?)raw.Attribute("ShowRawPoints"));
-        Assert.Equal("False", (string?)raw.Attribute("ShowValidPoints"));
-        Assert.Equal("False", (string?)raw.Attribute("ShowBlindZone"));
-        Assert.Equal("False", (string?)raw.Attribute("IsRegionEditable"));
-        Assert.Null(raw.Attribute("RegionVertices"));
-        Assert.Equal("{Binding VisualizationRangeMeters}", (string?)raw.Attribute("MaximumRangeMeters"));
+        Assert.Contains(lists, element => (string?)element.Attribute("ItemsSource") == "{Binding Screens}");
+        Assert.Contains(lists, element => (string?)element.Attribute("ItemsSource") == "{Binding SelectedScreen.Sensors}");
+        Assert.Contains(tabs, element => (string?)element.Attribute("Header") == "屏幕参数");
+        Assert.Contains(tabs, element => (string?)element.Attribute("Header") == "雷达参数");
+        Assert.Equal("{Binding SelectedSensor.Snapshot}", (string?)raw.Attribute("Snapshot"));
+        Assert.Equal("{Binding SelectedScreen.LatestSnapshot}", (string?)fusion.Attribute("Snapshot"));
+        Assert.Equal("{Binding SelectedScreen.Sensors}", (string?)fusion.Attribute("Sensors"));
+        Assert.Equal("{Binding SelectedSensor.SensorId}", (string?)fusion.Attribute("SelectedSensorId"));
+    }
 
-        Assert.Equal("False", (string?)output.Attribute("ShowRawPoints"));
-        Assert.Equal("True", (string?)output.Attribute("ShowValidPoints"));
-        Assert.Equal("False", (string?)output.Attribute("ShowBlindZone"));
-        Assert.Equal("True", (string?)output.Attribute("IsRegionEditable"));
-        Assert.Equal("{Binding RegionVertices}", (string?)output.Attribute("RegionVertices"));
-        Assert.Equal("{Binding VisualizationRangeMeters}", (string?)output.Attribute("MaximumRangeMeters"));
+    [Fact]
+    public void FusionView_UsesScreenSpaceAndStableMarkers()
+    {
+        var source = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "src", "Radar.Bridge.Wpf", "Controls", "RadarScreenFusionView.cs"));
 
-        var labels = document.Descendants(presentation + "TextBlock")
-            .Select(element => (string?)element.Attribute("Text"))
-            .Where(text => text is not null)
-            .ToArray();
-        Assert.Contains("区域 1 · 雷达原始数据", labels);
-        Assert.Contains("区域 2 · Unity 输出数据", labels);
-        Assert.Contains("显示范围（仅缩放，不过滤）", labels);
+        Assert.Contains("MarkerRadius = 2.5", source);
+        Assert.Contains("SnapsToDevicePixels = true", source);
+        Assert.Contains("ToView(float pixelX, float pixelY)", source);
+        Assert.DoesNotContain("DispatcherPriority.Render", source);
+    }
+
+    [Fact]
+    public void MainViewModel_DoesNotExposeTemporaryFlatUiAdaptersOrLegacySnapshotDto()
+    {
+        var root = FindRepositoryRoot();
+        var viewModel = File.ReadAllText(Path.Combine(root, "src", "Radar.Bridge.Wpf", "ViewModels", "MainViewModel.cs"));
+        var runtime = File.ReadAllText(Path.Combine(root, "src", "Radar.Bridge.Wpf", "Services", "IRadarBridgeRuntime.cs"));
+
+        Assert.DoesNotContain("Temporary compatibility surface", viewModel);
+        Assert.DoesNotContain("RadarRuntimeSnapshot", viewModel);
+        Assert.DoesNotContain("public string RadarIp", viewModel);
+        Assert.DoesNotContain("record RadarRuntimeSnapshot", runtime);
     }
 
     private static string FindRepositoryRoot()
@@ -46,10 +56,7 @@ public sealed class RadarVisualizationLayoutTests
              directory is not null;
              directory = directory.Parent)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "RadarControl.sln")))
-            {
-                return directory.FullName;
-            }
+            if (File.Exists(Path.Combine(directory.FullName, "RadarControl.sln"))) return directory.FullName;
         }
 
         throw new DirectoryNotFoundException("Unable to locate RadarControl.sln from the test output directory.");
