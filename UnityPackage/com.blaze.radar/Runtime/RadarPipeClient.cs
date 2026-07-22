@@ -1,27 +1,44 @@
 #nullable disable
 
 using System;
-using System.Diagnostics;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.IO;
 using System.IO.Pipes;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Newtonsoft.Json;
 using Blaze.Radar.Internal;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace Blaze.Radar
 {
-    public sealed class RadarPipeClient : IDisposable
+    internal interface IRadarPipeClient : IDisposable
     {
+        bool IsConnected { get; }
+        long DroppedBatchCount { get; }
+        event Action<bool> ConnectionChanged;
+        event Action<string> ErrorReceived;
+        void Start(RadarHelloPayload hello);
+        bool TryConsumeLatestBatch(out RadarPointerBatchPayload batch);
+        void DrainMainThreadEvents();
+        Task StopAsync();
+    }
+
+    public sealed class RadarPipeClient : IRadarPipeClient
+    {
+        private static readonly IReadOnlyList<RadarScreenInfo> NoScreens =
+            new ReadOnlyCollection<RadarScreenInfo>(new List<RadarScreenInfo>());
+
         private readonly string _pipeName;
         private readonly int _connectTimeoutMilliseconds;
         private readonly int _reconnectDelayMilliseconds;
         private readonly int _serverResponseTimeoutMilliseconds;
-        private readonly LatestValueBuffer<RadarPointerFrameMessage> _latestFrame =
-            new LatestValueBuffer<RadarPointerFrameMessage>();
-        private readonly System.Collections.Concurrent.ConcurrentQueue<Action> _mainThreadActions =
-            new System.Collections.Concurrent.ConcurrentQueue<Action>();
+        private readonly LatestValueBuffer<RadarPointerBatchPayload> _latestBatch =
+            new LatestValueBuffer<RadarPointerBatchPayload>();
+        private readonly ConcurrentQueue<Action> _mainThreadActions = new ConcurrentQueue<Action>();
         private readonly SemaphoreSlim _writeLock = new SemaphoreSlim(1, 1);
         private readonly object _lifecycleSync = new object();
         private CancellationTokenSource _cancellation;
@@ -45,11 +62,16 @@ namespace Blaze.Radar
             _serverResponseTimeoutMilliseconds = Math.Max(1000, serverResponseTimeoutMilliseconds);
         }
 
-        public bool IsConnected => Volatile.Read(ref _connected) != 0;
-        public long DroppedFrameCount => _latestFrame.DroppedCount;
-        public string BridgeVersion { get; private set; } = "";
-        public string DeviceModel { get; private set; } = "";
-        public string LastError { get; private set; } = "";
+        public bool IsConnected { get { return Volatile.Read(ref _connected) != 0; } }
+        public long DroppedBatchCount { get { return _latestBatch.DroppedCount; } }
+        public long DroppedFrameCount { get { return DroppedBatchCount; } }
+        public string BridgeVersion { get; private set; } = string.Empty;
+        public int AcknowledgedProtocolVersion { get; private set; }
+        public string Capability { get; private set; } = string.Empty;
+        public bool HasRunningSensors { get; private set; }
+        public IReadOnlyList<RadarScreenInfo> AcknowledgedScreens { get; private set; } = NoScreens;
+        public string DeviceModel { get { return string.Empty; } }
+        public string LastError { get; private set; } = string.Empty;
 
         public event Action<bool> ConnectionChanged;
         public event Action<string> ErrorReceived;
@@ -81,14 +103,15 @@ namespace Blaze.Radar
             }
         }
 
-        public bool TryConsumeLatestFrame(out RadarPointerFrameMessage frame)
+        public bool TryConsumeLatestBatch(out RadarPointerBatchPayload batch)
         {
-            return _latestFrame.TryConsume(out frame);
+            return _latestBatch.TryConsume(out batch);
         }
 
         public void DrainMainThreadEvents()
         {
-            while (_mainThreadActions.TryDequeue(out var action))
+            Action action;
+            while (_mainThreadActions.TryDequeue(out action))
             {
                 action();
             }
@@ -100,6 +123,8 @@ namespace Blaze.Radar
             {
                 if (_runTask == null)
                 {
+                    _latestBatch.Clear();
+                    SetConnected(false);
                     return _stopTask ?? Task.CompletedTask;
                 }
 
@@ -114,8 +139,17 @@ namespace Blaze.Radar
 
         private async Task StopCoreAsync(Task runTask, CancellationTokenSource cancellation)
         {
-            cancellation?.Cancel();
-            Interlocked.Exchange(ref _activePipe, null)?.Dispose();
+            if (cancellation != null)
+            {
+                cancellation.Cancel();
+            }
+
+            var pipe = Interlocked.Exchange(ref _activePipe, null);
+            if (pipe != null)
+            {
+                pipe.Dispose();
+            }
+
             try
             {
                 await runTask.ConfigureAwait(false);
@@ -130,9 +164,13 @@ namespace Blaze.Radar
             }
             finally
             {
-                cancellation?.Dispose();
+                if (cancellation != null)
+                {
+                    cancellation.Dispose();
+                }
+
                 SetConnected(false);
-                _latestFrame.Clear();
+                _latestBatch.Clear();
 
                 lock (_lifecycleSync)
                 {
@@ -155,7 +193,7 @@ namespace Blaze.Radar
 
             await WriteEnvelopeAsync(
                 pipe,
-                RadarIpcProtocol.Create(RadarIpcMessageType.Shutdown, NextSequence(), new { }),
+                RadarIpcProtocol.Create(RadarIpcMessageType.Shutdown, NextSequence(), new object()),
                 CancellationToken.None).ConfigureAwait(false);
         }
 
@@ -216,7 +254,7 @@ namespace Blaze.Radar
                     try
                     {
                         await pipe.ConnectAsync(_connectTimeoutMilliseconds, cancellationToken).ConfigureAwait(false);
-                        LastError = "";
+                        LastError = string.Empty;
                         await WriteEnvelopeAsync(
                             pipe,
                             RadarIpcProtocol.Create(RadarIpcMessageType.Hello, NextSequence(), _hello),
@@ -240,6 +278,10 @@ namespace Blaze.Radar
                                 {
                                     // Session cancellation stops the heartbeat loop.
                                 }
+                                catch (ObjectDisposedException)
+                                {
+                                    // Stop may dispose the pipe while heartbeat is writing.
+                                }
                             }
                         }
                     }
@@ -248,8 +290,11 @@ namespace Blaze.Radar
                         break;
                     }
                     catch (Exception exception) when (
-                        exception is IOException || exception is TimeoutException ||
-                        exception is UnauthorizedAccessException || exception is JsonException)
+                        exception is IOException ||
+                        exception is InvalidDataException ||
+                        exception is TimeoutException ||
+                        exception is UnauthorizedAccessException ||
+                        exception is JsonException)
                     {
                         ReportError(exception.Message);
                     }
@@ -268,6 +313,7 @@ namespace Blaze.Radar
         {
             var decoder = new LengthPrefixedFrameDecoder();
             var buffer = new byte[8192];
+            var acknowledged = false;
             while (!cancellationToken.IsCancellationRequested)
             {
                 using (var responseTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
@@ -298,48 +344,111 @@ namespace Blaze.Radar
                             if (envelope.protocolVersion != RadarIpcProtocol.Version)
                             {
                                 throw new InvalidDataException(
-                                    $"IPC protocol {envelope.protocolVersion} is incompatible with Unity SDK protocol {RadarIpcProtocol.Version}.");
+                                    "IPC protocol " + envelope.protocolVersion +
+                                    " is incompatible with Unity SDK protocol " + RadarIpcProtocol.Version + ".");
                             }
 
-                            HandleEnvelope(envelope);
+                            acknowledged = HandleEnvelope(envelope, acknowledged);
                         }
                     }
                     catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                     {
                         throw new TimeoutException(
-                            $"RadarBridge did not respond for {_serverResponseTimeoutMilliseconds} ms.");
+                            "RadarBridge did not respond for " + _serverResponseTimeoutMilliseconds + " ms.");
                     }
                 }
             }
         }
 
-        private void HandleEnvelope(RadarIpcEnvelope envelope)
+        private bool HandleEnvelope(RadarIpcEnvelope envelope, bool acknowledged)
         {
             switch (envelope.messageType)
             {
                 case RadarIpcMessageType.HelloAck:
-                    var helloAck = envelope.payload.ToObject<RadarHelloAckPayload>();
-                    if (helloAck != null)
+                    if (acknowledged)
                     {
-                        BridgeVersion = helloAck.bridgeVersion ?? "";
-                        DeviceModel = helloAck.deviceModel ?? "";
-                        SetConnected(true);
+                        throw new InvalidDataException("RadarBridge sent a duplicate HelloAck for one IPC session.");
                     }
-                    break;
+
+                    var helloAck = ReadRequiredPayload<RadarHelloAckPayload>(envelope, "HelloAck");
+                    if (helloAck.protocolVersion != RadarIpcProtocol.Version)
+                    {
+                        throw new InvalidDataException(
+                            "RadarBridge acknowledgement protocol " + helloAck.protocolVersion +
+                            " is incompatible with Unity SDK protocol " + RadarIpcProtocol.Version + ".");
+                    }
+
+                    BridgeVersion = helloAck.bridgeVersion ?? string.Empty;
+                    AcknowledgedProtocolVersion = helloAck.protocolVersion;
+                    Capability = helloAck.capability ?? string.Empty;
+                    HasRunningSensors = helloAck.connected;
+                    AcknowledgedScreens = CopyScreens(helloAck.screens);
+                    SetConnected(true);
+                    return true;
+
+                case RadarIpcMessageType.PointerBatch:
+                    if (!acknowledged)
+                    {
+                        throw new InvalidDataException("RadarBridge sent PointerBatch before HelloAck completed the IPC handshake.");
+                    }
+
+                    var batch = ReadRequiredPayload<RadarPointerBatchPayload>(envelope, "PointerBatch");
+                    if (batch.screens == null)
+                    {
+                        throw new InvalidDataException("RadarBridge sent an invalid PointerBatch payload: screens is required.");
+                    }
+
+                    _latestBatch.Publish(batch);
+                    return acknowledged;
+
                 case RadarIpcMessageType.PointerFrame:
-                    var frame = envelope.payload.ToObject<RadarPointerFrameMessage>();
-                    if (frame != null)
-                    {
-                        frame.sequence = envelope.sequence;
-                        frame.timestampUnixMilliseconds = envelope.timestampUnixMilliseconds;
-                        _latestFrame.Publish(frame);
-                    }
-                    break;
+                    ReportError("RadarBridge sent legacy PointerFrame on IPC v2.");
+                    return acknowledged;
+
                 case RadarIpcMessageType.Error:
-                    var error = envelope.payload.ToObject<RadarErrorPayload>();
-                    ReportError(error?.message ?? "RadarBridge returned an unspecified error.");
-                    break;
+                    var error = ReadRequiredPayload<RadarErrorPayload>(envelope, "Error");
+                    ReportError(error.message ?? "RadarBridge returned an unspecified error.");
+                    return acknowledged;
+
+                default:
+                    return acknowledged;
             }
+        }
+
+        private static T ReadRequiredPayload<T>(RadarIpcEnvelope envelope, string payloadName)
+            where T : class
+        {
+            if (envelope.payload == null || envelope.payload.Type == JTokenType.Null)
+            {
+                throw new InvalidDataException("RadarBridge sent an empty or invalid " + payloadName + " payload.");
+            }
+
+            try
+            {
+                var value = envelope.payload.ToObject<T>();
+                if (value == null)
+                {
+                    throw new InvalidDataException("RadarBridge sent an empty or invalid " + payloadName + " payload.");
+                }
+
+                return value;
+            }
+            catch (JsonException exception)
+            {
+                throw new InvalidDataException(
+                    "RadarBridge sent an invalid " + payloadName + " payload: " + exception.Message,
+                    exception);
+            }
+        }
+
+        private static IReadOnlyList<RadarScreenInfo> CopyScreens(List<RadarScreenInfo> screens)
+        {
+            if (screens == null || screens.Count == 0)
+            {
+                return NoScreens;
+            }
+
+            return new ReadOnlyCollection<RadarScreenInfo>(new List<RadarScreenInfo>(screens));
         }
 
         private async Task SendHeartbeatAsync(Stream stream, CancellationToken cancellationToken)
@@ -398,8 +507,9 @@ namespace Blaze.Radar
 
         private void ReportError(string message)
         {
-            LastError = message ?? "Unknown IPC error.";
-            _mainThreadActions.Enqueue(() => InvokeSafely(ErrorReceived, LastError));
+            var captured = string.IsNullOrWhiteSpace(message) ? "Unknown IPC error." : message;
+            LastError = captured;
+            _mainThreadActions.Enqueue(() => InvokeSafely(ErrorReceived, captured));
         }
 
         private static void InvokeSafely<T>(Action<T> handlers, T value)
@@ -417,7 +527,7 @@ namespace Blaze.Radar
                 }
                 catch
                 {
-                    // Unity callbacks must not terminate the IPC worker or block later subscribers.
+                    // One Unity callback must not block later subscribers.
                 }
             }
         }

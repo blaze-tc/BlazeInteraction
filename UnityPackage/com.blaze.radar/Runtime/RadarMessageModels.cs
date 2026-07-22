@@ -2,9 +2,9 @@
 
 using System;
 using System.Collections.Generic;
-using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
 using Newtonsoft.Json.Linq;
+using Newtonsoft.Json;
 
 namespace Blaze.Radar
 {
@@ -20,7 +20,8 @@ namespace Blaze.Radar
         Error = 7,
         Ping = 8,
         Pong = 9,
-        Shutdown = 10
+        Shutdown = 10,
+        PointerBatch = 11
     }
 
     [JsonConverter(typeof(StringEnumConverter))]
@@ -35,7 +36,7 @@ namespace Blaze.Radar
     [Serializable]
     public sealed class RadarIpcEnvelope
     {
-        public int protocolVersion = 1;
+        public int protocolVersion = RadarIpcProtocol.Version;
         public RadarIpcMessageType messageType;
         public long sequence;
         public long timestampUnixMilliseconds;
@@ -43,22 +44,74 @@ namespace Blaze.Radar
     }
 
     [Serializable]
+    public sealed class RadarScreenDefinitionPayload
+    {
+        public string screenId;
+        public string name;
+        public int defaultWidthPixels;
+        public int defaultHeightPixels;
+        public bool isPrimary;
+        public int order;
+    }
+
+    [Serializable]
     public sealed class RadarHelloPayload
     {
         public int unityProcessId;
         public string unityVersion;
-        public int screenWidth;
-        public int screenHeight;
+        public List<RadarScreenDefinitionPayload> screens = new List<RadarScreenDefinitionPayload>();
+    }
+
+    [Serializable]
+    public sealed class RadarScreenInfo
+    {
+        public string screenId;
+        public string name;
+        public int widthPixels;
+        public int heightPixels;
+        public bool isPrimary;
+        public int order;
+    }
+
+    [Serializable]
+    public sealed class RadarScreenPointer
+    {
+        public int pointerId;
+        public RadarPointerPhase phase;
+        public float normalizedX;
+        public float normalizedY;
+        public float pixelX;
+        public float pixelY;
+        public float confidence;
+        public long timestampUnixMilliseconds;
+    }
+
+    [Serializable]
+    public sealed class RadarScreenPointerFrame
+    {
+        public RadarScreenInfo screen;
+        public long sequence;
+        public long timestampUnixMilliseconds;
+        public List<RadarScreenPointer> pointers = new List<RadarScreenPointer>();
+    }
+
+    [Serializable]
+    public sealed class RadarPointerBatchPayload
+    {
+        public List<RadarScreenPointerFrame> screens = new List<RadarScreenPointerFrame>();
     }
 
     [Serializable]
     public sealed class RadarHelloAckPayload
     {
         public string bridgeVersion;
-        public string deviceModel;
+        public int protocolVersion;
         public bool connected;
+        public string capability;
+        public List<RadarScreenInfo> screens = new List<RadarScreenInfo>();
     }
 
+    // Kept as the primary-screen adapter for existing SDK consumers.
     [Serializable]
     public sealed class RadarPointerMessage
     {
@@ -70,6 +123,7 @@ namespace Blaze.Radar
         public long timestampUnixMilliseconds;
     }
 
+    // Kept as the primary-screen adapter for existing SDK consumers.
     [Serializable]
     public sealed class RadarPointerFrameMessage
     {
@@ -93,10 +147,16 @@ namespace Blaze.Radar
 
     public static class RadarIpcProtocol
     {
-        public const int Version = 1;
+        public const int Version = 2;
 
         public static RadarIpcEnvelope Create(RadarIpcMessageType type, long sequence, object payload)
         {
+            if (type == RadarIpcMessageType.PointerFrame)
+            {
+                throw new InvalidOperationException(
+                    "PointerFrame is a protocol v1 legacy payload and cannot be published on protocol v2.");
+            }
+
             return new RadarIpcEnvelope
             {
                 protocolVersion = Version,
