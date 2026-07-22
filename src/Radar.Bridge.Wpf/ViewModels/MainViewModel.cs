@@ -58,11 +58,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         StopSimulationCommand = DisconnectAllCommand;
         ResetRegionCommand = new RelayCommand(ResetSelectedRegion, () => SelectedSensor is not null);
         BeginCalibrationCommand = new RelayCommand(() => SelectedSensor?.BeginCalibration(), () => SelectedSensor is not null);
-        CaptureCalibrationPointCommand = new RelayCommand(() => SelectedSensor?.CaptureCurrentTargetForCalibration(), () => SelectedSensor?.Snapshot?.Detections.Count > 0);
+        CaptureCalibrationPointCommand = new RelayCommand(() => SelectedSensor?.CaptureCurrentTargetForCalibration(), () => SelectedSensor?.HasMatchedPhysicalTarget == true);
         UndoCalibrationPointCommand = new RelayCommand(() => SelectedSensor?.UndoCalibrationPoint(), () => SelectedSensor is not null);
         SaveCalibrationCommand = new RelayCommand(() => SelectedSensor?.SaveCalibration(), () => SelectedSensor is not null);
         ClearCalibrationCommand = new RelayCommand(() => SelectedSensor?.ClearCalibration(), () => SelectedSensor is not null);
-        AddMaskedRegionCommand = new RelayCommand(() => SelectedSensor?.AddMaskedRegionAtCurrentTarget(), () => SelectedSensor?.Snapshot?.Detections.Count > 0);
+        AddMaskedRegionCommand = new RelayCommand(() => SelectedSensor?.AddMaskedRegionAtCurrentTarget(), () => SelectedSensor?.HasMatchedPhysicalTarget == true);
         DeleteMaskedRegionCommand = new RelayCommand(DeleteSelectedMaskedRegion, () => SelectedSensor?.Configuration.Range.MaskedPolygons.Count > 0);
 
         _runtime.SensorSnapshotUpdated += OnSensorSnapshotUpdated;
@@ -103,7 +103,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public UnityClientStatus UnityStatus { get => _unityStatus; private set => SetProperty(ref _unityStatus, value); }
     public bool CanEditSelectedScreen => SelectedScreen is { IsAssociated: false };
 
-    // Temporary compatibility surface for MainWindow.xaml; Task 7 replaces these bindings with selected item views.
+    // Temporary compatibility surface for MainWindow.xaml. It maps only the selected item and must be removed when Task 7 rewrites the XAML; do not persist or reintroduce root flat configuration here.
     public IReadOnlyList<RadarModel> AvailableModels { get; } = [RadarModel.F10, RadarModel.F20];
     public IReadOnlyList<RadarInteractionMode> AvailableInteractionModes { get; } = Enum.GetValues<RadarInteractionMode>();
     public IReadOnlyList<string> AvailableLocalIps { get; } = [string.Empty];
@@ -227,13 +227,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         await Task.CompletedTask;
     }
 
-    private async Task DeleteSensorAsync(CancellationToken _)
+    private Task DeleteSensorAsync(CancellationToken _)
     {
-        if (SelectedScreen is null || SelectedSensor is null || SelectedScreen.Sensors.Count <= 1) return;
+        if (SelectedScreen is null || SelectedSensor is null || SelectedScreen.Sensors.Count <= 1) return Task.CompletedTask;
         var sensor = SelectedSensor;
-        await _runtime.DisconnectSensorAsync(SelectedScreen.ScreenId, sensor.SensorId).ConfigureAwait(true);
         SelectedScreen.RemoveSensor(sensor);
         SelectedSensor = SelectedScreen.Sensors.FirstOrDefault();
+        return Task.CompletedTask;
     }
 
     private Task DeleteOrphanedScreenConfigurationAsync(CancellationToken _)

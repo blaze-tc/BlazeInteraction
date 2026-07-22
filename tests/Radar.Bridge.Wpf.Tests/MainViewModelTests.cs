@@ -34,7 +34,7 @@ public sealed class MainViewModelTests
     }
 
     [Fact]
-    public async Task AddAndDeleteSensor_UpdatesTheSelectedScreenConfiguration()
+    public async Task DeleteSensorFromUnassociatedScreen_RemovesConfigurationWithoutRuntimeDisconnect()
     {
         var configuration = ThreeScreenFourSensorConfiguration();
         var runtime = new TestRuntime();
@@ -47,7 +47,7 @@ public sealed class MainViewModelTests
         await ExecuteAsync(viewModel.DeleteSensorCommand);
 
         Assert.DoesNotContain(configuration.Screens.Single(screen => screen.ScreenId == "left").Sensors, sensor => sensor.SensorId == "sensor-1");
-        Assert.Equal(("left", "sensor-1"), runtime.LastDisconnectedSensor);
+        Assert.Equal(0, runtime.DisconnectSensorCallCount);
     }
 
     [Fact]
@@ -143,6 +143,10 @@ public sealed class MainViewModelTests
         Assert.False(viewModel.CaptureCalibrationPointCommand.CanExecute(null));
         Assert.False(viewModel.AddMaskedRegionCommand.CanExecute(null));
         Assert.False(viewModel.DeleteMaskedRegionCommand.CanExecute(null));
+
+        selected.ApplySnapshot(Snapshot("front", selected.SensorId, 9, new Point2(4f, 5f), detectionId: 2));
+        Assert.False(viewModel.CaptureCalibrationPointCommand.CanExecute(null));
+        Assert.False(viewModel.AddMaskedRegionCommand.CanExecute(null));
 
         selected.ApplySnapshot(Snapshot("front", selected.SensorId, 2, new Point2(4f, 5f)));
         Assert.True(viewModel.CaptureCalibrationPointCommand.CanExecute(null));
@@ -295,6 +299,7 @@ public sealed class MainViewModelTests
         public event Action<UnityClientStatus>? UnityStatusChanged { add { } remove { } }
         public (string ScreenId, string SensorId)? LastConnectedSensor { get; private set; }
         public (string ScreenId, string SensorId)? LastDisconnectedSensor { get; private set; }
+        public int DisconnectSensorCallCount { get; private set; }
         public int ReplayCallCount { get; private set; }
         public int StartRecordingCallCount { get; private set; }
         public Exception? ConnectSensorException { get; init; }
@@ -308,7 +313,12 @@ public sealed class MainViewModelTests
             return ConnectAsyncCore();
         }
         private async Task ConnectAsyncCore() { if (ConnectGate is not null) await ConnectGate.Task; if (ConnectSensorException is not null) throw ConnectSensorException; }
-        public Task DisconnectSensorAsync(string screenId, string sensorId) { LastDisconnectedSensor = (screenId, sensorId); return Task.CompletedTask; }
+        public Task DisconnectSensorAsync(string screenId, string sensorId)
+        {
+            DisconnectSensorCallCount++;
+            LastDisconnectedSensor = (screenId, sensorId);
+            return Task.FromException(new InvalidOperationException("Unassociated screen deletion must not disconnect through the runtime."));
+        }
         public Task ConnectScreenAsync(string screenId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task DisconnectScreenAsync(string screenId) => Task.CompletedTask;
         public Task ConnectAllAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;

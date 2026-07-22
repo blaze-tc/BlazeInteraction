@@ -62,6 +62,7 @@ public sealed class SensorItemViewModel : ObservableObject
     public bool ReplayLoop { get => _configuration.ReplayLoop; set => Set(value, () => _configuration.ReplayLoop, item => _configuration.ReplayLoop = item); }
     public RadarSensorRuntimeState RuntimeState { get => _runtimeState; private set => SetProperty(ref _runtimeState, value); }
     public RadarSensorRuntimeSnapshot? Snapshot { get => _snapshot; private set => SetProperty(ref _snapshot, value); }
+    public bool HasMatchedPhysicalTarget => TryGetPhysicalTarget(out _);
     public string FrequencyText => $"{Snapshot?.ScanFrequencyHz ?? 0d:0.0} Hz";
     public long CrcErrorCount => Snapshot?.CrcErrorCount ?? 0;
     public long DroppedInputFrameCount => Snapshot?.DroppedInputFrameCount ?? 0;
@@ -75,6 +76,7 @@ public sealed class SensorItemViewModel : ObservableObject
         OnPropertyChanged(nameof(FrequencyText));
         OnPropertyChanged(nameof(CrcErrorCount));
         OnPropertyChanged(nameof(DroppedInputFrameCount));
+        OnPropertyChanged(nameof(HasMatchedPhysicalTarget));
     }
 
     public void ApplyRuntimeState(RadarSensorRuntimeState state) => RuntimeState = state;
