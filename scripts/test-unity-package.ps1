@@ -8,10 +8,93 @@ param(
     [string]$TestPlatform = "EditMode",
 
     [Parameter()]
-    [switch]$IncludeSamples
+    [switch]$IncludeSamples,
+
+    [Parameter(DontShow = $true)]
+    [switch]$RunnerSelfTest
 )
 
 $ErrorActionPreference = "Stop"
+
+function Parse-UnityVersion {
+    param([string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) {
+        return $null
+    }
+
+    $pattern = '(?<!\d)(?<major>\d{4})\.(?<minor>\d+)\.(?<patch>\d+)(?<channel>[abfp])(?<release>\d+)(?:(?<suffixLetter>[a-z])(?<suffixNumber>\d+))?'
+    $match = [System.Text.RegularExpressions.Regex]::Match(
+        $Text,
+        $pattern,
+        [System.Text.RegularExpressions.RegexOptions]::CultureInvariant -bor
+        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if (-not $match.Success) {
+        return $null
+    }
+
+    $channel = $match.Groups["channel"].Value.ToLowerInvariant()
+    $channelRank = switch ($channel) {
+        "a" { 0 }
+        "b" { 1 }
+        "f" { 2 }
+        "p" { 3 }
+        default { -1 }
+    }
+    $suffixLetter = $match.Groups["suffixLetter"].Value.ToLowerInvariant()
+    $suffixRank = if ([string]::IsNullOrEmpty($suffixLetter)) {
+        0
+    }
+    else {
+        [int][char]$suffixLetter[0]
+    }
+    $suffixNumber = if ($match.Groups["suffixNumber"].Success) {
+        [int]$match.Groups["suffixNumber"].Value
+    }
+    else {
+        0
+    }
+
+    return [pscustomobject]@{
+        Version = $match.Value
+        Major = [int]$match.Groups["major"].Value
+        Minor = [int]$match.Groups["minor"].Value
+        Patch = [int]$match.Groups["patch"].Value
+        ChannelRank = $channelRank
+        Release = [int]$match.Groups["release"].Value
+        SuffixRank = $suffixRank
+        SuffixNumber = $suffixNumber
+    }
+}
+
+function Sort-UnityVersionCandidates {
+    param([object[]]$Candidates)
+
+    return @($Candidates | Sort-Object -Property @(
+        @{ Expression = "Patch"; Descending = $true },
+        @{ Expression = "ChannelRank"; Descending = $true },
+        @{ Expression = "Release"; Descending = $true },
+        @{ Expression = "SuffixRank"; Descending = $true },
+        @{ Expression = "SuffixNumber"; Descending = $true }
+    ))
+}
+
+function Find-VersionDirectoryFallback {
+    param([string]$EditorPath)
+
+    $directory = [System.IO.DirectoryInfo](Split-Path -Parent $EditorPath)
+    for ($depth = 0; $depth -lt 5 -and $null -ne $directory; $depth++) {
+        $parsed = Parse-UnityVersion -Text $directory.Name
+        if ($null -ne $parsed -and
+            [string]::Equals($parsed.Version, $directory.Name, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $parsed
+        }
+
+        $directory = $directory.Parent
+    }
+
+    return $null
+}
 
 function Resolve-UnityEditor {
     param([string]$RequestedEditor)
@@ -22,18 +105,26 @@ function Resolve-UnityEditor {
             throw "Unity Hub editor directory was not found at '$hubRoot'. Install a Unity 2021.3 editor or pass -UnityEditor <path>."
         }
 
-        $candidate = Get-ChildItem -LiteralPath $hubRoot -Directory |
-            Where-Object { $_.Name -match '^2021\.3\.' } |
-            Sort-Object { [version](($_.Name -replace '[^0-9.]', '').TrimEnd('.')) } -Descending |
-            ForEach-Object { Join-Path $_.FullName "Editor\Unity.exe" } |
-            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
-            Select-Object -First 1
+        $candidates = foreach ($versionDirectory in Get-ChildItem -LiteralPath $hubRoot -Directory) {
+            $parsed = Parse-UnityVersion -Text $versionDirectory.Name
+            $executable = Join-Path $versionDirectory.FullName "Editor\Unity.exe"
+            if ($null -ne $parsed -and
+                [string]::Equals($parsed.Version, $versionDirectory.Name, [System.StringComparison]::OrdinalIgnoreCase) -and
+                $parsed.Major -eq 2021 -and
+                $parsed.Minor -eq 3 -and
+                (Test-Path -LiteralPath $executable -PathType Leaf)) {
+                Add-Member -InputObject $parsed -NotePropertyName Path -NotePropertyValue $executable
+                $parsed
+            }
+        }
 
-        if ([string]::IsNullOrWhiteSpace($candidate)) {
+        $candidate = Sort-UnityVersionCandidates -Candidates @($candidates) | Select-Object -First 1
+
+        if ($null -eq $candidate) {
             throw "No Unity 2021.3 editor was found under '$hubRoot'. Install Unity 2021.3 or pass -UnityEditor <path>."
         }
 
-        $RequestedEditor = $candidate
+        $RequestedEditor = $candidate.Path
     }
 
     if (-not (Test-Path -LiteralPath $RequestedEditor -PathType Leaf)) {
@@ -41,22 +132,72 @@ function Resolve-UnityEditor {
     }
 
     $resolvedEditor = (Resolve-Path -LiteralPath $RequestedEditor).Path
-    $editorDirectory = Split-Path -Parent $resolvedEditor
-    $versionDirectory = Split-Path -Parent $editorDirectory
-    $editorVersion = Split-Path -Leaf $versionDirectory
-    if ($editorVersion -notmatch '^2021\.3\.') {
-        throw "Unity 2021.3 is required, but '$resolvedEditor' resolves to editor version '$editorVersion'."
+    $productVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($resolvedEditor).ProductVersion
+    $parsedVersion = Parse-UnityVersion -Text $productVersion
+    $versionSource = "ProductVersion '$productVersion'"
+    if ($null -eq $parsedVersion) {
+        $parsedVersion = Find-VersionDirectoryFallback -EditorPath $resolvedEditor
+        $versionSource = "version directory"
     }
 
-    $fileVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($resolvedEditor).ProductVersion
-    if (-not [string]::IsNullOrWhiteSpace($fileVersion) -and $fileVersion -notmatch '^2021\.3\.') {
-        throw "Unity 2021.3 is required, but '$resolvedEditor' reports product version '$fileVersion'."
+    if ($null -eq $parsedVersion) {
+        throw "Unity 2021.3 is required, but '$resolvedEditor' exposes no parseable ProductVersion or version directory."
+    }
+
+    if ($parsedVersion.Major -ne 2021 -or $parsedVersion.Minor -ne 3) {
+        throw "Unity 2021.3 is required, but '$resolvedEditor' resolves to '$($parsedVersion.Version)' from $versionSource."
     }
 
     return [pscustomobject]@{
         Path = $resolvedEditor
-        Version = $editorVersion
+        Version = $parsedVersion.Version
     }
+}
+
+function Invoke-RunnerSelfTest {
+    $knownVersions = @(
+        (Parse-UnityVersion -Text "2021.3.9f10")
+        (Parse-UnityVersion -Text "2021.3.45f1c1")
+        (Parse-UnityVersion -Text "2021.3.46f1")
+    )
+    if ($knownVersions -contains $null) {
+        throw "Runner self-test failed: a known Unity version could not be parsed."
+    }
+
+    $sorted = Sort-UnityVersionCandidates -Candidates $knownVersions
+    $actual = @($sorted | ForEach-Object { $_.Version }) -join ","
+    $expected = "2021.3.46f1,2021.3.45f1c1,2021.3.9f10"
+    if (-not [string]::Equals($actual, $expected, [System.StringComparison]::Ordinal)) {
+        throw "Runner self-test failed: expected '$expected', found '$actual'."
+    }
+
+    $selfTestId = [guid]::NewGuid().ToString("N")
+    $resultPath = Join-Path ([System.IO.Path]::GetTempPath()) "blaze-radar-$selfTestId-results.xml"
+    $logPath = Join-Path ([System.IO.Path]::GetTempPath()) "blaze-radar-$selfTestId.log"
+    try {
+        Set-Content -LiteralPath $resultPath -Encoding UTF8 -Value '<test-run result="Passed" total="3" passed="2" failed="0" inconclusive="0" skipped="1" />'
+        Set-Content -LiteralPath $logPath -Encoding UTF8 -Value 'Runner self-test log.'
+        Assert-UnityTestResults -ResultPath $resultPath -LogPath $logPath -Platform "SelfTest" -ExitCode 0
+
+        Set-Content -LiteralPath $resultPath -Encoding UTF8 -Value '<test-run result="Passed" total="3" passed="1" failed="0" inconclusive="0" skipped="1" />'
+        $rejectedInconsistentCounts = $false
+        try {
+            Assert-UnityTestResults -ResultPath $resultPath -LogPath $logPath -Platform "SelfTest" -ExitCode 0
+        }
+        catch {
+            $rejectedInconsistentCounts = $_.Exception.Message -like '*inconsistent*'
+        }
+
+        if (-not $rejectedInconsistentCounts) {
+            throw "Runner self-test failed: inconsistent XML counts were not rejected."
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+    }
+
+    Write-Host "Unity package runner self-test PASS: $actual"
 }
 
 function Assert-SafeTemporaryProjectPath {
@@ -96,16 +237,40 @@ function Assert-UnityTestResults {
     }
 
     $root = $results.DocumentElement
-    if ($null -eq $root) {
-        throw "Unity $Platform test result XML has no root element: '$ResultPath'."
+    if ($null -eq $root -or $root.Name -ne "test-run") {
+        $actualRoot = if ($null -eq $root) { "<missing>" } else { $root.Name }
+        throw "Unity $Platform test result XML root must be 'test-run', found '$actualRoot': '$ResultPath'."
     }
 
-    $total = [int]($root.GetAttribute("total"))
-    $failed = [int]($root.GetAttribute("failed"))
-    $inconclusive = [int]($root.GetAttribute("inconclusive"))
-    $passed = [int]($root.GetAttribute("passed"))
+    if (-not $root.HasAttribute("result") -or $root.GetAttribute("result") -ne "Passed") {
+        throw "Unity $Platform test result must report result='Passed': '$ResultPath'."
+    }
+
+    $counts = @{}
+    foreach ($attributeName in @("total", "passed", "failed", "inconclusive", "skipped")) {
+        if (-not $root.HasAttribute($attributeName)) {
+            throw "Unity $Platform test result is missing required '$attributeName' count: '$ResultPath'."
+        }
+
+        $parsedCount = 0
+        if (-not [int]::TryParse($root.GetAttribute($attributeName), [ref]$parsedCount) -or $parsedCount -lt 0) {
+            throw "Unity $Platform test result has invalid non-negative '$attributeName' count: '$ResultPath'."
+        }
+
+        $counts[$attributeName] = $parsedCount
+    }
+
+    $total = $counts["total"]
+    $passed = $counts["passed"]
+    $failed = $counts["failed"]
+    $inconclusive = $counts["inconclusive"]
+    $skipped = $counts["skipped"]
     if ($total -le 0) {
         throw "Unity $Platform discovered no tests. Result: '$ResultPath'. Log: '$LogPath'."
+    }
+
+    if ($total -ne ($passed + $failed + $inconclusive + $skipped)) {
+        throw "Unity $Platform test result counts are inconsistent: total=$total, passed=$passed, failed=$failed, inconclusive=$inconclusive, skipped=$skipped. Result: '$ResultPath'."
     }
 
     if ($failed -gt 0 -or $inconclusive -gt 0) {
@@ -124,6 +289,11 @@ function Assert-UnityTestResults {
     Write-Host "Unity $Platform PASS: passed=$passed, failed=$failed, inconclusive=$inconclusive"
     Write-Host "Result XML: $ResultPath"
     Write-Host "Unity log: $LogPath"
+}
+
+if ($RunnerSelfTest) {
+    Invoke-RunnerSelfTest
+    return
 }
 
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
@@ -151,7 +321,8 @@ $manifest = @'
     "com.unity.test-framework": "1.1.33",
     "com.unity.ugui": "1.0.0",
     "com.unity.nuget.newtonsoft-json": "3.0.2"
-  }
+  },
+  "testables": ["com.blaze.radar"]
 }
 '@
 Set-Content -LiteralPath (Join-Path $packagesDirectory "manifest.json") -Value $manifest -Encoding UTF8

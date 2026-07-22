@@ -1,5 +1,4 @@
 using System.IO;
-using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEditorInternal;
 using UnityEngine;
@@ -41,7 +40,7 @@ namespace Blaze.Radar.Editor
                 "RadarBridge owns TCP/protocol/calibration. Unity receives normalized pointer frames over Named Pipe.",
                 MessageType.Info);
             serializedSettings.Update();
-            SynchronizeOrderValues();
+            RadarScreenSerializedEditorOperations.SynchronizeOrderValues(screenList.serializedProperty);
             var iterator = serializedSettings.GetIterator();
             var enterChildren = true;
             while (iterator.NextVisible(enterChildren))
@@ -92,13 +91,18 @@ namespace Blaze.Radar.Editor
 
         private static void EnsureScreenEditor(RadarRuntimeSettings settings)
         {
+            if (settings.MigrateLegacyScreenTopology())
+            {
+                EditorUtility.SetDirty(settings);
+                AssetDatabase.SaveAssets();
+            }
+
             if (activeSettings == settings && serializedSettings != null && screenList != null)
             {
                 return;
             }
 
             activeSettings = settings;
-            _ = settings.Screens;
             serializedSettings = new SerializedObject(settings);
             var screens = serializedSettings.FindProperty("screens");
             screenList = new ReorderableList(serializedSettings, screens, true, true, false, false)
@@ -107,7 +111,8 @@ namespace Blaze.Radar.Editor
                 drawElementCallback = DrawScreenElement,
                 elementHeightCallback = _ =>
                     5f * (EditorGUIUtility.singleLineHeight + EditorGUIUtility.standardVerticalSpacing) + 2f,
-                onReorderCallback = _ => SynchronizeOrderValues()
+                onReorderCallback = _ =>
+                    RadarScreenSerializedEditorOperations.SynchronizeOrderValues(screenList.serializedProperty)
             };
         }
 
@@ -159,152 +164,39 @@ namespace Blaze.Radar.Editor
 
         private static void AddScreen()
         {
-            var screens = screenList.serializedProperty;
-            var index = screens.arraySize;
-            screens.arraySize++;
-            var element = screens.GetArrayElementAtIndex(index);
-            element.FindPropertyRelative("screenId").stringValue = CreateCopyId("screen");
-            element.FindPropertyRelative("displayName").stringValue = "Screen " + (index + 1);
-            element.FindPropertyRelative("defaultWidthPixels").intValue = 1920;
-            element.FindPropertyRelative("defaultHeightPixels").intValue = 1080;
-            element.FindPropertyRelative("enabled").boolValue = true;
-            element.FindPropertyRelative("isPrimary").boolValue = !HasEnabledPrimary(index);
-            element.FindPropertyRelative("order").intValue = index;
-            screenList.index = index;
-            SynchronizeOrderValues();
+            screenList.index = RadarScreenSerializedEditorOperations.AddScreen(
+                screenList.serializedProperty);
         }
 
         private static void DuplicateSelectedScreen()
         {
-            var screens = screenList.serializedProperty;
             var sourceIndex = screenList.index;
-            if (sourceIndex < 0 || sourceIndex >= screens.arraySize)
-            {
-                return;
-            }
-
-            var source = screens.GetArrayElementAtIndex(sourceIndex);
-            var destinationIndex = screens.arraySize;
-            screens.arraySize++;
-            var destination = screens.GetArrayElementAtIndex(destinationIndex);
-            var sourceId = source.FindPropertyRelative("screenId").stringValue;
-            destination.FindPropertyRelative("screenId").stringValue = CreateCopyId(sourceId);
-            destination.FindPropertyRelative("displayName").stringValue =
-                source.FindPropertyRelative("displayName").stringValue + " Copy";
-            destination.FindPropertyRelative("defaultWidthPixels").intValue =
-                source.FindPropertyRelative("defaultWidthPixels").intValue;
-            destination.FindPropertyRelative("defaultHeightPixels").intValue =
-                source.FindPropertyRelative("defaultHeightPixels").intValue;
-            destination.FindPropertyRelative("enabled").boolValue =
-                source.FindPropertyRelative("enabled").boolValue;
-            destination.FindPropertyRelative("isPrimary").boolValue = false;
-            destination.FindPropertyRelative("order").intValue = destinationIndex;
-            screenList.index = destinationIndex;
-            SynchronizeOrderValues();
+            screenList.index = RadarScreenSerializedEditorOperations.DuplicateScreen(
+                screenList.serializedProperty,
+                sourceIndex);
         }
 
         private static void RemoveSelectedScreen()
         {
-            var screens = screenList.serializedProperty;
             var index = screenList.index;
-            if (index < 0 || index >= screens.arraySize)
+            if (!RadarScreenSerializedEditorOperations.RemoveScreen(
+                    screenList.serializedProperty,
+                    index))
             {
                 return;
             }
 
-            screens.DeleteArrayElementAtIndex(index);
-            screenList.index = Mathf.Clamp(index - 1, -1, screens.arraySize - 1);
-            SynchronizeOrderValues();
+            screenList.index = Mathf.Clamp(
+                index - 1,
+                -1,
+                screenList.serializedProperty.arraySize - 1);
         }
 
         private static void SetPrimary(int selectedIndex)
         {
-            var screens = screenList.serializedProperty;
-            var selected = screens.GetArrayElementAtIndex(selectedIndex);
-            if (!selected.FindPropertyRelative("enabled").boolValue)
-            {
-                return;
-            }
-
-            for (var index = 0; index < screens.arraySize; index++)
-            {
-                screens.GetArrayElementAtIndex(index).FindPropertyRelative("isPrimary").boolValue =
-                    index == selectedIndex;
-            }
-        }
-
-        private static bool HasEnabledPrimary(int excludingIndex)
-        {
-            var screens = screenList.serializedProperty;
-            for (var index = 0; index < screens.arraySize; index++)
-            {
-                if (index == excludingIndex)
-                {
-                    continue;
-                }
-
-                var element = screens.GetArrayElementAtIndex(index);
-                if (element.FindPropertyRelative("enabled").boolValue &&
-                    element.FindPropertyRelative("isPrimary").boolValue)
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private static void SynchronizeOrderValues()
-        {
-            var screens = screenList.serializedProperty;
-            for (var index = 0; index < screens.arraySize; index++)
-            {
-                screens.GetArrayElementAtIndex(index).FindPropertyRelative("order").intValue = index;
-            }
-        }
-
-        private static string CreateCopyId(string sourceId)
-        {
-            var baseId = string.IsNullOrWhiteSpace(sourceId)
-                ? "screen"
-                : Regex.Replace(sourceId.ToLowerInvariant(), "[^a-z0-9_-]", "-").Trim('-');
-            if (string.IsNullOrEmpty(baseId))
-            {
-                baseId = "screen";
-            }
-
-            var suffixIndex = 1;
-            while (true)
-            {
-                var suffix = suffixIndex == 1 ? "-copy" : "-copy-" + suffixIndex;
-                var maximumBaseLength = 64 - suffix.Length;
-                var candidateBase = baseId.Length > maximumBaseLength
-                    ? baseId.Substring(0, maximumBaseLength)
-                    : baseId;
-                var candidate = candidateBase + suffix;
-                if (!ContainsScreenId(candidate))
-                {
-                    return candidate;
-                }
-
-                suffixIndex++;
-            }
-        }
-
-        private static bool ContainsScreenId(string candidate)
-        {
-            var screens = screenList.serializedProperty;
-            for (var index = 0; index < screens.arraySize; index++)
-            {
-                var existing = screens.GetArrayElementAtIndex(index)
-                    .FindPropertyRelative("screenId").stringValue;
-                if (string.Equals(existing, candidate, System.StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-            }
-
-            return false;
+            RadarScreenSerializedEditorOperations.SetPrimary(
+                screenList.serializedProperty,
+                selectedIndex);
         }
 
         internal static RadarRuntimeSettings LoadOrCreateSettings()

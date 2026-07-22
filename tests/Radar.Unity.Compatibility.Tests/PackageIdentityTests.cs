@@ -193,6 +193,8 @@ public sealed class PackageIdentityTests
         }
 
         Assert.Contains("private List<RadarScreenDefinition> screens", settingsSource, StringComparison.Ordinal);
+        Assert.Contains("screenTopologySchemaVersion", settingsSource, StringComparison.Ordinal);
+        Assert.Contains("ReadOnlyCollection<RadarScreenDefinition>", settingsSource, StringComparison.Ordinal);
         Assert.Contains("PrimaryScreen", settingsSource, StringComparison.Ordinal);
     }
 
@@ -224,13 +226,48 @@ public sealed class PackageIdentityTests
         Assert.Contains("com.unity.test-framework\": \"1.1.33", source, StringComparison.Ordinal);
         Assert.Contains("com.unity.ugui\": \"1.0.0", source, StringComparison.Ordinal);
         Assert.Contains("com.unity.nuget.newtonsoft-json\": \"3.0.2", source, StringComparison.Ordinal);
-        Assert.Contains("^2021\\.3\\.", source, StringComparison.Ordinal);
+        Assert.Contains("\"testables\": [\"com.blaze.radar\"]", source, StringComparison.Ordinal);
+        Assert.Contains("$parsedVersion.Major -ne 2021", source, StringComparison.Ordinal);
+        Assert.Contains("$parsedVersion.Minor -ne 3", source, StringComparison.Ordinal);
+        Assert.Contains("Parse-UnityVersion", source, StringComparison.Ordinal);
+        Assert.Contains("2021.3.9f10", source, StringComparison.Ordinal);
+        Assert.Contains("2021.3.45f1c1", source, StringComparison.Ordinal);
+        Assert.Contains("2021.3.46f1", source, StringComparison.Ordinal);
+        Assert.Contains("ProductVersion", source, StringComparison.Ordinal);
+        Assert.Contains("$root.Name -ne \"test-run\"", source, StringComparison.Ordinal);
+        Assert.Contains("test-run", source, StringComparison.Ordinal);
+        Assert.Contains("GetAttribute(\"result\")", source, StringComparison.Ordinal);
+        Assert.Contains("inconsistent", source, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("packageJson.version", source, StringComparison.Ordinal);
         Assert.DoesNotContain("Samples/Blaze Radar SDK/1.1.5", source, StringComparison.Ordinal);
         Assert.Contains("Remove-Item -LiteralPath $temporaryProject", source, StringComparison.Ordinal);
         Assert.Contains("malformed test result XML", source, StringComparison.Ordinal);
         Assert.Contains("inconclusive", source, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("error CS", source, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void UnityEditorTopologyTests_ExerciseSerializedOperationsAndRealPrebuildValidation()
+    {
+        var packageRoot = Path.Combine(FindRepositoryRoot(), "UnityPackage", "com.blaze.radar");
+        var editorTestsRoot = Path.Combine(packageRoot, "Tests", "Editor");
+        using var assembly = JsonDocument.Parse(File.ReadAllText(
+            Path.Combine(editorTestsRoot, "Blaze.Radar.Editor.Tests.asmdef")));
+        Assert.Equal("Blaze.Radar.Editor.Tests", assembly.RootElement.GetProperty("name").GetString());
+        Assert.Contains("Editor", assembly.RootElement.GetProperty("includePlatforms")
+            .EnumerateArray().Select(value => value.GetString()));
+
+        var source = File.ReadAllText(Path.Combine(editorTestsRoot, "RadarSettingsProviderEditorTests.cs"));
+        Assert.Contains("new SerializedObject", source, StringComparison.Ordinal);
+        Assert.Contains("AddScreen", source, StringComparison.Ordinal);
+        Assert.Contains("DuplicateScreen", source, StringComparison.Ordinal);
+        Assert.Contains("RemoveScreen", source, StringComparison.Ordinal);
+        Assert.Contains("MoveScreen", source, StringComparison.Ordinal);
+        Assert.Contains("SetPrimary", source, StringComparison.Ordinal);
+        Assert.Contains("MAIN-COPY", source, StringComparison.Ordinal);
+        Assert.Contains("new RadarBuildProcessor().OnPreprocessBuild(null)", source, StringComparison.Ordinal);
+        Assert.Contains("AssetDatabase.MoveAsset", source, StringComparison.Ordinal);
+        Assert.Contains("BuildFailedException", source, StringComparison.Ordinal);
     }
 
     private static string FindRepositoryRoot()

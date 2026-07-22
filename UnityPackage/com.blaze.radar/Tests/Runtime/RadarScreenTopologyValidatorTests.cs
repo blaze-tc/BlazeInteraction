@@ -1,7 +1,9 @@
+using System;
 using System.Collections.Generic;
 using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
+using Object = UnityEngine.Object;
 
 namespace Blaze.Radar.Tests
 {
@@ -165,6 +167,46 @@ namespace Blaze.Radar.Tests
             }
         }
 
+        [Test]
+        public void RuntimeSettings_ScreensCannotBeDowncastOrClearedExternally()
+        {
+            var settings = ScriptableObject.CreateInstance<RadarRuntimeSettings>();
+            try
+            {
+                var screens = settings.Screens;
+
+                Assert.That(screens, Is.Not.InstanceOf<List<RadarScreenDefinition>>());
+                var collection = screens as ICollection<RadarScreenDefinition>;
+                Assert.That(collection, Is.Not.Null);
+                Assert.Throws<NotSupportedException>(() => collection.Clear());
+                Assert.That(settings.Screens, Has.Count.EqualTo(1));
+            }
+            finally
+            {
+                Object.DestroyImmediate(settings);
+            }
+        }
+
+        [Test]
+        public void RuntimeSettings_MigratedAuthoredEmptyTopologyRemainsInvalidAndEmpty()
+        {
+            var settings = ScriptableObject.CreateInstance<RadarRuntimeSettings>();
+            try
+            {
+                SetTopologySchemaVersion(settings, 1);
+                SetScreens(settings, new List<RadarScreenDefinition>());
+
+                Assert.That(settings.Screens, Is.Empty);
+                Assert.That(settings.Screens, Is.Empty);
+                Assert.That(settings.PrimaryScreen, Is.Null);
+                Assert.That(RadarScreenTopologyValidator.Validate(settings.Screens).IsValid, Is.False);
+            }
+            finally
+            {
+                Object.DestroyImmediate(settings);
+            }
+        }
+
         private static RadarScreenDefinition Screen(
             string id,
             string displayName,
@@ -182,6 +224,15 @@ namespace Blaze.Radar.Tests
             var field = typeof(RadarRuntimeSettings).GetField("screens", BindingFlags.Instance | BindingFlags.NonPublic);
             Assert.That(field, Is.Not.Null);
             field.SetValue(settings, screens);
+        }
+
+        private static void SetTopologySchemaVersion(RadarRuntimeSettings settings, int version)
+        {
+            var field = typeof(RadarRuntimeSettings).GetField(
+                "screenTopologySchemaVersion",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(field, Is.Not.Null);
+            field.SetValue(settings, version);
         }
     }
 }

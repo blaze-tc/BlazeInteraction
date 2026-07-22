@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using UnityEngine;
 
 namespace Blaze.Radar
@@ -13,6 +15,7 @@ namespace Blaze.Radar
     public sealed class RadarRuntimeSettings : ScriptableObject
     {
         public const string ResourcesName = "RadarRuntimeSettings";
+        private const int CurrentScreenTopologySchemaVersion = 1;
 
         [Header("Bridge")]
         [SerializeField] private bool autoStart = true;
@@ -32,6 +35,10 @@ namespace Blaze.Radar
         [Header("Screens")]
         [SerializeField] private List<RadarScreenDefinition> screens =
             new List<RadarScreenDefinition> { new RadarScreenDefinition() };
+        [SerializeField, HideInInspector] private int screenTopologySchemaVersion;
+
+        [NonSerialized] private List<RadarScreenDefinition> readOnlyScreensSource;
+        [NonSerialized] private ReadOnlyCollection<RadarScreenDefinition> readOnlyScreens;
 
         public bool AutoStart => autoStart;
         public bool ExitBridgeWithUnity => exitBridgeWithUnity;
@@ -46,8 +53,9 @@ namespace Blaze.Radar
         {
             get
             {
-                EnsureScreenDefaults();
-                return screens;
+                MigrateLegacyScreenTopology();
+                RefreshReadOnlyScreens();
+                return readOnlyScreens;
             }
         }
 
@@ -55,7 +63,7 @@ namespace Blaze.Radar
         {
             get
             {
-                EnsureScreenDefaults();
+                MigrateLegacyScreenTopology();
                 for (var index = 0; index < screens.Count; index++)
                 {
                     var screen = screens[index];
@@ -75,12 +83,42 @@ namespace Blaze.Radar
             return settings != null ? settings : CreateInstance<RadarRuntimeSettings>();
         }
 
-        private void EnsureScreenDefaults()
+        internal bool MigrateLegacyScreenTopology()
         {
+            if (screenTopologySchemaVersion >= CurrentScreenTopologySchemaVersion)
+            {
+                if (screens == null)
+                {
+                    screens = new List<RadarScreenDefinition>();
+                    InvalidateReadOnlyScreens();
+                }
+
+                return false;
+            }
+
             if (screens == null || screens.Count == 0)
             {
                 screens = new List<RadarScreenDefinition> { new RadarScreenDefinition() };
             }
+
+            screenTopologySchemaVersion = CurrentScreenTopologySchemaVersion;
+            InvalidateReadOnlyScreens();
+            return true;
+        }
+
+        private void RefreshReadOnlyScreens()
+        {
+            if (!ReferenceEquals(readOnlyScreensSource, screens) || readOnlyScreens == null)
+            {
+                readOnlyScreensSource = screens;
+                readOnlyScreens = screens.AsReadOnly();
+            }
+        }
+
+        private void InvalidateReadOnlyScreens()
+        {
+            readOnlyScreensSource = null;
+            readOnlyScreens = null;
         }
     }
 }
