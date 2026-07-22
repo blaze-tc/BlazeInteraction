@@ -54,6 +54,8 @@ public sealed class ScreenItemViewModel : ObservableObject, System.ComponentMode
         nameof(FusionDistancePixels) when !float.IsFinite(FusionDistancePixels) || FusionDistancePixels <= 0f => "Fusion distance must be positive.",
         nameof(MaximumAssociationDistancePixels) when !float.IsFinite(MaximumAssociationDistancePixels) || MaximumAssociationDistancePixels <= 0f => "Association distance must be positive.",
         nameof(SmoothingAlpha) when !float.IsFinite(SmoothingAlpha) || SmoothingAlpha is <= 0f or > 1f => "Smoothing alpha must be in (0, 1].",
+        nameof(ConfirmFrames) or nameof(LostFrames) when ConfirmFrames < 1 || LostFrames < 1 => "Tracking frame counts must be positive.",
+        nameof(DwellMilliseconds) when DwellMilliseconds < 0 => "Dwell duration cannot be negative.",
         _ => string.Empty
     };
 

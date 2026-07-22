@@ -73,6 +73,25 @@ public sealed class RadarVisualizationLayoutTests
         Assert.DoesNotContain("Click=\"OnStartRecordingClick\"", xaml);
     }
 
+    [Fact]
+    public void MainWindow_AllEditableNumericBindingsUseConversionAndDataErrorValidation()
+    {
+        var xaml = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "src", "Radar.Bridge.Wpf", "MainWindow.xaml"));
+        foreach (var property in new[]
+        {
+            "WidthPixels", "HeightPixels", "OutputRateHz", "SensorDataMaxAgeMilliseconds", "FusionDistancePixels",
+            "ConfirmFrames", "LostFrames", "MaximumAssociationDistancePixels", "SmoothingAlpha", "DwellMilliseconds",
+            "Port", "MinimumDistanceMeters", "MaximumDistanceMeters", "VisualizationRangeMeters", "RotationDegrees",
+            "BaseGapMeters", "DistanceScale", "MinimumClusterPointCount", "MaximumClusterWidthMeters",
+            "OutputX", "OutputY", "OutputWidth", "OutputHeight"
+        })
+        {
+            var binding = xaml.Split('\n').First(line => line.Contains("<TextBox", StringComparison.Ordinal) && (line.Contains($"SelectedScreen.{property}", StringComparison.Ordinal) || line.Contains($"SelectedSensor.{property}", StringComparison.Ordinal)));
+            Assert.Contains("ValidatesOnExceptions=True", binding);
+            Assert.Contains("ValidatesOnDataErrors=True", binding);
+        }
+    }
+
     private static string FindRepositoryRoot()
     {
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory);

@@ -81,6 +81,8 @@ public sealed class SensorItemViewModel : ObservableObject, System.ComponentMode
         nameof(OutputX) or nameof(OutputY) when OutputX < 0 || OutputY < 0 => "Output origin cannot be negative.",
         nameof(OutputWidth) or nameof(OutputHeight) when OutputWidth < 1 || OutputHeight < 1 => "Output size must be positive.",
         nameof(BaseGapMeters) or nameof(DistanceScale) when !float.IsFinite(BaseGapMeters) || !float.IsFinite(DistanceScale) || BaseGapMeters <= 0f || DistanceScale <= 0f => "Clustering values must be positive.",
+        nameof(MinimumClusterPointCount) when MinimumClusterPointCount < 1 => "Minimum cluster point count must be positive.",
+        nameof(MaximumClusterWidthMeters) when !float.IsFinite(MaximumClusterWidthMeters) || MaximumClusterWidthMeters <= 0f => "Maximum cluster width must be positive.",
         _ => string.Empty
     };
 

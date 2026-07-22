@@ -1,7 +1,9 @@
 using System.Runtime.ExceptionServices;
+using System.Diagnostics;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Threading;
 using Yuexin.Radar.Bridge.Wpf.Controls;
 using Yuexin.Radar.Bridge.Wpf.Services;
@@ -14,6 +16,42 @@ namespace Yuexin.Radar.Bridge.Wpf.Tests;
 
 public sealed class MainWindowBindingTests
 {
+    [Fact]
+    public void BindingDiagnostics_ReportsDeliberatelyBrokenBinding()
+    {
+        ExceptionDispatchInfo? captured = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var application = new App();
+                application.InitializeComponent();
+                var listener = new BindingTraceListener();
+                var source = PresentationTraceSources.DataBindingSource;
+                var previousLevel = source.Switch.Level;
+                source.Listeners.Add(listener);
+                try
+                {
+                    source.Switch.Level = SourceLevels.All;
+                    var text = new TextBlock();
+                    PresentationTraceSources.SetTraceLevel(text, PresentationTraceLevel.High);
+                    BindingOperations.SetBinding(text, TextBlock.TextProperty, new System.Windows.Data.Binding("MissingProperty") { Source = new object() });
+                    var window = new Window { Content = text, Width = 100d, Height = 30d };
+                    window.Show();
+                    window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                    source.TraceEvent(TraceEventType.Error, 1, "Binding diagnostics negative probe.");
+                    Assert.NotEmpty(listener.Messages);
+                    window.Close();
+                }
+                finally { source.Listeners.Remove(listener); source.Switch.Level = previousLevel; }
+            }
+            catch (Exception exception) { captured = ExceptionDispatchInfo.Capture(exception); }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(10)));
+        captured?.Throw();
+    }
     [Fact]
     public void Show_BindsSelectedSensorAndScreenSnapshotsToTheirSeparateViews()
     {
@@ -93,5 +131,12 @@ public sealed class MainWindowBindingTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         public void PublishSensorSnapshot(RadarSensorRuntimeSnapshot snapshot) => SensorSnapshotUpdated?.Invoke(snapshot);
         public void PublishScreenSnapshot(RadarScreenRuntimeSnapshot snapshot) => ScreenSnapshotUpdated?.Invoke(snapshot);
+    }
+
+    private sealed class BindingTraceListener : TraceListener
+    {
+        public List<string> Messages { get; } = [];
+        public override void Write(string? message) { if (!string.IsNullOrWhiteSpace(message)) Messages.Add(message); }
+        public override void WriteLine(string? message) { if (!string.IsNullOrWhiteSpace(message)) Messages.Add(message); }
     }
 }
