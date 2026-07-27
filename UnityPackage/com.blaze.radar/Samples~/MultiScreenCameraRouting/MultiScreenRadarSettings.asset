@@ -1,0 +1,46 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 3b8f570499faeb64cbdf37f568bff9a4, type: 3}
+  m_Name: MultiScreenRadarSettings
+  m_EditorClassIdentifier: 
+  autoStart: 0
+  exitBridgeWithUnity: 1
+  pipeName: Yuexin.RadarBridge
+  editorBridgeExecutable: 
+  profilePath: 
+  connectTimeoutMilliseconds: 500
+  reconnectDelayMilliseconds: 500
+  inputMode: 0
+  showDebugOverlay: 0
+  screens:
+  - screenId: left
+    displayName: LEFT
+    defaultWidthPixels: 1920
+    defaultHeightPixels: 1440
+    enabled: 1
+    isPrimary: 0
+    order: 0
+  - screenId: front
+    displayName: FRONT
+    defaultWidthPixels: 4096
+    defaultHeightPixels: 1536
+    enabled: 1
+    isPrimary: 1
+    order: 1
+  - screenId: right
+    displayName: RIGHT
+    defaultWidthPixels: 1920
+    defaultHeightPixels: 1440
+    enabled: 1
+    isPrimary: 0
+    order: 2
+  screenTopologySchemaVersion: 1

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
 using Object = UnityEngine.Object;
@@ -126,6 +127,97 @@ namespace Blaze.Radar.Tests
         }
 
         [Test]
+        public void ThreeScreenBindings_CenterRaysHitOnlyTheirCorrespondingWalls()
+        {
+            var leftCamera = CreateCamera("LeftCamera");
+            var frontCamera = CreateCamera("FrontCamera");
+            var rightCamera = CreateCamera("RightCamera");
+            leftCamera.transform.position = new Vector3(-6f, 0f, -10f);
+            frontCamera.transform.position = new Vector3(0f, 0f, -10f);
+            rightCamera.transform.position = new Vector3(6f, 0f, -10f);
+            leftCamera.targetTexture = CreateTexture(640, 480);
+            frontCamera.targetTexture = CreateTexture(1280, 480);
+            rightCamera.targetTexture = CreateTexture(640, 480);
+
+            var leftWall = CreateWall("LeftWall", new Vector3(-6f, 0f, 0f));
+            var frontWall = CreateWall("FrontWall", new Vector3(0f, 0f, 0f));
+            var rightWall = CreateWall("RightWall", new Vector3(6f, 0f, 0f));
+            Physics.SyncTransforms();
+
+            var router = CreateRouter(
+                Binding("left", leftCamera),
+                Binding("front", frontCamera),
+                Binding("right", rightCamera));
+
+            AssertCenterHit(router, Screen("left", 1920, 1440), leftWall);
+            AssertCenterHit(router, Screen("front", 4096, 1536), frontWall);
+            AssertCenterHit(router, Screen("right", 1920, 1440), rightWall);
+        }
+
+        [Test]
+        public void ImportedSampleSimulator_UsesDownMoveSingleUpAndPermanentFrontPair()
+        {
+            var simulatorType = FindImportedSampleType("Blaze.Radar.Samples.RadarLocalScreenSimulator");
+            var gameObject = new GameObject("RadarLocalScreenSimulatorTests");
+            createdObjects.Add(gameObject);
+            var simulator = gameObject.AddComponent(simulatorType);
+
+            var first = InvokeBatch(simulator, "BuildBatch", 0f, 1L);
+            var moving = InvokeBatch(simulator, "BuildBatch", 1f / 30f, 2L);
+            var sideUp = InvokeBatch(simulator, "BuildBatch", 6f, 181L);
+            var sideRemoved = InvokeBatch(simulator, "BuildBatch", 6f + 1f / 30f, 182L);
+            var shutdown = InvokeBatch(simulator, "BuildShutdownBatch", 183L);
+            var repeatedShutdown = InvokeBatch(simulator, "BuildShutdownBatch", 184L);
+
+            AssertPhases(first, "left", RadarPointerPhase.Down);
+            AssertPhases(first, "front", RadarPointerPhase.Down, RadarPointerPhase.Down);
+            AssertPhases(first, "right", RadarPointerPhase.Down);
+            AssertPhases(moving, "left", RadarPointerPhase.Move);
+            AssertPhases(moving, "front", RadarPointerPhase.Move, RadarPointerPhase.Move);
+            AssertPhases(moving, "right", RadarPointerPhase.Move);
+            AssertPhases(sideUp, "left", RadarPointerPhase.Up);
+            AssertPhases(sideUp, "front", RadarPointerPhase.Move, RadarPointerPhase.Move);
+            AssertPhases(sideUp, "right", RadarPointerPhase.Up);
+            AssertPhases(sideRemoved, "left");
+            AssertPhases(sideRemoved, "front", RadarPointerPhase.Move, RadarPointerPhase.Move);
+            AssertPhases(sideRemoved, "right");
+            AssertPhases(shutdown, "front", RadarPointerPhase.Up, RadarPointerPhase.Up);
+            Assert.That(CountPointers(repeatedShutdown), Is.Zero, "Shutdown must not emit a second Up.");
+        }
+
+        [Test]
+        public void ImportedSampleParticlePool_PrewarmsCapsAndReusesByScreenPointerKey()
+        {
+            var visualizerType = FindImportedSampleType("Blaze.Radar.Samples.RadarWorldPointerVisualizer");
+            var visualizerObject = new GameObject("RadarWorldPointerVisualizerTests");
+            createdObjects.Add(visualizerObject);
+            var visualizer = visualizerObject.AddComponent(visualizerType);
+            var prefabObject = new GameObject("ParticlePrototype");
+            createdObjects.Add(prefabObject);
+            var prefab = prefabObject.AddComponent<ParticleSystem>();
+
+            Invoke(visualizer, "ConfigurePoolForTests", prefab, 4, 5);
+            Assert.That(ReadInt(visualizer, "PoolCountForTests"), Is.EqualTo(4));
+            Assert.That(ReadInt(visualizer, "TotalCreatedForTests"), Is.EqualTo(4));
+
+            var left = (ParticleSystem)Invoke(visualizer, "AcquireForTests", "left", 1);
+            var front = (ParticleSystem)Invoke(visualizer, "AcquireForTests", "front", 1);
+            Assert.That(left, Is.Not.Null);
+            Assert.That(front, Is.Not.Null.And.Not.SameAs(left), "Pointer IDs are scoped by ScreenId.");
+            Assert.That(ReadInt(visualizer, "ActiveCountForTests"), Is.EqualTo(2));
+
+            Invoke(visualizer, "ReleaseForTests", "left", 1);
+            var reused = (ParticleSystem)Invoke(visualizer, "AcquireForTests", "right", 8);
+            Assert.That(reused, Is.SameAs(left));
+
+            Invoke(visualizer, "AcquireForTests", "left", 2);
+            Invoke(visualizer, "AcquireForTests", "front", 2);
+            Assert.That(Invoke(visualizer, "AcquireForTests", "right", 2), Is.Not.Null);
+            Assert.That(Invoke(visualizer, "AcquireForTests", "right", 3), Is.Null);
+            Assert.That(ReadInt(visualizer, "TotalCreatedForTests"), Is.EqualTo(5));
+        }
+
+        [Test]
         public void InvalidBindingsAreRejectedAndDuplicatesRemainAmbiguous()
         {
             var first = CreateCamera("First");
@@ -209,6 +301,16 @@ namespace Blaze.Radar.Tests
             return gameObject.AddComponent<Camera>();
         }
 
+        private GameObject CreateWall(string name, Vector3 position)
+        {
+            var wall = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            wall.name = name;
+            wall.transform.position = position;
+            wall.transform.localScale = new Vector3(5f, 5f, 0.5f);
+            createdObjects.Add(wall);
+            return wall;
+        }
+
         private RenderTexture CreateTexture(int width, int height)
         {
             var texture = new RenderTexture(width, height, 16);
@@ -249,6 +351,97 @@ namespace Blaze.Radar.Tests
                 normalizedY = 0.5f,
                 confidence = 1f
             };
+        }
+
+        private static void AssertCenterHit(
+            RadarScreenCameraRouter router,
+            RadarScreenInfo screen,
+            GameObject expectedWall)
+        {
+            var pointer = Pointer(screen.widthPixels * 0.5f, screen.heightPixels * 0.5f);
+            Assert.That(router.TryRaycast(screen, pointer, out var hit), Is.True, screen.screenId);
+            Assert.That(hit.collider.gameObject, Is.SameAs(expectedWall), screen.screenId);
+        }
+
+        private static Type FindImportedSampleType(string fullName)
+        {
+            var assemblies = AppDomain.CurrentDomain.GetAssemblies();
+            for (var index = 0; index < assemblies.Length; index++)
+            {
+                var type = assemblies[index].GetType(fullName, false);
+                if (type != null)
+                {
+                    return type;
+                }
+            }
+
+            Assert.Ignore("Import the Multi-Screen Camera Routing sample to exercise its runtime tests.");
+            return null;
+        }
+
+        private static RadarPointerBatchPayload InvokeBatch(object target, string method, params object[] arguments)
+        {
+            return (RadarPointerBatchPayload)Invoke(target, method, arguments);
+        }
+
+        private static object Invoke(object target, string method, params object[] arguments)
+        {
+            var info = target.GetType().GetMethod(
+                method,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            Assert.That(info, Is.Not.Null, method);
+            return info.Invoke(target, arguments);
+        }
+
+        private static int ReadInt(object target, string property)
+        {
+            var info = target.GetType().GetProperty(
+                property,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            Assert.That(info, Is.Not.Null, property);
+            return (int)info.GetValue(target, null);
+        }
+
+        private static void AssertPhases(
+            RadarPointerBatchPayload batch,
+            string screenId,
+            params RadarPointerPhase[] phases)
+        {
+            var frame = FindFrame(batch, screenId);
+            Assert.That(frame.pointers, Has.Count.EqualTo(phases.Length), screenId);
+            for (var index = 0; index < phases.Length; index++)
+            {
+                Assert.That(frame.pointers[index].phase, Is.EqualTo(phases[index]), screenId + " pointer " + index);
+            }
+        }
+
+        private static RadarScreenPointerFrame FindFrame(RadarPointerBatchPayload batch, string screenId)
+        {
+            Assert.That(batch, Is.Not.Null);
+            Assert.That(batch.screens, Is.Not.Null);
+            for (var index = 0; index < batch.screens.Count; index++)
+            {
+                var frame = batch.screens[index];
+                if (frame != null && frame.screen != null &&
+                    string.Equals(frame.screen.screenId, screenId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return frame;
+                }
+            }
+
+            Assert.Fail("Missing screen frame '" + screenId + "'.");
+            return null;
+        }
+
+        private static int CountPointers(RadarPointerBatchPayload batch)
+        {
+            var total = 0;
+            for (var index = 0; index < batch.screens.Count; index++)
+            {
+                total += batch.screens[index].pointers.Count;
+            }
+
+            return total;
         }
     }
 }

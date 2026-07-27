@@ -22,6 +22,11 @@
       "displayName": "Basic Interaction",
       "description": "Authored UGUI, 3D and 2D EventSystem sample with live frame diagnostics and bounded event history.",
       "path": "Samples~/BasicInteraction"
+    },
+    {
+      "displayName": "Multi-Screen Camera Routing",
+      "description": "Three-screen Camera routing, world raycast particles and detailed multi-radar diagnostics.",
+      "path": "Samples~/MultiScreenCameraRouting"
     }
   ]
 }
