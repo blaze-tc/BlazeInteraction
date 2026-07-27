@@ -23,6 +23,7 @@ namespace Blaze.Radar
         private readonly List<RaycastResult> _raycastResults = new List<RaycastResult>();
         private RadarPointerFrameMessage _pendingFrame;
         private RadarScreenPointerFrame _pendingScreenFrame;
+        private bool _dispatcherConnected = true;
 
         public RadarFrameDispatcher Dispatcher
         {
@@ -156,6 +157,11 @@ namespace Blaze.Radar
 
         private void OnScreenFrameReceived(RadarScreenPointerFrame frame)
         {
+            if (dispatcher != null && !_dispatcherConnected)
+            {
+                return;
+            }
+
             if (!IsSelectedScreen(frame))
             {
                 return;
@@ -410,6 +416,7 @@ namespace Blaze.Radar
 
         private void SubscribeDispatcher()
         {
+            _dispatcherConnected = dispatcher == null || dispatcher.IsConnected;
             if (dispatcher != null)
             {
                 dispatcher.ScreenFrameReceived -= OnScreenFrameReceived;
@@ -430,6 +437,7 @@ namespace Blaze.Radar
 
         private void OnConnectionChanged(bool connected)
         {
+            _dispatcherConnected = connected;
             if (!connected)
             {
                 CancelAllPointers();

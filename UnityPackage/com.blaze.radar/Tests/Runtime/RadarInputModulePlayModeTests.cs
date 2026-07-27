@@ -1,10 +1,14 @@
+using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Reflection;
+using System.Threading.Tasks;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.TestTools;
 using UnityEngine.UI;
+using Object = UnityEngine.Object;
 
 namespace Blaze.Radar.Tests
 {
@@ -12,6 +16,8 @@ namespace Blaze.Radar.Tests
     {
         private GameObject _eventSystemObject;
         private GameObject _canvasObject;
+        private GameObject _dispatcherObject;
+        private RadarRuntimeSettings _runtimeSettings;
         private RadarInputModule _module;
 
         [UnitySetUp]
@@ -33,11 +39,15 @@ namespace Blaze.Radar.Tests
             {
                 Object.Destroy(_canvasObject);
                 Object.Destroy(_eventSystemObject);
+                Object.Destroy(_dispatcherObject);
+                Object.Destroy(_runtimeSettings);
             }
             else
             {
                 Object.DestroyImmediate(_canvasObject);
                 Object.DestroyImmediate(_eventSystemObject);
+                Object.DestroyImmediate(_dispatcherObject);
+                Object.DestroyImmediate(_runtimeSettings);
             }
 
             yield return null;
@@ -222,6 +232,75 @@ namespace Blaze.Radar.Tests
             Assert.That(clicks, Is.EqualTo(1));
         }
 
+        [UnityTest]
+        public IEnumerator DispatcherDisconnectWithCachedDown_DoesNotReactivatePointer()
+        {
+            var fixture = ConfigureDispatcher();
+            fixture.Client.SetConnected(true);
+            fixture.Dispatcher.TickForTests();
+            yield return null;
+
+            fixture.Client.Publish(Batch(
+                ScreenFrame("front", true, ScreenPointer(41, 0.5f, 0.5f, RadarPointerPhase.Down))));
+            fixture.Client.SetConnected(false);
+
+            fixture.Dispatcher.TickForTests();
+            _module.Process();
+
+            Assert.That(fixture.Client.IsConnected, Is.False);
+            Assert.That(_module.ActivePointers, Is.Empty,
+                "A batch cached before disconnect must not recreate a pressed pointer after cancellation.");
+        }
+
+        [UnityTest]
+        public IEnumerator DispatcherConnectionLifecycle_CancelsAndResumesProductionSubscription()
+        {
+            var clicks = 0;
+            var button = CreateButton("Center", new Vector2(0.5f, 0.5f));
+            button.onClick.AddListener(() => clicks++);
+            var fixture = ConfigureDispatcher();
+            fixture.Client.SetConnected(true);
+            fixture.Dispatcher.TickForTests();
+            yield return null;
+
+            fixture.Client.Publish(Batch(
+                ScreenFrame("front", true, ScreenPointer(51, 0.5f, 0.5f, RadarPointerPhase.Down))));
+            fixture.Dispatcher.TickForTests();
+            _module.Process();
+            Assert.That(_module.ActivePointers.Count, Is.EqualTo(1));
+
+            fixture.Client.SetConnected(false);
+            fixture.Dispatcher.TickForTests();
+            Assert.That(_module.ActivePointers, Is.Empty);
+            Assert.That(clicks, Is.Zero);
+
+            fixture.Client.SetConnected(true);
+            fixture.Dispatcher.TickForTests();
+            fixture.Client.Publish(Batch(
+                ScreenFrame("front", true, ScreenPointer(52, 0.5f, 0.5f, RadarPointerPhase.Down))));
+            fixture.Dispatcher.TickForTests();
+            _module.Process();
+            fixture.Client.Publish(Batch(
+                ScreenFrame("front", true, ScreenPointer(52, 0.5f, 0.5f, RadarPointerPhase.Up))));
+            fixture.Dispatcher.TickForTests();
+            _module.Process();
+
+            Assert.That(clicks, Is.EqualTo(1));
+            Assert.That(_module.ActivePointers, Is.Empty);
+        }
+
+        [UnityTest]
+        public IEnumerator RadarAndMouseDebug_KeepsNativeMousePointerAvailable()
+        {
+            _module.InputMode = RadarInputMode.RadarAndMouseDebug;
+            yield return null;
+
+            _module.Process();
+
+            Assert.That(_module.ActivePointers.ContainsKey(-1), Is.True,
+                "RadarAndMouseDebug must continue to process Unity's native mouse as pointer -1.");
+        }
+
         private Button CreateButton(string name, Vector2 normalizedPosition)
         {
             var gameObject = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Button));
@@ -246,6 +325,35 @@ namespace Blaze.Radar.Tests
         {
             _module.InjectScreenFrame(frame);
             _module.Process();
+        }
+
+        private DispatcherFixture ConfigureDispatcher()
+        {
+            _runtimeSettings = ScriptableObject.CreateInstance<RadarRuntimeSettings>();
+            SetField(
+                _runtimeSettings,
+                "screens",
+                new List<RadarScreenDefinition>
+                {
+                    new RadarScreenDefinition("front", "Front", 1920, 1080, true, true, 0)
+                });
+            SetField(_runtimeSettings, "screenTopologySchemaVersion", 1);
+
+            _dispatcherObject = new GameObject("RadarFrameDispatcher", typeof(RadarFrameDispatcher));
+            var dispatcher = _dispatcherObject.GetComponent<RadarFrameDispatcher>();
+            var client = new FakeRadarPipeClient();
+            dispatcher.ConfigureForTests(_runtimeSettings, client, false);
+            _module.Dispatcher = dispatcher;
+            _module.ScreenId = "front";
+            return new DispatcherFixture(dispatcher, client);
+        }
+
+        private static RadarPointerBatchPayload Batch(params RadarScreenPointerFrame[] frames)
+        {
+            return new RadarPointerBatchPayload
+            {
+                screens = new List<RadarScreenPointerFrame>(frames)
+            };
         }
 
         private static RadarScreenPointerFrame ScreenFrame(
@@ -295,6 +403,96 @@ namespace Blaze.Radar.Tests
                 phase = phase,
                 confidence = 1f
             };
+        }
+
+        private static void SetField(object target, string fieldName, object value)
+        {
+            var field = target.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(field, Is.Not.Null, fieldName);
+            field.SetValue(target, value);
+        }
+
+        private readonly struct DispatcherFixture
+        {
+            public DispatcherFixture(RadarFrameDispatcher dispatcher, FakeRadarPipeClient client)
+            {
+                Dispatcher = dispatcher;
+                Client = client;
+            }
+
+            public RadarFrameDispatcher Dispatcher { get; }
+            public FakeRadarPipeClient Client { get; }
+        }
+
+        private sealed class FakeRadarPipeClient : IRadarPipeClient
+        {
+            private readonly Queue<Action> _mainThreadActions = new Queue<Action>();
+            private RadarPointerBatchPayload _latestBatch;
+
+            public bool IsConnected { get; private set; }
+            public long DroppedBatchCount { get; private set; }
+
+            public event Action<bool> ConnectionChanged;
+            public event Action<string> ErrorReceived
+            {
+                add { }
+                remove { }
+            }
+
+            public void Start(RadarHelloPayload hello)
+            {
+                SetConnected(true);
+            }
+
+            public bool TryConsumeLatestBatch(out RadarPointerBatchPayload batch)
+            {
+                batch = _latestBatch;
+                _latestBatch = null;
+                return batch != null;
+            }
+
+            public void DrainMainThreadEvents()
+            {
+                while (_mainThreadActions.Count > 0)
+                {
+                    _mainThreadActions.Dequeue().Invoke();
+                }
+            }
+
+            public Task StopAsync()
+            {
+                SetConnected(false);
+                _latestBatch = null;
+                return Task.CompletedTask;
+            }
+
+            public void Dispose()
+            {
+                _latestBatch = null;
+                _mainThreadActions.Clear();
+                IsConnected = false;
+            }
+
+            public void Publish(RadarPointerBatchPayload batch)
+            {
+                if (_latestBatch != null)
+                {
+                    DroppedBatchCount++;
+                }
+
+                _latestBatch = batch;
+            }
+
+            public void SetConnected(bool connected)
+            {
+                if (IsConnected == connected)
+                {
+                    return;
+                }
+
+                IsConnected = connected;
+                _mainThreadActions.Enqueue(() => ConnectionChanged?.Invoke(connected));
+            }
         }
 
         private sealed class CancelOnPointerUp : MonoBehaviour, IPointerUpHandler
