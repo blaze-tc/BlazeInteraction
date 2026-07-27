@@ -11,12 +11,12 @@ MonoBehaviour:
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 3b8f570499faeb64cbdf37f568bff9a4, type: 3}
   m_Name: MultiScreenRadarSettings
-  m_EditorClassIdentifier: 
+  m_EditorClassIdentifier:
   autoStart: 0
   exitBridgeWithUnity: 1
   pipeName: Yuexin.RadarBridge
-  editorBridgeExecutable: 
-  profilePath: 
+  editorBridgeExecutable:
+  profilePath:
   connectTimeoutMilliseconds: 500
   reconnectDelayMilliseconds: 500
   inputMode: 0

@@ -16,6 +16,7 @@ namespace Blaze.Radar.Samples
         private const int MaximumLines = 300;
         private const int MaximumRenderedLines = 40;
         private const float MoveLogInterval = 0.1f;
+        private const float AgeRefreshInterval = 0.1f;
 
         [Header("Header")]
         [SerializeField] private Text connectionStatusText;
@@ -37,8 +38,10 @@ namespace Blaze.Radar.Samples
             new Dictionary<PointerKey, string>();
         private readonly Dictionary<string, ScreenSummary> screens =
             new Dictionary<string, ScreenSummary>(StringComparer.OrdinalIgnoreCase);
+        private readonly List<PointerKey> removePointerKeys = new List<PointerKey>();
         private readonly StringBuilder builder = new StringBuilder(8192);
         private bool layoutDirty;
+        private float nextAgeRefreshTime;
         private long lastSequence;
         private long lastTimestamp;
         private long lastDroppedBatches;
@@ -47,6 +50,13 @@ namespace Blaze.Radar.Samples
 
         private void LateUpdate()
         {
+            var now = Time.unscaledTime;
+            if (lastTimestamp > 0L && now >= nextAgeRefreshTime)
+            {
+                RenderFrameSummary();
+                nextAgeRefreshTime = now + AgeRefreshInterval;
+            }
+
             if (!layoutDirty)
             {
                 return;
@@ -83,7 +93,50 @@ namespace Blaze.Radar.Samples
             lastSequence = frame.sequence;
             lastTimestamp = frame.timestampUnixMilliseconds;
             lastDroppedBatches = droppedBatches;
+            if (count == 0)
+            {
+                ClearScreen(frame.screen.screenId);
+            }
+
             RenderFrameSummary();
+            nextAgeRefreshTime = Time.unscaledTime + AgeRefreshInterval;
+
+            layoutDirty = true;
+        }
+
+        public void ClearScreen(string screenId)
+        {
+            if (string.IsNullOrWhiteSpace(screenId))
+            {
+                return;
+            }
+
+            removePointerKeys.Clear();
+            foreach (var key in livePointers.Keys)
+            {
+                if (string.Equals(key.ScreenId, screenId, StringComparison.OrdinalIgnoreCase))
+                {
+                    removePointerKeys.Add(key);
+                }
+            }
+
+            for (var index = 0; index < removePointerKeys.Count; index++)
+            {
+                var key = removePointerKeys[index];
+                livePointers.Remove(key);
+                nextMoveLogTime.Remove(key);
+            }
+
+            if (screens.TryGetValue(screenId, out var summary))
+            {
+                screens[screenId] = new ScreenSummary(
+                    summary.Name,
+                    summary.Width,
+                    summary.Height,
+                    0,
+                    summary.Sequence,
+                    summary.Timestamp);
+            }
 
             layoutDirty = true;
         }

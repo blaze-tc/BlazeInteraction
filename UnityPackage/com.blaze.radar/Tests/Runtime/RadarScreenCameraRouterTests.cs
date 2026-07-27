@@ -1,8 +1,14 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Reflection;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.TestTools;
+using UnityEngine.UI;
 using Object = UnityEngine.Object;
 
 namespace Blaze.Radar.Tests
@@ -186,6 +192,141 @@ namespace Blaze.Radar.Tests
         }
 
         [Test]
+        public void ImportedSampleSimulator_SecondCycleRestartsSidesAndKeepsFrontPointerIdsStable()
+        {
+            var simulatorType = FindImportedSampleType("Blaze.Radar.Samples.RadarLocalScreenSimulator");
+            var gameObject = new GameObject("RadarLocalScreenSimulatorCycleTests");
+            createdObjects.Add(gameObject);
+            var simulator = gameObject.AddComponent(simulatorType);
+
+            var secondCycleStart = InvokeBatch(simulator, "BuildBatch", 7f, 211L);
+            var secondCycleSideUp = InvokeBatch(simulator, "BuildBatch", 13f, 391L);
+
+            AssertPhases(secondCycleStart, "left", RadarPointerPhase.Down);
+            AssertPhases(secondCycleStart, "right", RadarPointerPhase.Down);
+            AssertPhases(secondCycleSideUp, "left", RadarPointerPhase.Up);
+            AssertPhases(secondCycleSideUp, "right", RadarPointerPhase.Up);
+            AssertPointerIds(secondCycleStart, "front", 1, 2);
+            AssertPointerIds(secondCycleSideUp, "front", 1, 2);
+            AssertPhases(secondCycleStart, "front", RadarPointerPhase.Move, RadarPointerPhase.Move);
+            AssertPhases(secondCycleSideUp, "front", RadarPointerPhase.Move, RadarPointerPhase.Move);
+        }
+
+        [UnityTest]
+        public IEnumerator ImportedSampleModeTransitionCoordinator_LastRequestedModeWinsPendingDisconnectRace()
+        {
+            var coordinatorType = FindImportedSampleType("Blaze.Radar.Samples.LatestModeTransitionCoordinator");
+            var coordinator = Activator.CreateInstance(coordinatorType);
+            var pendingDisconnect = new TaskCompletionSource<bool>();
+            var activations = new List<int>();
+            var beginCount = 0;
+
+            var bridgeTask = (Task)Invoke(
+                coordinator,
+                "RequestAsync",
+                1,
+                (Action)(() => beginCount++),
+                (Func<Task>)(() => pendingDisconnect.Task),
+                (Func<bool>)(() => true),
+                (Action<int>)(mode => activations.Add(mode)));
+            var localTask = (Task)Invoke(
+                coordinator,
+                "RequestAsync",
+                0,
+                (Action)(() => beginCount++),
+                (Func<Task>)(() => Task.CompletedTask),
+                (Func<bool>)(() => true),
+                (Action<int>)(mode => activations.Add(mode)));
+
+            Assert.That(localTask.IsCompleted, Is.True, "The completed latest transition should activate immediately.");
+            CollectionAssert.AreEqual(new[] { 0 }, activations);
+            pendingDisconnect.SetResult(true);
+            while (!bridgeTask.IsCompleted)
+            {
+                yield return null;
+            }
+
+            Assert.That(beginCount, Is.EqualTo(2));
+            CollectionAssert.AreEqual(new[] { 0 }, activations, "A stale Bridge completion must not replace Local.");
+        }
+
+        [Test]
+        public void ImportedSamplePresenter_BeginTransitionLeavesNoActiveOrAcceptingSource()
+        {
+            var presenterType = FindImportedSampleType("Blaze.Radar.Samples.MultiScreenCameraRoutingPresenter");
+            var presenterObject = new GameObject("MultiScreenCameraRoutingPresenterTransitionTests");
+            createdObjects.Add(presenterObject);
+            var presenter = presenterObject.AddComponent(presenterType);
+            var modeType = presenterType.GetNestedType("DataSourceMode", BindingFlags.Public | BindingFlags.NonPublic);
+            Assert.That(modeType, Is.Not.Null);
+            var bridgeMode = Enum.ToObject(modeType, 1);
+
+            Assert.That(ReadBool(presenter, "hasActiveMode"), Is.True);
+            Invoke(presenter, "BeginModeTransition", bridgeMode);
+
+            Assert.That(ReadBool(presenter, "hasActiveMode"), Is.False, "Pending disconnect must not advertise an active source.");
+            Assert.That(ReadBool(presenter, "acceptingLocal"), Is.False);
+            Assert.That(ReadBool(presenter, "acceptingIpc"), Is.False);
+        }
+
+        [Test]
+        public void ImportedSampleScene_PreservesThreeScreenBindingsAndSettingsContract()
+        {
+            var scenePaths = Directory.GetFiles(
+                Application.dataPath,
+                "MultiScreenCameraRouting.unity",
+                SearchOption.AllDirectories);
+            if (scenePaths.Length == 0)
+            {
+                Assert.Ignore("Import the Multi-Screen Camera Routing sample to validate its serialized scene contract.");
+            }
+
+            var scenePath = Array.Find(
+                scenePaths,
+                path => path.IndexOf("Multi-Screen Camera Routing", StringComparison.OrdinalIgnoreCase) >= 0)
+                ?? scenePaths[0];
+            var settingsPath = Path.Combine(Path.GetDirectoryName(scenePath), "MultiScreenRadarSettings.asset");
+            Assert.That(File.Exists(settingsPath), Is.True, settingsPath);
+            var scene = File.ReadAllText(scenePath);
+            var settings = File.ReadAllText(settingsPath);
+
+            var requiredObjects = new[]
+            {
+                "MultiScreenCameraRouting",
+                "RadarFrameDispatcher",
+                "RadarScreenCameraRouter",
+                "MultiScreenCameraRoutingPresenter",
+                "RadarLocalScreenSimulator",
+                "RadarWorldPointerVisualizer",
+                "RadarSampleLogPanel",
+                "PointerParticlePool",
+                "LeftCamera",
+                "FrontCamera",
+                "RightCamera",
+                "LeftWall",
+                "FrontWall",
+                "RightWall"
+            };
+            for (var index = 0; index < requiredObjects.Length; index++)
+            {
+                StringAssert.Contains("m_Name: " + requiredObjects[index], scene, requiredObjects[index]);
+            }
+
+            StringAssert.Contains("autoConnect: 0", scene);
+            StringAssert.Contains("dispatcher: {fileID: 1412215115}", scene);
+            StringAssert.Contains("simulator: {fileID: 1840161209}", scene);
+            StringAssert.Contains("visualizer: {fileID: 1579444146}", scene);
+            StringAssert.Contains("logPanel: {fileID: 1305753124}", scene);
+            StringAssert.Contains("- screenId: left\n    camera: {fileID: 1448918202}", NormalizeNewlines(scene));
+            StringAssert.Contains("- screenId: front\n    camera: {fileID: 463494870}", NormalizeNewlines(scene));
+            StringAssert.Contains("- screenId: right\n    camera: {fileID: 39084049}", NormalizeNewlines(scene));
+
+            AssertSerializedScreen(settings, "left", 1920, 1440, false, 0);
+            AssertSerializedScreen(settings, "front", 4096, 1536, true, 1);
+            AssertSerializedScreen(settings, "right", 1920, 1440, false, 2);
+        }
+
+        [Test]
         public void ImportedSampleParticlePool_PrewarmsCapsAndReusesByScreenPointerKey()
         {
             var visualizerType = FindImportedSampleType("Blaze.Radar.Samples.RadarWorldPointerVisualizer");
@@ -215,6 +356,183 @@ namespace Blaze.Radar.Tests
             Assert.That(Invoke(visualizer, "AcquireForTests", "right", 2), Is.Not.Null);
             Assert.That(Invoke(visualizer, "AcquireForTests", "right", 3), Is.Null);
             Assert.That(ReadInt(visualizer, "TotalCreatedForTests"), Is.EqualTo(5));
+        }
+
+        [UnityTest]
+        public IEnumerator ImportedSampleParticlePool_DefaultsToSixteenAndHardCapsAtSixtyFour()
+        {
+            var visualizerType = FindImportedSampleType("Blaze.Radar.Samples.RadarWorldPointerVisualizer");
+            var visualizerObject = new GameObject("RadarWorldPointerVisualizerDefaultPoolTests");
+            visualizerObject.SetActive(false);
+            createdObjects.Add(visualizerObject);
+            var visualizer = visualizerObject.AddComponent(visualizerType);
+            var prefabObject = new GameObject("ParticlePrototype");
+            createdObjects.Add(prefabObject);
+            var prefab = prefabObject.AddComponent<ParticleSystem>();
+            SetField(visualizer, "particlePrefab", prefab);
+
+            visualizerObject.SetActive(true);
+            yield return null;
+
+            Assert.That(ReadInt(visualizer, "PoolCountForTests"), Is.EqualTo(16));
+            for (var index = 0; index < 64; index++)
+            {
+                Assert.That(Invoke(visualizer, "AcquireForTests", "front", index), Is.Not.Null, "pointer " + index);
+            }
+
+            Assert.That(Invoke(visualizer, "AcquireForTests", "front", 64), Is.Null);
+            Assert.That(ReadInt(visualizer, "TotalCreatedForTests"), Is.EqualTo(64));
+        }
+
+        [Test]
+        public void ImportedSampleParticleVisualizer_ReleasesOnUpZeroFrameTimeoutAndDisable()
+        {
+            var visualizerType = FindImportedSampleType("Blaze.Radar.Samples.RadarWorldPointerVisualizer");
+            var visualizerObject = new GameObject("RadarWorldPointerVisualizerReleaseTests");
+            createdObjects.Add(visualizerObject);
+            var visualizer = visualizerObject.AddComponent(visualizerType);
+            var prefabObject = new GameObject("ParticlePrototype");
+            createdObjects.Add(prefabObject);
+            var prefab = prefabObject.AddComponent<ParticleSystem>();
+            Invoke(visualizer, "ConfigurePoolForTests", prefab, 3, 8);
+            var screen = Screen("front", 4096, 1536);
+
+            Invoke(visualizer, "AcquireForTests", "front", 1);
+            var up = Pointer(10f, 20f);
+            up.pointerId = 1;
+            up.phase = RadarPointerPhase.Up;
+            Invoke(visualizer, "ProcessPointer", screen, up);
+            Assert.That(ReadInt(visualizer, "ActiveCountForTests"), Is.Zero, "Up must release immediately.");
+
+            Invoke(visualizer, "AcquireForTests", "front", 2);
+            var zeroFrame = Frame(screen, 10L, new List<RadarScreenPointer>());
+            Invoke(visualizer, "ProcessFrame", zeroFrame, 0L);
+            Invoke(visualizer, "ProcessZeroFrameTimeoutsForTests", Time.unscaledTime + 1f);
+            Assert.That(ReadInt(visualizer, "ActiveCountForTests"), Is.Zero, "A sustained zero frame must release.");
+
+            Invoke(visualizer, "AcquireForTests", "front", 3);
+            Invoke(visualizer, "OnDisable");
+            Assert.That(ReadInt(visualizer, "ActiveCountForTests"), Is.Zero, "Disable must release all effects.");
+        }
+
+        [Test]
+        public void ImportedSampleParticleAppearance_IsStablePerScreenAndDownIsIntensified()
+        {
+            var visualizerType = FindImportedSampleType("Blaze.Radar.Samples.RadarWorldPointerVisualizer");
+            var lower = (Color)InvokeStatic(visualizerType, "StableScreenColor", "left");
+            var upper = (Color)InvokeStatic(visualizerType, "StableScreenColor", "LEFT");
+            Assert.That(lower, Is.EqualTo(upper));
+
+            var normalObject = new GameObject("NormalParticle");
+            var downObject = new GameObject("DownParticle");
+            createdObjects.Add(normalObject);
+            createdObjects.Add(downObject);
+            var normal = normalObject.AddComponent<ParticleSystem>();
+            var down = downObject.AddComponent<ParticleSystem>();
+            InvokeStatic(visualizerType, "ApplyAppearance", normal, "front", false);
+            InvokeStatic(visualizerType, "ApplyAppearance", down, "front", true);
+
+            Assert.That(down.main.startSize.constant, Is.GreaterThan(normal.main.startSize.constant));
+            Assert.That(down.main.startLifetime.constant, Is.GreaterThan(normal.main.startLifetime.constant));
+            Assert.That(down.emission.rateOverTime.constant, Is.GreaterThan(normal.emission.rateOverTime.constant));
+        }
+
+        [Test]
+        public void ImportedSamplePresenter_ZeroFrameClearsTrackedPointersAndLiveTable()
+        {
+            var presenterType = FindImportedSampleType("Blaze.Radar.Samples.MultiScreenCameraRoutingPresenter");
+            var panelType = FindImportedSampleType("Blaze.Radar.Samples.RadarSampleLogPanel");
+            var presenterObject = new GameObject("MultiScreenCameraRoutingPresenterZeroFrameTests");
+            var panelObject = new GameObject("RadarSampleLogPanelZeroFrameTests");
+            createdObjects.Add(presenterObject);
+            createdObjects.Add(panelObject);
+            var presenter = presenterObject.AddComponent(presenterType);
+            var panel = panelObject.AddComponent(panelType);
+            var liveText = CreateText("LeftLivePointers");
+            SetField(panel, "leftPointsText", liveText);
+            SetField(presenter, "logPanel", panel);
+            var screen = Screen("left", 1920, 1440);
+            var down = Pointer(321f, 654f);
+            down.pointerId = 7;
+            down.phase = RadarPointerPhase.Down;
+
+            Invoke(panel, "RecordMiss", screen, down, Vector2.zero, default(Ray), "test");
+            Invoke(presenter, "HandleScreenFrame", Frame(screen, 1L, new List<RadarScreenPointer> { down }), 0L);
+            Invoke(panel, "LateUpdate");
+            Assert.That(ReadCollectionCount(presenter, "activePointers"), Is.EqualTo(1));
+            StringAssert.Contains("P7", liveText.text);
+
+            Invoke(presenter, "HandleScreenFrame", Frame(screen, 2L, new List<RadarScreenPointer>()), 0L);
+            Invoke(panel, "LateUpdate");
+            Assert.That(ReadCollectionCount(presenter, "activePointers"), Is.Zero);
+            StringAssert.Contains("No active pointers", liveText.text);
+            StringAssert.DoesNotContain("P7", liveText.text);
+        }
+
+        [UnityTest]
+        public IEnumerator ImportedSampleLogPanel_AgeRefreshesWithoutNewFrames()
+        {
+            var panelType = FindImportedSampleType("Blaze.Radar.Samples.RadarSampleLogPanel");
+            var panelObject = new GameObject("RadarSampleLogPanelAgeTests");
+            createdObjects.Add(panelObject);
+            var panel = panelObject.AddComponent(panelType);
+            var summaryText = CreateText("FrameSummary");
+            SetField(panel, "frameSummaryText", summaryText);
+            var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            Invoke(panel, "RecordFrame", Frame(Screen("front", 4096, 1536), 5L, new List<RadarScreenPointer>(), timestamp), 0L);
+            var initialAge = ParseAge(summaryText.text);
+
+            yield return new WaitForSecondsRealtime(0.15f);
+            Invoke(panel, "LateUpdate");
+
+            Assert.That(ParseAge(summaryText.text), Is.GreaterThanOrEqualTo(initialAge + 80L));
+        }
+
+        [Test]
+        public void ImportedSampleLogPanel_HistoryHasHardThreeHundredLineCap()
+        {
+            var panelType = FindImportedSampleType("Blaze.Radar.Samples.RadarSampleLogPanel");
+            var panelObject = new GameObject("RadarSampleLogPanelCapTests");
+            createdObjects.Add(panelObject);
+            var panel = panelObject.AddComponent(panelType);
+
+            for (var index = 0; index < 305; index++)
+            {
+                Invoke(panel, "RecordLifecycle", "line " + index);
+            }
+
+            Assert.That(ReadInt(panel, "LineCount"), Is.EqualTo(300));
+        }
+
+        [UnityTest]
+        public IEnumerator ImportedSampleLogPanel_OnlyMoveIsThrottledWhileLiveTableStaysCurrent()
+        {
+            var panelType = FindImportedSampleType("Blaze.Radar.Samples.RadarSampleLogPanel");
+            var panelObject = new GameObject("RadarSampleLogPanelThrottleTests");
+            createdObjects.Add(panelObject);
+            var panel = panelObject.AddComponent(panelType);
+            var liveText = CreateText("FrontLivePointers");
+            SetField(panel, "frontPointsText", liveText);
+            var screen = Screen("front", 4096, 1536);
+            var move = Pointer(100f, 200f);
+            move.pointerId = 4;
+            move.phase = RadarPointerPhase.Move;
+
+            Invoke(panel, "RecordMiss", screen, move, Vector2.zero, default(Ray), "first move");
+            var afterFirstMove = ReadInt(panel, "LineCount");
+            move.pixelX = 777f;
+            Invoke(panel, "RecordMiss", screen, move, Vector2.zero, default(Ray), "latest move");
+            Invoke(panel, "LateUpdate");
+            Assert.That(ReadInt(panel, "LineCount"), Is.EqualTo(afterFirstMove), "Immediate Move should be throttled.");
+            StringAssert.Contains("777 x 200", liveText.text, "Live data must not be throttled.");
+
+            yield return new WaitForSecondsRealtime(0.11f);
+            Invoke(panel, "RecordMiss", screen, move, Vector2.zero, default(Ray), "next move");
+            Assert.That(ReadInt(panel, "LineCount"), Is.EqualTo(afterFirstMove + 1), "Move should log again at 10 Hz.");
+
+            move.phase = RadarPointerPhase.Down;
+            Invoke(panel, "RecordMiss", screen, move, Vector2.zero, default(Ray), "down");
+            Assert.That(ReadInt(panel, "LineCount"), Is.EqualTo(afterFirstMove + 2), "Down must never be Move-throttled.");
         }
 
         [Test]
@@ -319,6 +637,13 @@ namespace Blaze.Radar.Tests
             return texture;
         }
 
+        private Text CreateText(string name)
+        {
+            var gameObject = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
+            createdObjects.Add(gameObject);
+            return gameObject.GetComponent<Text>();
+        }
+
         private static RadarScreenCameraBinding Binding(string screenId, Camera camera)
         {
             return new RadarScreenCameraBinding
@@ -353,6 +678,21 @@ namespace Blaze.Radar.Tests
             };
         }
 
+        private static RadarScreenPointerFrame Frame(
+            RadarScreenInfo screen,
+            long sequence,
+            List<RadarScreenPointer> pointers,
+            long? timestamp = null)
+        {
+            return new RadarScreenPointerFrame
+            {
+                screen = screen,
+                sequence = sequence,
+                timestampUnixMilliseconds = timestamp ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                pointers = pointers
+            };
+        }
+
         private static void AssertCenterHit(
             RadarScreenCameraRouter router,
             RadarScreenInfo screen,
@@ -366,13 +706,27 @@ namespace Blaze.Radar.Tests
         private static Type FindImportedSampleType(string fullName)
         {
             var assemblies = AppDomain.CurrentDomain.GetAssemblies();
+            var sampleAssemblyLoaded = false;
             for (var index = 0; index < assemblies.Length; index++)
             {
+                if (string.Equals(
+                    assemblies[index].GetName().Name,
+                    "Blaze.Radar.Sample.MultiScreenCameraRouting",
+                    StringComparison.Ordinal))
+                {
+                    sampleAssemblyLoaded = true;
+                }
+
                 var type = assemblies[index].GetType(fullName, false);
                 if (type != null)
                 {
                     return type;
                 }
+            }
+
+            if (sampleAssemblyLoaded)
+            {
+                Assert.Fail("The imported sample assembly is missing required type '" + fullName + "'.");
             }
 
             Assert.Ignore("Import the Multi-Screen Camera Routing sample to exercise its runtime tests.");
@@ -393,6 +747,37 @@ namespace Blaze.Radar.Tests
             return info.Invoke(target, arguments);
         }
 
+        private static object InvokeStatic(Type type, string method, params object[] arguments)
+        {
+            var info = type.GetMethod(
+                method,
+                BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+            Assert.That(info, Is.Not.Null, method);
+            return info.Invoke(null, arguments);
+        }
+
+        private static void SetField(object target, string field, object value)
+        {
+            var info = target.GetType().GetField(
+                field,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            Assert.That(info, Is.Not.Null, field);
+            info.SetValue(target, value);
+        }
+
+        private static int ReadCollectionCount(object target, string field)
+        {
+            var fieldInfo = target.GetType().GetField(
+                field,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            Assert.That(fieldInfo, Is.Not.Null, field);
+            var collection = fieldInfo.GetValue(target);
+            Assert.That(collection, Is.Not.Null, field);
+            var count = collection.GetType().GetProperty("Count", BindingFlags.Instance | BindingFlags.Public);
+            Assert.That(count, Is.Not.Null, field + ".Count");
+            return (int)count.GetValue(collection, null);
+        }
+
         private static int ReadInt(object target, string property)
         {
             var info = target.GetType().GetProperty(
@@ -400,6 +785,15 @@ namespace Blaze.Radar.Tests
                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
             Assert.That(info, Is.Not.Null, property);
             return (int)info.GetValue(target, null);
+        }
+
+        private static bool ReadBool(object target, string field)
+        {
+            var info = target.GetType().GetField(
+                field,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            Assert.That(info, Is.Not.Null, field);
+            return (bool)info.GetValue(target);
         }
 
         private static void AssertPhases(
@@ -413,6 +807,47 @@ namespace Blaze.Radar.Tests
             {
                 Assert.That(frame.pointers[index].phase, Is.EqualTo(phases[index]), screenId + " pointer " + index);
             }
+        }
+
+        private static void AssertPointerIds(
+            RadarPointerBatchPayload batch,
+            string screenId,
+            params int[] pointerIds)
+        {
+            var frame = FindFrame(batch, screenId);
+            Assert.That(frame.pointers, Has.Count.EqualTo(pointerIds.Length), screenId);
+            for (var index = 0; index < pointerIds.Length; index++)
+            {
+                Assert.That(frame.pointers[index].pointerId, Is.EqualTo(pointerIds[index]), screenId + " pointer " + index);
+            }
+        }
+
+        private static long ParseAge(string summary)
+        {
+            var match = Regex.Match(summary ?? string.Empty, @"AGE (\d+) ms");
+            Assert.That(match.Success, Is.True, summary);
+            return long.Parse(match.Groups[1].Value);
+        }
+
+        private static void AssertSerializedScreen(
+            string settings,
+            string screenId,
+            int width,
+            int height,
+            bool primary,
+            int order)
+        {
+            var pattern = @"(?ms)- screenId: " + Regex.Escape(screenId) +
+                @"\s+displayName: .*?\s+defaultWidthPixels: " + width +
+                @"\s+defaultHeightPixels: " + height +
+                @"\s+enabled: 1\s+isPrimary: " + (primary ? 1 : 0) +
+                @"\s+order: " + order;
+            Assert.That(Regex.IsMatch(settings, pattern), Is.True, screenId + " settings contract");
+        }
+
+        private static string NormalizeNewlines(string value)
+        {
+            return (value ?? string.Empty).Replace("\r\n", "\n");
         }
 
         private static RadarScreenPointerFrame FindFrame(RadarPointerBatchPayload batch, string screenId)

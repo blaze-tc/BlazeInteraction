@@ -5,6 +5,57 @@ using UnityEngine;
 
 namespace Blaze.Radar.Samples
 {
+    internal sealed class LatestModeTransitionCoordinator
+    {
+        private int version;
+        private bool hasRequestedMode;
+        private int requestedMode;
+        private Task currentTask = Task.CompletedTask;
+
+        public Task RequestAsync(
+            int mode,
+            Action beginTransition,
+            Func<Task> disconnectAsync,
+            Func<bool> canActivate,
+            Action<int> activate)
+        {
+            if (hasRequestedMode && requestedMode == mode)
+            {
+                return currentTask;
+            }
+
+            hasRequestedMode = true;
+            requestedMode = mode;
+            var requestVersion = ++version;
+            beginTransition();
+            currentTask = CompleteAsync(requestVersion, mode, disconnectAsync, canActivate, activate);
+            return currentTask;
+        }
+
+        public void Cancel()
+        {
+            version++;
+            hasRequestedMode = false;
+            currentTask = Task.CompletedTask;
+        }
+
+        private async Task CompleteAsync(
+            int requestVersion,
+            int mode,
+            Func<Task> disconnectAsync,
+            Func<bool> canActivate,
+            Action<int> activate)
+        {
+            await disconnectAsync();
+            if (requestVersion != version || !hasRequestedMode || requestedMode != mode || !canActivate())
+            {
+                return;
+            }
+
+            activate(mode);
+        }
+    }
+
     /// <summary>
     /// Keeps LocalSimulation and BridgeIpc mutually exclusive while feeding both sources
     /// through the same screen-frame handler.
@@ -29,12 +80,14 @@ namespace Blaze.Radar.Samples
         private readonly Dictionary<PointerKey, PointerSnapshot> activePointers =
             new Dictionary<PointerKey, PointerSnapshot>();
         private readonly List<PointerSnapshot> flushPointers = new List<PointerSnapshot>();
+        private readonly List<PointerKey> removePointerKeys = new List<PointerKey>();
+        private readonly LatestModeTransitionCoordinator modeTransitions =
+            new LatestModeTransitionCoordinator();
         private DataSourceMode currentMode;
         private bool hasActiveMode;
         private bool acceptingLocal;
         private bool acceptingIpc;
         private bool subscribed;
-        private int transitionVersion;
 
         public DataSourceMode CurrentMode => currentMode;
 
@@ -51,7 +104,7 @@ namespace Blaze.Radar.Samples
 
         private void OnDisable()
         {
-            transitionVersion++;
+            modeTransitions.Cancel();
             acceptingLocal = false;
             acceptingIpc = false;
             simulator?.StopSimulation(false);
@@ -75,37 +128,30 @@ namespace Blaze.Radar.Samples
             SwitchMode(DataSourceMode.BridgeIpc);
         }
 
-        public async void SwitchMode(DataSourceMode mode)
+        public void SwitchMode(DataSourceMode mode)
         {
-            if (hasActiveMode && currentMode == mode)
-            {
-                return;
-            }
+            _ = modeTransitions.RequestAsync(
+                (int)mode,
+                () => BeginModeTransition(mode),
+                dispatcher != null
+                    ? (Func<Task>)DisconnectIgnoringErrorsAsync
+                    : () => Task.CompletedTask,
+                () => isActiveAndEnabled,
+                rawMode => ActivateMode((DataSourceMode)rawMode));
+        }
 
-            var version = ++transitionVersion;
+        private void BeginModeTransition(DataSourceMode mode)
+        {
+            hasActiveMode = false;
             acceptingLocal = false;
             acceptingIpc = false;
             simulator?.StopSimulation(false);
             FlushActivePointers("switching data source");
             logPanel?.RecordLifecycle("Switching exclusively to " + mode + ".");
+        }
 
-            if (dispatcher != null)
-            {
-                try
-                {
-                    await dispatcher.DisconnectAsync();
-                }
-                catch (Exception exception)
-                {
-                    logPanel?.RecordError("Disconnect failed: " + exception.Message);
-                }
-            }
-
-            if (version != transitionVersion || !isActiveAndEnabled)
-            {
-                return;
-            }
-
+        private void ActivateMode(DataSourceMode mode)
+        {
             currentMode = mode;
             hasActiveMode = true;
             if (mode == DataSourceMode.LocalSimulation)
@@ -205,8 +251,10 @@ namespace Blaze.Radar.Samples
 
         private void TrackPointers(RadarScreenPointerFrame frame)
         {
-            if (frame.pointers == null)
+            if (frame.pointers == null || frame.pointers.Count == 0)
             {
+                RemoveTrackedPointers(frame.screen.screenId);
+                logPanel?.ClearScreen(frame.screen.screenId);
                 return;
             }
 
@@ -227,6 +275,23 @@ namespace Blaze.Radar.Samples
                 {
                     activePointers[key] = new PointerSnapshot(frame.screen, pointer);
                 }
+            }
+        }
+
+        private void RemoveTrackedPointers(string screenId)
+        {
+            removePointerKeys.Clear();
+            foreach (var key in activePointers.Keys)
+            {
+                if (string.Equals(key.ScreenId, screenId, StringComparison.OrdinalIgnoreCase))
+                {
+                    removePointerKeys.Add(key);
+                }
+            }
+
+            for (var index = 0; index < removePointerKeys.Count; index++)
+            {
+                activePointers.Remove(removePointerKeys[index]);
             }
         }
 
@@ -311,7 +376,7 @@ namespace Blaze.Radar.Samples
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception, this);
+                logPanel?.RecordError("Disconnect failed: " + exception.Message);
             }
         }
 
