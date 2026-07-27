@@ -469,7 +469,8 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             return;
         }
         SetUnityStatus(UnityStatus with { LastBatchSentAt = batch.Timestamp, LastBatchSequence = batch.Sequence, LastError = null });
-        PublishLog($"[GLOBAL/IPC] batch={batch.Sequence} screens={batch.Payload.Screens.Count} pointers={batch.Payload.Screens.Sum(frame => frame.Pointers.Count)} latencyMs=0.0");
+        var latencyMilliseconds = Math.Max(0d, (DateTimeOffset.UtcNow - batch.Timestamp).TotalMilliseconds);
+        PublishLog($"[IPC] batch={batch.Sequence} screens={batch.Payload.Screens.Count} pointers={batch.Payload.Screens.Sum(frame => frame.Pointers.Count)} latencyMs={latencyMilliseconds:0.0}");
         var cleanup = await ConfirmTransitionAsync(batch, cancellationToken).ConfigureAwait(false);
         if (cleanup is not null) TrackRetirement(cleanup);
     }
@@ -603,7 +604,11 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             binding.DetectionHandler = frame => OnDetectionFrame(runtime, binding, frame);
             binding.SnapshotHandler = snapshot => OnSensorSnapshot(runtime, binding, snapshot);
             binding.StateHandler = state => OnPipelineStateChanged(runtime, binding, state);
-            binding.LogHandler = message => PublishLog($"[{runtime.Info.ScreenId}/{binding.Configuration.SensorId}] {message}");
+            binding.LogHandler = message =>
+            {
+                var tag = $"[{runtime.Info.ScreenId}/{binding.Configuration.SensorId}]";
+                PublishLog(message.StartsWith(tag, StringComparison.OrdinalIgnoreCase) ? message : $"{tag} {message}");
+            };
             pipeline.DetectionFrameUpdated += binding.DetectionHandler;
             pipeline.SnapshotUpdated += binding.SnapshotHandler;
             pipeline.StateChanged += binding.StateHandler;
@@ -630,6 +635,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private void OnSensorSnapshot(ScreenRuntime runtime, PipelineRuntime binding, RadarSensorRuntimeSnapshot snapshot)
     {
         binding.LastSnapshot = snapshot;
+        PublishLog($"[{runtime.Info.ScreenId}/{binding.Configuration.SensorId}] raw={snapshot.RawPoints.Count} valid={snapshot.ValidPoints.Count} crc={snapshot.CrcErrorCount}");
         InvokeSafely(SensorSnapshotUpdated, snapshot);
     }
 
@@ -642,6 +648,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private void PublishScreenSnapshot(ScreenRuntime runtime, RadarScreenFusionResult result, DateTimeOffset timestamp)
     {
         var sequence = Volatile.Read(ref _batchSequence) + 1;
+        PublishLog($"[{runtime.Info.ScreenId}/FUSION] groups={result.Targets.Count} pointers={result.Pointers.Count}");
         InvokeSafely(ScreenSnapshotUpdated, new RadarScreenRuntimeSnapshot(runtime.Info,
             runtime.Pipelines.Values.Select(binding => binding.LastSnapshot).Where(snapshot => snapshot is not null).Cast<RadarSensorRuntimeSnapshot>().ToArray(),
             result.Targets, result.Pointers, sequence, timestamp));

@@ -79,6 +79,22 @@ function Sort-UnityVersionCandidates {
     ))
 }
 
+function Assert-SampleAssembliesCopied {
+    param([string]$SampleRoot)
+
+    $expectedAssemblies = @(
+        (Join-Path $SampleRoot "Basic Interaction\Blaze.Radar.Sample.BasicInteraction.asmdef"),
+        (Join-Path $SampleRoot "Multi-Screen Camera Routing\Blaze.Radar.Sample.MultiScreenCameraRouting.asmdef")
+    )
+    foreach ($assemblyPath in $expectedAssemblies) {
+        if (-not (Test-Path -LiteralPath $assemblyPath -PathType Leaf)) {
+            throw "Included sample assembly definition was not copied: '$assemblyPath'."
+        }
+    }
+
+    Write-Host "Included sample assemblies verified: $($expectedAssemblies.Count)"
+}
+
 function Find-VersionDirectoryFallback {
     param([string]$EditorPath)
 
@@ -267,6 +283,32 @@ function Invoke-RunnerSelfTest {
         Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
     }
 
+    $sampleTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "blaze-radar-$selfTestId-samples"
+    $basicAssembly = Join-Path $sampleTestRoot "Basic Interaction\Blaze.Radar.Sample.BasicInteraction.asmdef"
+    $multiScreenAssembly = Join-Path $sampleTestRoot "Multi-Screen Camera Routing\Blaze.Radar.Sample.MultiScreenCameraRouting.asmdef"
+    try {
+        New-Item -ItemType Directory -Path (Split-Path -Parent $basicAssembly), (Split-Path -Parent $multiScreenAssembly) -Force | Out-Null
+        Set-Content -LiteralPath $basicAssembly -Encoding UTF8 -Value '{}'
+        Set-Content -LiteralPath $multiScreenAssembly -Encoding UTF8 -Value '{}'
+        Assert-SampleAssembliesCopied -SampleRoot $sampleTestRoot
+
+        Remove-Item -LiteralPath $multiScreenAssembly -Force
+        $rejectedMissingSampleAssembly = $false
+        try {
+            Assert-SampleAssembliesCopied -SampleRoot $sampleTestRoot
+        }
+        catch {
+            $rejectedMissingSampleAssembly = $_.Exception.Message -like '*was not copied*'
+        }
+
+        if (-not $rejectedMissingSampleAssembly) {
+            throw "Runner self-test failed: a missing included sample assembly was not rejected."
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $sampleTestRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
     Write-Host "Unity package runner self-test PASS: $actual"
 }
 
@@ -413,6 +455,8 @@ if ($IncludeSamples) {
         New-Item -ItemType Directory -Path $destination -Force | Out-Null
         Copy-Item -Path (Join-Path $source "*") -Destination $destination -Recurse -Force
     }
+
+    Assert-SampleAssembliesCopied -SampleRoot $sampleRoot
 }
 
 $platforms = if ($TestPlatform -eq "All") { @("EditMode", "PlayMode") } else { @($TestPlatform) }

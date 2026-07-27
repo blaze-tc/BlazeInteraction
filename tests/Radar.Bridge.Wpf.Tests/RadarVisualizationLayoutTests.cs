@@ -96,7 +96,8 @@ public sealed class RadarVisualizationLayoutTests
     public void BridgeGlobalLogs_UseTwoPartTags()
     {
         var source = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "src", "Radar.Bridge.Wpf", "Services", "RadarBridgeCoordinator.cs"));
-        Assert.DoesNotContain("[IPC]", source);
+        Assert.Contains("PublishLog($\"[IPC] batch=", source, StringComparison.Ordinal);
+        Assert.Contains("latencyMs=", source, StringComparison.Ordinal);
         Assert.DoesNotContain("[SYSTEM]", source);
         Assert.Contains("[GLOBAL/IPC]", source);
     }

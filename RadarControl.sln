@@ -35,6 +35,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Radar.Bridge.Wpf.Tests", "t
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Radar.Unity.Compatibility.Tests", "tests\Radar.Unity.Compatibility.Tests\Radar.Unity.Compatibility.Tests.csproj", "{B9F6757F-FB56-44F6-9FF8-F353202C70B6}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Radar.EndToEnd.Tests", "tests\Radar.EndToEnd.Tests\Radar.EndToEnd.Tests.csproj", "{3A613E1E-7F28-491B-B5EB-FBC49E25AD50}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -100,6 +102,10 @@ Global
 		{B9F6757F-FB56-44F6-9FF8-F353202C70B6}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{B9F6757F-FB56-44F6-9FF8-F353202C70B6}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{B9F6757F-FB56-44F6-9FF8-F353202C70B6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3A613E1E-7F28-491B-B5EB-FBC49E25AD50}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3A613E1E-7F28-491B-B5EB-FBC49E25AD50}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3A613E1E-7F28-491B-B5EB-FBC49E25AD50}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3A613E1E-7F28-491B-B5EB-FBC49E25AD50}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{016935A9-7683-4931-84E0-340E59F446C9} = {F520F5D4-6153-4236-A575-0C859B8E2717}
@@ -116,5 +122,6 @@ Global
 		{EB891499-8652-438A-AD8E-23BC538BE6B2} = {F520F5D4-6153-4236-A575-0C859B8E2717}
 		{820E7195-4FBA-49CD-BC9B-EA22DB37E345} = {BF0B4AE0-5B8D-4B1F-8615-D70849A3C7EB}
 		{B9F6757F-FB56-44F6-9FF8-F353202C70B6} = {BF0B4AE0-5B8D-4B1F-8615-D70849A3C7EB}
+		{3A613E1E-7F28-491B-B5EB-FBC49E25AD50} = {BF0B4AE0-5B8D-4B1F-8615-D70849A3C7EB}
 	EndGlobalSection
 EndGlobal
