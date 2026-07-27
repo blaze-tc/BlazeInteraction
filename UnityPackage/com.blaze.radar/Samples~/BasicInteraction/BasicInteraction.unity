@@ -201,7 +201,7 @@ MonoBehaviour:
     m_HorizontalOverflow: 0
     m_VerticalOverflow: 0
     m_LineSpacing: 1.08
-  m_Text: Waiting for the first radar pointer frame...
+  m_Text: "IPC: DISCONNECTED\nPRIMARY: main \xB7 waiting for screen metadata\nFRAME: waiting for the first primary-screen batch\nINPUT: RadarAndMouseDebug"
 --- !u!1 &78724337
 GameObject:
   m_ObjectHideFlags: 0
@@ -278,7 +278,7 @@ MonoBehaviour:
   m_Name:
   m_EditorClassIdentifier:
   m_Material: {fileID: 0}
-  m_Color: {r: 0.050980393, g: 0.11372549, b: 0.18039216, a: 0.972549}
+  m_Color: {r: 0.050980393, g: 0.11372549, b: 0.18039216, a: 1}
   m_RaycastTarget: 0
   m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}
   m_Maskable: 1
@@ -1673,7 +1673,7 @@ MonoBehaviour:
   m_Name:
   m_EditorClassIdentifier:
   m_Material: {fileID: 0}
-  m_Color: {r: 0.050980393, g: 0.11372549, b: 0.18039216, a: 0.972549}
+  m_Color: {r: 0.050980393, g: 0.11372549, b: 0.18039216, a: 1}
   m_RaycastTarget: 0
   m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}
   m_Maskable: 1
@@ -2784,15 +2784,16 @@ MonoBehaviour:
   m_Name:
   m_EditorClassIdentifier:
   radarDispatcher: {fileID: 595746031}
+  radarInputModule: {fileID: 1526474493}
+  primaryScreenId: main
   connectionStatusDot: {fileID: 2022747365}
   connectionStatusText: {fileID: 1045211727}
   latestFrameText: {fileID: 35184941}
   eventLogText: {fileID: 1947319528}
   interactionStatusText: {fileID: 1296132975}
   eventLogScrollRect: {fileID: 1690700226}
-  maxLogEntries: 160
-  frameHistoryIntervalSeconds: 0.25
-  continuousEventIntervalSeconds: 0.12
+  maxFrameLogLines: 200
+  maxEventSystemLogLines: 300
 --- !u!4 &1224097325
 Transform:
   m_ObjectHideFlags: 0
@@ -3241,7 +3242,7 @@ MonoBehaviour:
   m_Name:
   m_EditorClassIdentifier:
   m_Material: {fileID: 0}
-  m_Color: {r: 0.050980393, g: 0.11372549, b: 0.18039216, a: 0.972549}
+  m_Color: {r: 0.050980393, g: 0.11372549, b: 0.18039216, a: 1}
   m_RaycastTarget: 0
   m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}
   m_Maskable: 1
@@ -3921,6 +3922,7 @@ MonoBehaviour:
   m_SendPointerHoverToParent: 1
   dispatcher: {fileID: 595746031}
   inputMode: 1
+  screenId: main
 --- !u!114 &1526474494
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -5479,7 +5481,7 @@ MonoBehaviour:
     m_HorizontalOverflow: 0
     m_VerticalOverflow: 0
     m_LineSpacing: 1
-  m_Text: LIVE FRAME DATA
+  m_Text: PRIMARY SCREEN LIVE DATA
 --- !u!222 &1850022628
 CanvasRenderer:
   m_ObjectHideFlags: 0
@@ -6085,7 +6087,7 @@ MonoBehaviour:
     m_HorizontalOverflow: 0
     m_VerticalOverflow: 0
     m_LineSpacing: 1
-  m_Text: DETAILED EVENT HISTORY
+  m_Text: FRAME + EVENTSYSTEM HISTORY
 --- !u!222 &2037649308
 CanvasRenderer:
   m_ObjectHideFlags: 0

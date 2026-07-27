@@ -20,17 +20,17 @@ namespace Blaze.Radar.Samples
 
         public void OnRadarButtonClicked()
         {
-            demoLogger?.LogUiEvent("Button Click", "Radar Button completed its UnityEvent callback");
+            demoLogger?.LogUiEvent("Button.Click", "Radar Button completed its authored UnityEvent callback");
         }
 
         public void OnToggleChanged(bool isOn)
         {
-            demoLogger?.LogUiEvent("Toggle Changed", isOn ? "interaction layer ON" : "interaction layer OFF");
+            demoLogger?.LogUiEvent("Toggle.ValueChanged", isOn ? "interaction layer ON" : "interaction layer OFF");
         }
 
         public void OnSliderChanged(float value)
         {
-            demoLogger?.LogContinuousUiEvent("Slider Changed", $"value {value:0.000}");
+            demoLogger?.LogContinuousUiEvent("Slider.ValueChanged", $"value {value:0.000}");
         }
 
         public void OnScrollChanged(Vector2 normalizedPosition)
@@ -41,7 +41,7 @@ namespace Blaze.Radar.Samples
             }
 
             demoLogger.LogContinuousUiEvent(
-                "Log ScrollRect",
+                "ScrollRect.ValueChanged",
                 $"normalized ({normalizedPosition.x:0.000}, {normalizedPosition.y:0.000})");
         }
 
@@ -53,7 +53,8 @@ namespace Blaze.Radar.Samples
             }
 
             demoLogger?.ShowInteractionStatus(
-                $"Ready | Toggle {(interactionToggle.isOn ? "ON" : "OFF")} | Slider {strengthSlider.value:0.00}");
+                $"Ready | native UGUI | Toggle {(interactionToggle.isOn ? "ON" : "OFF")} | "
+                + $"Slider {strengthSlider.value:0.00}");
         }
     }
 }

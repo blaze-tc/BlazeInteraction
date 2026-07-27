@@ -19,6 +19,8 @@ namespace Blaze.Radar.Tests
         private GameObject _dispatcherObject;
         private RadarRuntimeSettings _runtimeSettings;
         private RadarInputModule _module;
+        private readonly List<GameObject> _extraObjects = new List<GameObject>();
+        private readonly List<BaseRaycaster> _disabledSceneRaycasters = new List<BaseRaycaster>();
 
         [UnitySetUp]
         public IEnumerator SetUp()
@@ -35,6 +37,33 @@ namespace Blaze.Radar.Tests
         [UnityTearDown]
         public IEnumerator TearDown()
         {
+            for (var index = 0; index < _extraObjects.Count; index++)
+            {
+                if (_extraObjects[index] == null)
+                {
+                    continue;
+                }
+
+                if (Application.isPlaying)
+                {
+                    Object.Destroy(_extraObjects[index]);
+                }
+                else
+                {
+                    Object.DestroyImmediate(_extraObjects[index]);
+                }
+            }
+
+            _extraObjects.Clear();
+            for (var index = 0; index < _disabledSceneRaycasters.Count; index++)
+            {
+                if (_disabledSceneRaycasters[index] != null)
+                {
+                    _disabledSceneRaycasters[index].enabled = true;
+                }
+            }
+
+            _disabledSceneRaycasters.Clear();
             if (Application.isPlaying)
             {
                 Object.Destroy(_canvasObject);
@@ -301,16 +330,202 @@ namespace Blaze.Radar.Tests
                 "RadarAndMouseDebug must continue to process Unity's native mouse as pointer -1.");
         }
 
+        [UnityTest]
+        public IEnumerator PrimaryScreenFrame_DrivesButtonToggleSliderAndDragInOrder()
+        {
+            var events = new List<string>();
+            var button = CreateButton("Basic Button", new Vector2(0.5f, 0.82f));
+            button.onClick.AddListener(() => events.Add("button.click"));
+
+            var toggle = CreateToggle("Basic Toggle", new Vector2(0.5f, 0.64f));
+            toggle.onValueChanged.AddListener(_ => events.Add("toggle.changed"));
+
+            var slider = CreateSlider("Basic Slider", new Vector2(0.5f, 0.46f));
+            slider.onValueChanged.AddListener(_ => events.Add("slider.changed"));
+
+            var dragTarget = CreateUiTarget("Basic Drag", new Vector2(0.5f, 0.23f), new Vector2(320f, 120f));
+            var dragRecorder = dragTarget.AddComponent<DragPathRecorder>();
+            dragRecorder.Events = events;
+            yield return null;
+
+            ProcessScreenFrame(ScreenFrame("main", true, ScreenPointer(10, 0.5f, 0.82f, RadarPointerPhase.Down)));
+            ProcessScreenFrame(ScreenFrame("main", true, ScreenPointer(10, 0.5f, 0.82f, RadarPointerPhase.Up)));
+            ProcessScreenFrame(ScreenFrame("main", true, ScreenPointer(11, 0.5f, 0.64f, RadarPointerPhase.Down)));
+            ProcessScreenFrame(ScreenFrame("main", true, ScreenPointer(11, 0.5f, 0.64f, RadarPointerPhase.Up)));
+            ProcessScreenFrame(ScreenFrame("main", true, ScreenPointer(12, 0.43f, 0.46f, RadarPointerPhase.Down)));
+            ProcessScreenFrame(ScreenFrame("main", true, ScreenPointer(12, 0.57f, 0.46f, RadarPointerPhase.Move)));
+            ProcessScreenFrame(ScreenFrame("main", true, ScreenPointer(12, 0.57f, 0.46f, RadarPointerPhase.Up)));
+            ProcessScreenFrame(ScreenFrame("main", true, ScreenPointer(13, 0.46f, 0.23f, RadarPointerPhase.Down)));
+            ProcessScreenFrame(ScreenFrame("main", true, ScreenPointer(13, 0.54f, 0.23f, RadarPointerPhase.Move)));
+            ProcessScreenFrame(ScreenFrame("main", true, ScreenPointer(13, 0.54f, 0.23f, RadarPointerPhase.Up)));
+
+            AssertEventsInOrder(
+                events,
+                "button.click",
+                "toggle.changed",
+                "slider.changed",
+                "drag.begin",
+                "drag.end");
+        }
+
+        [UnityTest]
+        public IEnumerator PrimaryScreenFrame_DrivesPhysics3DPointerPath()
+        {
+            DisableSceneRaycasters();
+            var events = new List<string>();
+            CreatePhysics3DTarget(new Vector2(0.38f, 0.55f), events);
+            Physics.SyncTransforms();
+            yield return null;
+
+            ProcessScreenFrame(ScreenFrame("main", true, ScreenPointer(21, 0.38f, 0.55f, RadarPointerPhase.Down)));
+            ProcessScreenFrame(ScreenFrame("main", true, ScreenPointer(21, 0.38f, 0.55f, RadarPointerPhase.Up)));
+
+            CollectionAssert.Contains(events, "physics3d.click");
+        }
+
+        [UnityTest]
+        public IEnumerator PrimaryScreenFrame_DrivesPhysics2DPointerPath()
+        {
+            DisableSceneRaycasters();
+            var events = new List<string>();
+            CreatePhysics2DTarget(new Vector2(0.62f, 0.45f), events);
+            Physics2D.SyncTransforms();
+            yield return null;
+
+            ProcessScreenFrame(ScreenFrame("main", true, ScreenPointer(22, 0.62f, 0.45f, RadarPointerPhase.Down)));
+            ProcessScreenFrame(ScreenFrame("main", true, ScreenPointer(22, 0.62f, 0.45f, RadarPointerPhase.Up)));
+
+            CollectionAssert.Contains(events, "physics2d.click");
+        }
+
         private Button CreateButton(string name, Vector2 normalizedPosition)
         {
-            var gameObject = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Button));
+            return CreateUiTarget(name, normalizedPosition, new Vector2(180f, 90f)).AddComponent<Button>();
+        }
+
+        private Toggle CreateToggle(string name, Vector2 normalizedPosition)
+        {
+            return CreateUiTarget(name, normalizedPosition, new Vector2(220f, 90f)).AddComponent<Toggle>();
+        }
+
+        private Slider CreateSlider(string name, Vector2 normalizedPosition)
+        {
+            var sliderObject = CreateUiTarget(name, normalizedPosition, new Vector2(360f, 90f));
+            var fillArea = CreateSliderChild("Fill Area", sliderObject.transform, Vector2.zero);
+            var fill = CreateSliderChild("Fill", fillArea.transform, new Vector2(-8f, 0f));
+            var handleArea = CreateSliderChild("Handle Slide Area", sliderObject.transform, new Vector2(-24f, 0f));
+            var handle = CreateSliderChild("Handle", handleArea.transform, new Vector2(24f, 24f));
+            var handleRect = handle.GetComponent<RectTransform>();
+            handleRect.anchorMin = new Vector2(0.5f, 0.5f);
+            handleRect.anchorMax = new Vector2(0.5f, 0.5f);
+            handleRect.sizeDelta = new Vector2(24f, 24f);
+
+            var slider = sliderObject.AddComponent<Slider>();
+            slider.minValue = 0f;
+            slider.maxValue = 1f;
+            slider.value = 0.25f;
+            slider.direction = Slider.Direction.LeftToRight;
+            slider.fillRect = fill.GetComponent<RectTransform>();
+            slider.handleRect = handleRect;
+            slider.targetGraphic = handle.GetComponent<Image>();
+            return slider;
+        }
+
+        private static GameObject CreateSliderChild(string name, Transform parent, Vector2 sizeDelta)
+        {
+            var child = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+            child.transform.SetParent(parent, false);
+            var rect = child.GetComponent<RectTransform>();
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.offsetMin = Vector2.zero;
+            rect.offsetMax = Vector2.zero;
+            rect.sizeDelta = sizeDelta;
+            return child;
+        }
+
+        private GameObject CreateUiTarget(string name, Vector2 normalizedPosition, Vector2 size)
+        {
+            var gameObject = new GameObject(name, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
             gameObject.transform.SetParent(_canvasObject.transform, false);
             var rect = gameObject.GetComponent<RectTransform>();
             rect.anchorMin = normalizedPosition;
             rect.anchorMax = normalizedPosition;
             rect.pivot = new Vector2(0.5f, 0.5f);
-            rect.sizeDelta = new Vector2(180f, 90f);
-            return gameObject.GetComponent<Button>();
+            rect.sizeDelta = size;
+            return gameObject;
+        }
+
+        private void CreatePhysics3DTarget(Vector2 normalizedPosition, List<string> events)
+        {
+            var camera = CreateEventCamera(typeof(PhysicsRaycaster));
+            var target = new GameObject("Physics 3D Target", typeof(BoxCollider), typeof(PointerClickRecorder));
+            target.transform.position = ScreenPointAtWorldDepth(camera, normalizedPosition, 10f);
+            target.GetComponent<BoxCollider>().size = new Vector3(2f, 2f, 1f);
+            target.GetComponent<PointerClickRecorder>().Configure(events, "physics3d.click");
+            _extraObjects.Add(target);
+        }
+
+        private void CreatePhysics2DTarget(Vector2 normalizedPosition, List<string> events)
+        {
+            var camera = CreateEventCamera(typeof(Physics2DRaycaster));
+            var target = new GameObject("Physics 2D Target", typeof(BoxCollider2D), typeof(PointerClickRecorder));
+            target.transform.position = ScreenPointAtWorldDepth(camera, normalizedPosition, 10f);
+            target.GetComponent<BoxCollider2D>().size = new Vector2(2f, 2f);
+            target.GetComponent<PointerClickRecorder>().Configure(events, "physics2d.click");
+            _extraObjects.Add(target);
+        }
+
+        private Camera CreateEventCamera(Type raycasterType)
+        {
+            var cameraObject = new GameObject("Event Camera", typeof(Camera), raycasterType);
+            var camera = cameraObject.GetComponent<Camera>();
+            camera.transform.position = new Vector3(0f, 0f, -10f);
+            camera.orthographic = true;
+            camera.orthographicSize = 5f;
+            camera.clearFlags = CameraClearFlags.Nothing;
+            _extraObjects.Add(cameraObject);
+            return camera;
+        }
+
+        private void DisableSceneRaycasters()
+        {
+            var raycasters = Object.FindObjectsOfType<BaseRaycaster>();
+            for (var index = 0; index < raycasters.Length; index++)
+            {
+                if (!raycasters[index].enabled)
+                {
+                    continue;
+                }
+
+                raycasters[index].enabled = false;
+                _disabledSceneRaycasters.Add(raycasters[index]);
+            }
+        }
+
+        private static Vector3 ScreenPointAtWorldDepth(Camera camera, Vector2 normalizedPosition, float depth)
+        {
+            return camera.ScreenToWorldPoint(new Vector3(
+                normalizedPosition.x * Screen.width,
+                normalizedPosition.y * Screen.height,
+                depth));
+        }
+
+        private static void AssertEventsInOrder(IReadOnlyList<string> actual, params string[] expected)
+        {
+            var nextIndex = 0;
+            for (var index = 0; index < actual.Count && nextIndex < expected.Length; index++)
+            {
+                if (actual[index] == expected[nextIndex])
+                {
+                    nextIndex++;
+                }
+            }
+
+            Assert.That(
+                nextIndex,
+                Is.EqualTo(expected.Length),
+                "Expected ordered events: " + string.Join(", ", expected) + "; actual: " + string.Join(", ", actual));
         }
 
         private void ProcessFrame(params RadarPointerMessage[] pointers)
@@ -502,6 +717,43 @@ namespace Blaze.Radar.Tests
             public void OnPointerUp(PointerEventData eventData)
             {
                 Module.CancelAllPointers();
+            }
+        }
+
+        private sealed class DragPathRecorder : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDragHandler
+        {
+            public List<string> Events { get; set; }
+
+            public void OnBeginDrag(PointerEventData eventData)
+            {
+                Events?.Add("drag.begin");
+            }
+
+            public void OnDrag(PointerEventData eventData)
+            {
+                Events?.Add("drag.move");
+            }
+
+            public void OnEndDrag(PointerEventData eventData)
+            {
+                Events?.Add("drag.end");
+            }
+        }
+
+        private sealed class PointerClickRecorder : MonoBehaviour, IPointerClickHandler
+        {
+            private List<string> _events;
+            private string _eventName;
+
+            public void Configure(List<string> events, string eventName)
+            {
+                _events = events;
+                _eventName = eventName;
+            }
+
+            public void OnPointerClick(PointerEventData eventData)
+            {
+                _events?.Add(_eventName);
             }
         }
     }

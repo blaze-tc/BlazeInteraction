@@ -4,21 +4,25 @@ using System.Globalization;
 using System.Text;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.Serialization;
 using UnityEngine.UI;
 
 namespace Blaze.Radar.Samples
 {
     /// <summary>
-    /// Keeps the sample's live radar diagnostics and bounded on-screen history in one place.
-    /// Continuous movement is throttled in history, while the live frame panel still updates every frame.
+    /// Shows primary-screen IPC frames next to the native EventSystem callbacks they produce.
+    /// The live panel is lossless; bounded history keeps long field tests readable.
     /// </summary>
     public sealed class RadarDemoLogger : MonoBehaviour
     {
+        private const float MoveLogIntervalSeconds = 0.1f;
         private static readonly Color ConnectedColor = new Color32(82, 224, 179, 255);
-        private static readonly Color WaitingColor = new Color32(247, 184, 89, 255);
+        private static readonly Color DisconnectedColor = new Color32(247, 184, 89, 255);
 
         [Header("Radar Source")]
         [SerializeField] private RadarFrameDispatcher radarDispatcher;
+        [SerializeField] private RadarInputModule radarInputModule;
+        [SerializeField] private string primaryScreenId = "main";
 
         [Header("Diagnostics UI")]
         [SerializeField] private Image connectionStatusDot;
@@ -29,22 +33,27 @@ namespace Blaze.Radar.Samples
         [SerializeField] private ScrollRect eventLogScrollRect;
 
         [Header("History Limits")]
-        [SerializeField, Min(20)] private int maxLogEntries = 160;
-        [SerializeField, Range(0.05f, 1f)] private float frameHistoryIntervalSeconds = 0.25f;
-        [SerializeField, Range(0.03f, 0.5f)] private float continuousEventIntervalSeconds = 0.12f;
+        [SerializeField, Min(1)] private int maxFrameLogLines = 200;
+        [FormerlySerializedAs("maxLogEntries")]
+        [SerializeField, Min(1)] private int maxEventSystemLogLines = 300;
 
-        private readonly Queue<string> _entries = new Queue<string>();
-        private readonly Dictionary<string, float> _nextContinuousEventTimes =
-            new Dictionary<string, float>();
-        private readonly StringBuilder _textBuilder = new StringBuilder(4096);
+        [FormerlySerializedAs("frameHistoryIntervalSeconds")]
+        [SerializeField, HideInInspector] private float legacyFrameHistoryIntervalSeconds = MoveLogIntervalSeconds;
 
-        private long _receivedFrameCount;
-        private int _lastPointerCount = -1;
-        private float _nextFrameHistoryTime;
+        private readonly Queue<string> _frameEntries = new Queue<string>();
+        private readonly Queue<string> _eventEntries = new Queue<string>();
+        private readonly Dictionary<string, float> _nextMoveLogTimes = new Dictionary<string, float>();
+        private readonly Dictionary<string, float> _nextContinuousEventTimes = new Dictionary<string, float>();
+        private readonly StringBuilder _textBuilder = new StringBuilder(8192);
+
+        private RadarScreenPointerFrame _latestPrimaryFrame;
+        private long _receivedPrimaryFrameCount;
+        private long _legacyCompatibilityFrameCount;
         private bool? _lastConnectedState;
         private bool _sessionStarted;
         private bool _isAutoScrolling;
         private int _ignoreScrollCallbacksThroughFrame = -1;
+        private float _nextEmptyFrameLogTime;
 
         public bool IsAutoScrolling =>
             _isAutoScrolling || Time.frameCount <= _ignoreScrollCallbacksThroughFrame;
@@ -54,28 +63,28 @@ namespace Blaze.Radar.Samples
             if (radarDispatcher == null)
             {
                 SetConnectionPresentation(false);
-                AppendLog("CONFIG", "RadarFrameDispatcher reference is missing.");
+                AppendEventLog("ERROR", "RadarFrameDispatcher reference is missing.");
+                RenderLivePanel();
                 return;
             }
 
             radarDispatcher.ConnectionChanged += OnConnectionChanged;
             radarDispatcher.ErrorReceived += OnRadarError;
-            radarDispatcher.PointerFrameReceived += OnPointerFrameReceived;
+            radarDispatcher.ScreenFrameReceived += OnScreenFrameReceived;
+            radarDispatcher.PointerFrameReceived += OnLegacyPointerFrameReceived;
 
             if (!_sessionStarted)
             {
                 _sessionStarted = true;
-                AppendLog(
+                AppendEventLog(
                     "SESSION",
                     $"SDK {UnitySdkVersion.Value} | Unity {Application.unityVersion} | "
-                    + $"screen {Screen.width}x{Screen.height}");
+                    + $"player {Screen.width}x{Screen.height}");
             }
 
             OnConnectionChanged(radarDispatcher.IsConnected);
-            if (latestFrameText != null)
-            {
-                latestFrameText.text = "Waiting for the first radar pointer frame...";
-            }
+            ShowInteractionStatus("Ready | use mouse debug or Bridge Simulation to drive native EventSystem targets");
+            RenderLivePanel();
         }
 
         private void OnDisable()
@@ -87,28 +96,32 @@ namespace Blaze.Radar.Samples
 
             radarDispatcher.ConnectionChanged -= OnConnectionChanged;
             radarDispatcher.ErrorReceived -= OnRadarError;
-            radarDispatcher.PointerFrameReceived -= OnPointerFrameReceived;
+            radarDispatcher.ScreenFrameReceived -= OnScreenFrameReceived;
+            radarDispatcher.PointerFrameReceived -= OnLegacyPointerFrameReceived;
         }
 
         private void OnValidate()
         {
-            maxLogEntries = Mathf.Max(20, maxLogEntries);
-            frameHistoryIntervalSeconds = Mathf.Max(0.05f, frameHistoryIntervalSeconds);
-            continuousEventIntervalSeconds = Mathf.Max(0.03f, continuousEventIntervalSeconds);
+            maxFrameLogLines = Mathf.Max(1, maxFrameLogLines);
+            maxEventSystemLogLines = Mathf.Max(1, maxEventSystemLogLines);
+            legacyFrameHistoryIntervalSeconds = MoveLogIntervalSeconds;
+            primaryScreenId = primaryScreenId == null ? string.Empty : primaryScreenId.Trim();
         }
 
         public void ClearLog()
         {
-            _entries.Clear();
+            _frameEntries.Clear();
+            _eventEntries.Clear();
+            _nextMoveLogTimes.Clear();
             _nextContinuousEventTimes.Clear();
-            AppendLog("SESSION", "History cleared. Live radar diagnostics remain active.");
+            AppendEventLog("SESSION", "History cleared. Live primary-screen diagnostics remain active.");
         }
 
         public void ShowInteractionStatus(string message)
         {
             if (interactionStatusText != null)
             {
-                interactionStatusText.text = message;
+                interactionStatusText.text = string.IsNullOrWhiteSpace(message) ? "Ready" : message;
             }
         }
 
@@ -145,7 +158,7 @@ namespace Blaze.Radar.Samples
                 return;
             }
 
-            AppendLog(
+            AppendEventLog(
                 "EVENT",
                 $"{source}.{eventName} | id {eventData.pointerId} | "
                 + $"pos ({eventData.position.x:0.0}, {eventData.position.y:0.0}) | "
@@ -164,7 +177,7 @@ namespace Blaze.Radar.Samples
                 return;
             }
 
-            AppendLog("UGUI", message);
+            AppendEventLog("UGUI", message);
         }
 
         private bool ShouldRecordContinuousEvent(string key)
@@ -175,36 +188,32 @@ namespace Blaze.Radar.Samples
                 return false;
             }
 
-            _nextContinuousEventTimes[key] = now + continuousEventIntervalSeconds;
+            _nextContinuousEventTimes[key] = now + MoveLogIntervalSeconds;
             return true;
         }
 
         private void OnConnectionChanged(bool connected)
         {
             SetConnectionPresentation(connected);
-            if (_lastConnectedState.HasValue && _lastConnectedState.Value == connected)
+            if (!_lastConnectedState.HasValue || _lastConnectedState.Value != connected)
             {
-                return;
+                _lastConnectedState = connected;
+                RadarPipeClient client = radarDispatcher != null ? radarDispatcher.Client : null;
+                string bridgeVersion = ValueOrUnknown(client != null ? client.BridgeVersion : null);
+                string deviceModel = ValueOrUnknown(client != null ? client.DeviceModel : null);
+                AppendEventLog(
+                    "IPC",
+                    connected
+                        ? $"CONNECTED | bridge {bridgeVersion} | device {deviceModel}"
+                        : "DISCONNECTED | reconnect loop remains active");
             }
 
-            _lastConnectedState = connected;
-            RadarPipeClient client = radarDispatcher != null ? radarDispatcher.Client : null;
-            string bridgeVersion = ValueOrUnknown(client != null ? client.BridgeVersion : null);
-            string deviceModel = ValueOrUnknown(client != null ? client.DeviceModel : null);
-            AppendLog(
-                "IPC",
-                connected
-                    ? $"CONNECTED | bridge {bridgeVersion} | device {deviceModel}"
-                    : "WAITING | bridge disconnected; reconnect loop remains active");
-            ShowInteractionStatus(
-                connected
-                    ? $"IPC connected | Bridge {bridgeVersion} | Device {deviceModel}"
-                    : "IPC waiting | reconnect loop active");
+            RenderLivePanel();
         }
 
         private void SetConnectionPresentation(bool connected)
         {
-            Color color = connected ? ConnectedColor : WaitingColor;
+            Color color = connected ? ConnectedColor : DisconnectedColor;
             if (connectionStatusDot != null)
             {
                 connectionStatusDot.color = color;
@@ -212,7 +221,7 @@ namespace Blaze.Radar.Samples
 
             if (connectionStatusText != null)
             {
-                connectionStatusText.text = connected ? "IPC  CONNECTED" : "IPC  WAITING";
+                connectionStatusText.text = connected ? "IPC  CONNECTED" : "IPC  DISCONNECTED";
                 connectionStatusText.color = color;
             }
         }
@@ -220,33 +229,47 @@ namespace Blaze.Radar.Samples
         private void OnRadarError(string message)
         {
             string safeMessage = string.IsNullOrWhiteSpace(message) ? "Unknown RadarBridge error." : message;
-            AppendLog("ERROR", safeMessage);
+            AppendEventLog("ERROR", safeMessage);
             ShowInteractionStatus("Radar error | " + safeMessage);
         }
 
-        private void OnPointerFrameReceived(RadarPointerFrameMessage frame)
+        private void OnScreenFrameReceived(RadarScreenPointerFrame frame)
+        {
+            if (!IsConfiguredPrimaryFrame(frame))
+            {
+                return;
+            }
+
+            _latestPrimaryFrame = frame;
+            _receivedPrimaryFrameCount++;
+            RenderLivePanel();
+            AppendFrameHistory(frame);
+        }
+
+        private void OnLegacyPointerFrameReceived(RadarPointerFrameMessage frame)
         {
             if (frame == null)
             {
                 return;
             }
 
-            _receivedFrameCount++;
-            int pointerCount = frame.pointers != null ? frame.pointers.Count : 0;
-            RenderLatestFrame(frame, pointerCount);
-
-            bool containsEdgePhase = ContainsEdgePhase(frame);
-            float now = Time.unscaledTime;
-            if (containsEdgePhase || pointerCount != _lastPointerCount || now >= _nextFrameHistoryTime)
-            {
-                AppendFrameHistory(frame, pointerCount);
-                _nextFrameHistoryTime = now + frameHistoryIntervalSeconds;
-            }
-
-            _lastPointerCount = pointerCount;
+            _legacyCompatibilityFrameCount++;
+            RenderLivePanel();
         }
 
-        private void RenderLatestFrame(RadarPointerFrameMessage frame, int pointerCount)
+        private bool IsConfiguredPrimaryFrame(RadarScreenPointerFrame frame)
+        {
+            if (frame == null || frame.screen == null || string.IsNullOrWhiteSpace(frame.screen.screenId))
+            {
+                return false;
+            }
+
+            return string.IsNullOrWhiteSpace(primaryScreenId)
+                ? frame.screen.isPrimary
+                : string.Equals(frame.screen.screenId, primaryScreenId, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private void RenderLivePanel()
         {
             if (latestFrameText == null)
             {
@@ -254,114 +277,168 @@ namespace Blaze.Radar.Samples
             }
 
             RadarPipeClient client = radarDispatcher != null ? radarDispatcher.Client : null;
-            long droppedFrames = client != null ? client.DroppedFrameCount : 0L;
-            _textBuilder.Clear();
-            _textBuilder.Append("RX ").Append(_receivedFrameCount)
-                .Append("  |  IPC SEQ ").Append(frame.sequence)
-                .Append("  |  POINTERS ").Append(pointerCount)
-                .Append("  |  DROPPED ").Append(droppedFrames).AppendLine();
-            _textBuilder.Append("FRAME ").Append(FormatClock(frame.timestampUnixMilliseconds))
-                .Append("  |  AGE ").Append(FormatAge(frame.timestampUnixMilliseconds))
-                .Append("  |  SCREEN ").Append(Screen.width).Append('x').Append(Screen.height);
+            bool connected = radarDispatcher != null && radarDispatcher.IsConnected;
+            long droppedBatches = client != null ? client.DroppedBatchCount : 0L;
+            RadarScreenPointerFrame frame = _latestPrimaryFrame;
 
-            if (pointerCount == 0)
+            _textBuilder.Clear();
+            _textBuilder.Append("IPC: ").Append(connected ? "CONNECTED" : "DISCONNECTED").AppendLine();
+
+            if (frame != null && frame.screen != null)
             {
-                _textBuilder.AppendLine().Append("No active radar pointers.");
+                int pointerCount = frame.pointers != null ? frame.pointers.Count : 0;
+                _textBuilder.Append("PRIMARY: ").Append(frame.screen.screenId)
+                    .Append(" · ").Append(ValueOrUnknown(frame.screen.name))
+                    .Append(" · ").Append(frame.screen.widthPixels).Append('×').Append(frame.screen.heightPixels)
+                    .AppendLine();
+                _textBuilder.Append("FRAME: ").Append(frame.sequence)
+                    .Append(" · age ").Append(FormatAge(frame.timestampUnixMilliseconds))
+                    .Append(" · pointers ").Append(pointerCount)
+                    .Append(" · dropped batches ").Append(droppedBatches)
+                    .AppendLine();
             }
             else
             {
-                for (int index = 0; index < pointerCount; index++)
+                _textBuilder.Append("PRIMARY: ").Append(ValueOrUnknown(primaryScreenId))
+                    .Append(" · waiting for screen metadata").AppendLine();
+                _textBuilder.Append("FRAME: waiting for the first primary-screen batch").AppendLine();
+            }
+
+            _textBuilder.Append("INPUT: ")
+                .Append(radarInputModule != null ? radarInputModule.InputMode.ToString() : "unknown")
+                .Append(" · received ").Append(_receivedPrimaryFrameCount)
+                .Append(" · compatibility primary frames ").Append(_legacyCompatibilityFrameCount);
+
+            if (frame != null && frame.pointers != null)
+            {
+                for (int index = 0; index < frame.pointers.Count; index++)
                 {
+                    RadarScreenPointer pointer = frame.pointers[index];
+                    if (pointer == null)
+                    {
+                        continue;
+                    }
+
                     _textBuilder.AppendLine();
-                    AppendPointerDetails(_textBuilder, frame.pointers[index]);
+                    AppendPointerDetails(_textBuilder, frame, pointer);
                 }
             }
 
             latestFrameText.text = _textBuilder.ToString();
         }
 
-        private void AppendFrameHistory(RadarPointerFrameMessage frame, int pointerCount)
+        private void AppendFrameHistory(RadarScreenPointerFrame frame)
         {
-            RadarPipeClient client = radarDispatcher != null ? radarDispatcher.Client : null;
-            long droppedFrames = client != null ? client.DroppedFrameCount : 0L;
-            _textBuilder.Clear();
-            _textBuilder.Append("seq ").Append(frame.sequence)
-                .Append(" | pointers ").Append(pointerCount)
-                .Append(" | dropped ").Append(droppedFrames)
-                .Append(" | age ").Append(FormatAge(frame.timestampUnixMilliseconds));
-
-            if (frame.pointers != null)
+            int pointerCount = frame.pointers != null ? frame.pointers.Count : 0;
+            float now = Time.unscaledTime;
+            if (pointerCount == 0)
             {
-                for (int index = 0; index < frame.pointers.Count; index++)
+                if (now >= _nextEmptyFrameLogTime)
                 {
-                    _textBuilder.AppendLine();
-                    AppendPointerDetails(_textBuilder, frame.pointers[index]);
+                    AppendFrameLog(
+                        $"[{frame.screen.screenId}] seq {frame.sequence} | no active pointers | age {FormatAge(frame.timestampUnixMilliseconds)}");
+                    _nextEmptyFrameLogTime = now + MoveLogIntervalSeconds;
                 }
-            }
 
-            AppendLog("FRAME", _textBuilder.ToString());
-        }
-
-        private static void AppendPointerDetails(StringBuilder builder, RadarPointerMessage pointer)
-        {
-            float pixelX = Mathf.Clamp01(pointer.normalizedX) * Screen.width;
-            float pixelY = Mathf.Clamp01(pointer.normalizedY) * Screen.height;
-            builder.Append("  P").Append(pointer.pointerId)
-                .Append(' ').Append(pointer.phase.ToString().ToUpperInvariant())
-                .Append(" | N(").Append(pointer.normalizedX.ToString("0.000", CultureInfo.InvariantCulture))
-                .Append(", ").Append(pointer.normalizedY.ToString("0.000", CultureInfo.InvariantCulture))
-                .Append(") | PX(").Append(pixelX.ToString("0.0", CultureInfo.InvariantCulture))
-                .Append(", ").Append(pixelY.ToString("0.0", CultureInfo.InvariantCulture))
-                .Append(") | conf ").Append(pointer.confidence.ToString("0.00", CultureInfo.InvariantCulture))
-                .Append(" | sample ").Append(FormatClock(pointer.timestampUnixMilliseconds));
-        }
-
-        private static bool ContainsEdgePhase(RadarPointerFrameMessage frame)
-        {
-            if (frame.pointers == null)
-            {
-                return false;
+                return;
             }
 
             for (int index = 0; index < frame.pointers.Count; index++)
             {
-                RadarPointerPhase phase = frame.pointers[index].phase;
-                if (phase == RadarPointerPhase.Down || phase == RadarPointerPhase.Up)
+                RadarScreenPointer pointer = frame.pointers[index];
+                if (pointer == null)
                 {
-                    return true;
+                    AppendEventLog("ERROR", $"Primary frame {frame.sequence} contains a null pointer at index {index}.");
+                    continue;
                 }
-            }
 
-            return false;
+                bool isEdge = pointer.phase == RadarPointerPhase.Down || pointer.phase == RadarPointerPhase.Up;
+                string moveKey = frame.screen.screenId + ":" + pointer.pointerId;
+                if (!isEdge && _nextMoveLogTimes.TryGetValue(moveKey, out float nextTime) && now < nextTime)
+                {
+                    continue;
+                }
+
+                if (!isEdge)
+                {
+                    _nextMoveLogTimes[moveKey] = now + MoveLogIntervalSeconds;
+                }
+                else if (pointer.phase == RadarPointerPhase.Up)
+                {
+                    _nextMoveLogTimes.Remove(moveKey);
+                }
+
+                _textBuilder.Clear();
+                _textBuilder.Append("seq ").Append(frame.sequence)
+                    .Append(" | age ").Append(FormatAge(frame.timestampUnixMilliseconds)).Append(" | ");
+                AppendPointerDetails(_textBuilder, frame, pointer);
+                AppendFrameLog(_textBuilder.ToString());
+            }
         }
 
-        private void AppendLog(string category, string message)
+        private static void AppendPointerDetails(
+            StringBuilder builder,
+            RadarScreenPointerFrame frame,
+            RadarScreenPointer pointer)
         {
-            string entry = $"{DateTime.Now:HH:mm:ss.fff} [{category}] {message}";
-            _entries.Enqueue(entry);
-            while (_entries.Count > maxLogEntries)
-            {
-                _entries.Dequeue();
-            }
+            builder.Append('[').Append(frame.screen.screenId).Append("/P").Append(pointer.pointerId).Append("] ")
+                .Append(pointer.phase)
+                .Append(" normalized=(").Append(pointer.normalizedX.ToString("0.000", CultureInfo.InvariantCulture))
+                .Append(", ").Append(pointer.normalizedY.ToString("0.000", CultureInfo.InvariantCulture)).Append(')')
+                .Append(" pixel=(").Append(pointer.pixelX.ToString("0.0", CultureInfo.InvariantCulture))
+                .Append(", ").Append(pointer.pixelY.ToString("0.0", CultureInfo.InvariantCulture)).Append(')')
+                .Append(" confidence=").Append(pointer.confidence.ToString("0.00", CultureInfo.InvariantCulture));
+        }
 
+        private void AppendFrameLog(string message)
+        {
+            AppendBounded(_frameEntries, maxFrameLogLines, $"{DateTime.Now:HH:mm:ss.fff} [FRAME] {message}");
+            RenderHistory();
+        }
+
+        private void AppendEventLog(string category, string message)
+        {
+            AppendBounded(
+                _eventEntries,
+                maxEventSystemLogLines,
+                $"{DateTime.Now:HH:mm:ss.fff} [{category}] {message}");
+            RenderHistory();
+        }
+
+        private static void AppendBounded(Queue<string> entries, int limit, string value)
+        {
+            entries.Enqueue(value);
+            while (entries.Count > Mathf.Max(1, limit))
+            {
+                entries.Dequeue();
+            }
+        }
+
+        private void RenderHistory()
+        {
             if (eventLogText == null)
             {
                 return;
             }
 
             _textBuilder.Clear();
-            foreach (string line in _entries)
-            {
-                if (_textBuilder.Length > 0)
-                {
-                    _textBuilder.AppendLine().AppendLine();
-                }
-
-                _textBuilder.Append(line);
-            }
-
+            _textBuilder.Append("FRAME HISTORY (").Append(_frameEntries.Count).Append(" / ")
+                .Append(maxFrameLogLines).AppendLine(")");
+            AppendEntries(_textBuilder, _frameEntries);
+            _textBuilder.AppendLine().AppendLine()
+                .Append("EVENTSYSTEM HISTORY (").Append(_eventEntries.Count).Append(" / ")
+                .Append(maxEventSystemLogLines).AppendLine(")");
+            AppendEntries(_textBuilder, _eventEntries);
             eventLogText.text = _textBuilder.ToString();
             ResizeAndScrollLog();
+        }
+
+        private static void AppendEntries(StringBuilder builder, IEnumerable<string> entries)
+        {
+            foreach (string entry in entries)
+            {
+                builder.AppendLine(entry);
+            }
         }
 
         private void ResizeAndScrollLog()
@@ -380,25 +457,6 @@ namespace Blaze.Radar.Samples
             _ignoreScrollCallbacksThroughFrame = Time.frameCount + 1;
             eventLogScrollRect.verticalNormalizedPosition = 0f;
             _isAutoScrolling = false;
-        }
-
-        private static string FormatClock(long unixMilliseconds)
-        {
-            if (unixMilliseconds <= 0)
-            {
-                return "n/a";
-            }
-
-            try
-            {
-                return DateTimeOffset.FromUnixTimeMilliseconds(unixMilliseconds)
-                    .ToLocalTime()
-                    .ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture);
-            }
-            catch (ArgumentOutOfRangeException)
-            {
-                return "invalid";
-            }
         }
 
         private static string FormatAge(long unixMilliseconds)
