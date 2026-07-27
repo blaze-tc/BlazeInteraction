@@ -398,6 +398,77 @@ namespace Blaze.Radar.Tests
             CollectionAssert.Contains(events, "physics2d.click");
         }
 
+        [Test]
+        public void BasicInteractionLogger_EnforcesHardHistoryCaps()
+        {
+            var logger = CreateBasicInteractionLogger(out var loggerType);
+            SetPrivateField(logger, loggerType, "maxFrameLogLines", 500);
+            SetPrivateField(logger, loggerType, "maxEventSystemLogLines", 500);
+
+            var appendFrame = RequirePrivateMethod(loggerType, "AppendFrameLog");
+            var appendEvent = RequirePrivateMethod(loggerType, "AppendEventLog");
+            for (var index = 0; index < 250; index++)
+            {
+                appendFrame.Invoke(logger, new object[] { "frame " + index });
+            }
+
+            for (var index = 0; index < 350; index++)
+            {
+                appendEvent.Invoke(logger, new object[] { "EVENT", "event " + index });
+            }
+
+            Assert.That(GetPrivateCollectionCount(logger, loggerType, "_frameEntries"), Is.EqualTo(200));
+            Assert.That(GetPrivateCollectionCount(logger, loggerType, "_eventEntries"), Is.EqualTo(300));
+        }
+
+        [UnityTest]
+        public IEnumerator BasicInteractionLogger_ThrottlesOnlyConsecutiveMoves()
+        {
+            var logger = CreateBasicInteractionLogger(out var loggerType);
+            var liveTextObject = new GameObject(
+                "LoggerLiveText",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Text));
+            _extraObjects.Add(liveTextObject);
+            var liveText = liveTextObject.GetComponent<Text>();
+            SetPrivateField(logger, loggerType, "latestFrameText", liveText);
+            var receiveFrame = RequirePrivateMethod(loggerType, "OnScreenFrameReceived");
+
+            InvokeLoggerFrame(receiveFrame, logger, 1, ScreenPointer(31, 0.1f, 0.1f, RadarPointerPhase.Move));
+            InvokeLoggerFrame(receiveFrame, logger, 2, ScreenPointer(31, 0.8f, 0.8f, RadarPointerPhase.Move));
+            Assert.That(GetPrivateCollectionCount(logger, loggerType, "_frameEntries"), Is.EqualTo(1));
+            Assert.That(
+                liveText.text,
+                Does.Contain("pixel=(1536.0, 864.0)"),
+                "The live position must refresh even while the second consecutive Move history line is throttled.");
+
+            InvokeLoggerFrame(receiveFrame, logger, 3, ScreenPointer(31, 0.2f, 0.2f, RadarPointerPhase.Hover));
+            InvokeLoggerFrame(receiveFrame, logger, 4, ScreenPointer(31, 0.3f, 0.3f, RadarPointerPhase.Hover));
+            InvokeLoggerFrame(receiveFrame, logger, 5, ScreenPointer(31, 0.4f, 0.4f, RadarPointerPhase.Move));
+            InvokeLoggerFrame(receiveFrame, logger, 6, ScreenPointer(31, 0.5f, 0.5f, RadarPointerPhase.Move));
+            InvokeLoggerFrame(receiveFrame, logger, 7, ScreenPointer(31, 0.5f, 0.5f, RadarPointerPhase.Down));
+            InvokeLoggerFrame(receiveFrame, logger, 8, ScreenPointer(31, 0.6f, 0.6f, RadarPointerPhase.Move));
+            InvokeLoggerFrame(receiveFrame, logger, 9, ScreenPointer(31, 0.6f, 0.6f, RadarPointerPhase.Up));
+            InvokeLoggerFrame(receiveFrame, logger, 10, ScreenPointer(31, 0.7f, 0.7f, RadarPointerPhase.Move));
+            InvokeLoggerFrame(receiveFrame, logger, 11, null);
+
+            Assert.That(GetPrivateCollectionCount(logger, loggerType, "_frameEntries"), Is.EqualTo(8));
+            Assert.That(GetPrivateCollectionCount(logger, loggerType, "_eventEntries"), Is.EqualTo(1));
+
+            InvokeLoggerEmptyFrame(receiveFrame, logger, 12);
+            InvokeLoggerEmptyFrame(receiveFrame, logger, 13);
+            Assert.That(GetPrivateCollectionCount(logger, loggerType, "_frameEntries"), Is.EqualTo(10));
+
+            InvokeLoggerFrame(receiveFrame, logger, 14, ScreenPointer(31, 0.9f, 0.9f, RadarPointerPhase.Move));
+            InvokeLoggerFrame(receiveFrame, logger, 15, ScreenPointer(31, 0.95f, 0.95f, RadarPointerPhase.Move));
+            Assert.That(GetPrivateCollectionCount(logger, loggerType, "_frameEntries"), Is.EqualTo(11));
+
+            yield return new WaitForSecondsRealtime(0.12f);
+            InvokeLoggerFrame(receiveFrame, logger, 16, ScreenPointer(31, 1f, 1f, RadarPointerPhase.Move));
+            Assert.That(GetPrivateCollectionCount(logger, loggerType, "_frameEntries"), Is.EqualTo(12));
+        }
+
         private Button CreateButton(string name, Vector2 normalizedPosition)
         {
             return CreateUiTarget(name, normalizedPosition, new Vector2(180f, 90f)).AddComponent<Button>();
@@ -625,6 +696,83 @@ namespace Blaze.Radar.Tests
             var field = target.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);
             Assert.That(field, Is.Not.Null, fieldName);
             field.SetValue(target, value);
+        }
+
+        private Component CreateBasicInteractionLogger(out Type loggerType)
+        {
+            loggerType = Type.GetType(
+                "Blaze.Radar.Samples.RadarDemoLogger, Blaze.Radar.Sample.BasicInteraction");
+            if (loggerType == null)
+            {
+                foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    loggerType = assembly.GetType("Blaze.Radar.Samples.RadarDemoLogger");
+                    if (loggerType != null)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            if (loggerType == null)
+            {
+                Assert.Ignore("Import the Basic Interaction sample to run its logger regression tests.");
+            }
+
+            Assert.That(loggerType.IsSubclassOf(typeof(MonoBehaviour)), Is.True);
+
+            var loggerObject = new GameObject("RadarDemoLogger Regression Fixture");
+            loggerObject.SetActive(false);
+            _extraObjects.Add(loggerObject);
+            return loggerObject.AddComponent(loggerType);
+        }
+
+        private static MethodInfo RequirePrivateMethod(Type type, string methodName)
+        {
+            var method = type.GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(method, Is.Not.Null, methodName);
+            return method;
+        }
+
+        private static void SetPrivateField(object target, Type type, string fieldName, object value)
+        {
+            var field = type.GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(field, Is.Not.Null, fieldName);
+            field.SetValue(target, value);
+        }
+
+        private static int GetPrivateCollectionCount(object target, Type type, string fieldName)
+        {
+            var field = type.GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(field, Is.Not.Null, fieldName);
+            var collection = field.GetValue(target);
+            Assert.That(collection, Is.Not.Null, fieldName);
+            var countProperty = collection.GetType().GetProperty("Count", BindingFlags.Instance | BindingFlags.Public);
+            Assert.That(countProperty, Is.Not.Null, fieldName + ".Count");
+            return (int)countProperty.GetValue(collection);
+        }
+
+        private static void InvokeLoggerFrame(
+            MethodInfo receiveFrame,
+            object logger,
+            long sequence,
+            RadarScreenPointer pointer)
+        {
+            var frame = ScreenFrame(
+                "main",
+                true,
+                pointer == null ? new RadarScreenPointer[] { null } : new[] { pointer });
+            frame.sequence = sequence;
+            frame.timestampUnixMilliseconds = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            receiveFrame.Invoke(logger, new object[] { frame });
+        }
+
+        private static void InvokeLoggerEmptyFrame(MethodInfo receiveFrame, object logger, long sequence)
+        {
+            var frame = ScreenFrame("main", true);
+            frame.sequence = sequence;
+            frame.timestampUnixMilliseconds = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            receiveFrame.Invoke(logger, new object[] { frame });
         }
 
         private readonly struct DispatcherFixture

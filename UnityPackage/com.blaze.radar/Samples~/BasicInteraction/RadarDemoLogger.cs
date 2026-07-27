@@ -15,6 +15,8 @@ namespace Blaze.Radar.Samples
     /// </summary>
     public sealed class RadarDemoLogger : MonoBehaviour
     {
+        private const int MaximumFrameLogLines = 200;
+        private const int MaximumEventSystemLogLines = 300;
         private const float MoveLogIntervalSeconds = 0.1f;
         private static readonly Color ConnectedColor = new Color32(82, 224, 179, 255);
         private static readonly Color DisconnectedColor = new Color32(247, 184, 89, 255);
@@ -33,9 +35,12 @@ namespace Blaze.Radar.Samples
         [SerializeField] private ScrollRect eventLogScrollRect;
 
         [Header("History Limits")]
-        [SerializeField, Min(1)] private int maxFrameLogLines = 200;
+        [SerializeField, Range(1, MaximumFrameLogLines)]
+        private int maxFrameLogLines = MaximumFrameLogLines;
+
         [FormerlySerializedAs("maxLogEntries")]
-        [SerializeField, Min(1)] private int maxEventSystemLogLines = 300;
+        [SerializeField, Range(1, MaximumEventSystemLogLines)]
+        private int maxEventSystemLogLines = MaximumEventSystemLogLines;
 
         [FormerlySerializedAs("frameHistoryIntervalSeconds")]
         [SerializeField, HideInInspector] private float legacyFrameHistoryIntervalSeconds = MoveLogIntervalSeconds;
@@ -43,6 +48,10 @@ namespace Blaze.Radar.Samples
         private readonly Queue<string> _frameEntries = new Queue<string>();
         private readonly Queue<string> _eventEntries = new Queue<string>();
         private readonly Dictionary<string, float> _nextMoveLogTimes = new Dictionary<string, float>();
+        private readonly Dictionary<string, RadarPointerPhase> _lastFramePhases =
+            new Dictionary<string, RadarPointerPhase>();
+        private readonly HashSet<string> _seenPointerKeys = new HashSet<string>();
+        private readonly List<string> _stalePointerKeys = new List<string>();
         private readonly Dictionary<string, float> _nextContinuousEventTimes = new Dictionary<string, float>();
         private readonly StringBuilder _textBuilder = new StringBuilder(8192);
 
@@ -53,10 +62,14 @@ namespace Blaze.Radar.Samples
         private bool _sessionStarted;
         private bool _isAutoScrolling;
         private int _ignoreScrollCallbacksThroughFrame = -1;
-        private float _nextEmptyFrameLogTime;
 
         public bool IsAutoScrolling =>
             _isAutoScrolling || Time.frameCount <= _ignoreScrollCallbacksThroughFrame;
+
+        private int FrameHistoryLimit => Mathf.Clamp(maxFrameLogLines, 1, MaximumFrameLogLines);
+
+        private int EventSystemHistoryLimit =>
+            Mathf.Clamp(maxEventSystemLogLines, 1, MaximumEventSystemLogLines);
 
         private void OnEnable()
         {
@@ -89,6 +102,8 @@ namespace Blaze.Radar.Samples
 
         private void OnDisable()
         {
+            _nextMoveLogTimes.Clear();
+            _lastFramePhases.Clear();
             if (radarDispatcher == null)
             {
                 return;
@@ -102,8 +117,11 @@ namespace Blaze.Radar.Samples
 
         private void OnValidate()
         {
-            maxFrameLogLines = Mathf.Max(1, maxFrameLogLines);
-            maxEventSystemLogLines = Mathf.Max(1, maxEventSystemLogLines);
+            maxFrameLogLines = Mathf.Clamp(maxFrameLogLines, 1, MaximumFrameLogLines);
+            maxEventSystemLogLines = Mathf.Clamp(
+                maxEventSystemLogLines,
+                1,
+                MaximumEventSystemLogLines);
             legacyFrameHistoryIntervalSeconds = MoveLogIntervalSeconds;
             primaryScreenId = primaryScreenId == null ? string.Empty : primaryScreenId.Trim();
         }
@@ -113,6 +131,7 @@ namespace Blaze.Radar.Samples
             _frameEntries.Clear();
             _eventEntries.Clear();
             _nextMoveLogTimes.Clear();
+            _lastFramePhases.Clear();
             _nextContinuousEventTimes.Clear();
             AppendEventLog("SESSION", "History cleared. Live primary-screen diagnostics remain active.");
         }
@@ -194,6 +213,12 @@ namespace Blaze.Radar.Samples
 
         private void OnConnectionChanged(bool connected)
         {
+            if (!connected)
+            {
+                _nextMoveLogTimes.Clear();
+                _lastFramePhases.Clear();
+            }
+
             SetConnectionPresentation(connected);
             if (!_lastConnectedState.HasValue || _lastConnectedState.Value != connected)
             {
@@ -331,15 +356,12 @@ namespace Blaze.Radar.Samples
         {
             int pointerCount = frame.pointers != null ? frame.pointers.Count : 0;
             float now = Time.unscaledTime;
+            _seenPointerKeys.Clear();
             if (pointerCount == 0)
             {
-                if (now >= _nextEmptyFrameLogTime)
-                {
-                    AppendFrameLog(
-                        $"[{frame.screen.screenId}] seq {frame.sequence} | no active pointers | age {FormatAge(frame.timestampUnixMilliseconds)}");
-                    _nextEmptyFrameLogTime = now + MoveLogIntervalSeconds;
-                }
-
+                RemoveMissingPointerStates(frame.screen.screenId);
+                AppendFrameLog(
+                    $"[{frame.screen.screenId}] seq {frame.sequence} | no active pointers | age {FormatAge(frame.timestampUnixMilliseconds)}");
                 return;
             }
 
@@ -352,20 +374,35 @@ namespace Blaze.Radar.Samples
                     continue;
                 }
 
-                bool isEdge = pointer.phase == RadarPointerPhase.Down || pointer.phase == RadarPointerPhase.Up;
                 string moveKey = frame.screen.screenId + ":" + pointer.pointerId;
-                if (!isEdge && _nextMoveLogTimes.TryGetValue(moveKey, out float nextTime) && now < nextTime)
+                _seenPointerKeys.Add(moveKey);
+                bool isMove = pointer.phase == RadarPointerPhase.Move;
+                bool isConsecutiveMove = isMove
+                    && _lastFramePhases.TryGetValue(moveKey, out RadarPointerPhase previousPhase)
+                    && previousPhase == RadarPointerPhase.Move;
+                if (isConsecutiveMove
+                    && _nextMoveLogTimes.TryGetValue(moveKey, out float nextTime)
+                    && now < nextTime)
                 {
                     continue;
                 }
 
-                if (!isEdge)
+                if (isMove)
                 {
                     _nextMoveLogTimes[moveKey] = now + MoveLogIntervalSeconds;
+                    _lastFramePhases[moveKey] = RadarPointerPhase.Move;
                 }
-                else if (pointer.phase == RadarPointerPhase.Up)
+                else
                 {
                     _nextMoveLogTimes.Remove(moveKey);
+                    if (pointer.phase == RadarPointerPhase.Up)
+                    {
+                        _lastFramePhases.Remove(moveKey);
+                    }
+                    else
+                    {
+                        _lastFramePhases[moveKey] = pointer.phase;
+                    }
                 }
 
                 _textBuilder.Clear();
@@ -373,6 +410,29 @@ namespace Blaze.Radar.Samples
                     .Append(" | age ").Append(FormatAge(frame.timestampUnixMilliseconds)).Append(" | ");
                 AppendPointerDetails(_textBuilder, frame, pointer);
                 AppendFrameLog(_textBuilder.ToString());
+            }
+
+            RemoveMissingPointerStates(frame.screen.screenId);
+        }
+
+        private void RemoveMissingPointerStates(string screenId)
+        {
+            string screenPrefix = screenId + ":";
+            _stalePointerKeys.Clear();
+            foreach (string pointerKey in _lastFramePhases.Keys)
+            {
+                if (pointerKey.StartsWith(screenPrefix, StringComparison.OrdinalIgnoreCase)
+                    && !_seenPointerKeys.Contains(pointerKey))
+                {
+                    _stalePointerKeys.Add(pointerKey);
+                }
+            }
+
+            for (int index = 0; index < _stalePointerKeys.Count; index++)
+            {
+                string pointerKey = _stalePointerKeys[index];
+                _lastFramePhases.Remove(pointerKey);
+                _nextMoveLogTimes.Remove(pointerKey);
             }
         }
 
@@ -392,7 +452,10 @@ namespace Blaze.Radar.Samples
 
         private void AppendFrameLog(string message)
         {
-            AppendBounded(_frameEntries, maxFrameLogLines, $"{DateTime.Now:HH:mm:ss.fff} [FRAME] {message}");
+            AppendBounded(
+                _frameEntries,
+                FrameHistoryLimit,
+                $"{DateTime.Now:HH:mm:ss.fff} [FRAME] {message}");
             RenderHistory();
         }
 
@@ -400,7 +463,7 @@ namespace Blaze.Radar.Samples
         {
             AppendBounded(
                 _eventEntries,
-                maxEventSystemLogLines,
+                EventSystemHistoryLimit,
                 $"{DateTime.Now:HH:mm:ss.fff} [{category}] {message}");
             RenderHistory();
         }
@@ -423,11 +486,11 @@ namespace Blaze.Radar.Samples
 
             _textBuilder.Clear();
             _textBuilder.Append("FRAME HISTORY (").Append(_frameEntries.Count).Append(" / ")
-                .Append(maxFrameLogLines).AppendLine(")");
+                .Append(FrameHistoryLimit).AppendLine(")");
             AppendEntries(_textBuilder, _frameEntries);
             _textBuilder.AppendLine().AppendLine()
                 .Append("EVENTSYSTEM HISTORY (").Append(_eventEntries.Count).Append(" / ")
-                .Append(maxEventSystemLogLines).AppendLine(")");
+                .Append(EventSystemHistoryLimit).AppendLine(")");
             AppendEntries(_textBuilder, _eventEntries);
             eventLogText.text = _textBuilder.ToString();
             ResizeAndScrollLog();
