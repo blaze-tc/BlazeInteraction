@@ -28,22 +28,62 @@ public sealed class MultiScreenRadarEndToEndTests
         var configuration = ThreeScreenFourSensorConfiguration(pipeName);
         var factory = new ControlledSensorPipelineFactory();
         await using var coordinator = CreateCoordinator(configuration, factory);
+        var snapshots = new ConcurrentQueue<RadarScreenRuntimeSnapshot>();
+        coordinator.ScreenSnapshotUpdated += snapshots.Enqueue;
         await coordinator.StartInfrastructureAsync();
         await using var client = await ConnectV2ClientAsync(pipeName, ThreeScreenHello());
+        await using var heartbeat = new PipeHeartbeat(client);
+        var reader = new OrderedBatchReader(client);
         await coordinator.ConnectAllAsync();
+        var deadline = DateTimeOffset.UtcNow.Add(AcceptanceTimeout);
 
-        factory.Publish("front", "f1", Detection("f1", 1900, 700));
-        factory.Publish("front", "f2", Detection("f2", 1940, 710));
+        factory.Publish("left", "l1", Detection("l1", 500, 600));
+        OrderedPointerBatch leftActive;
+        do
+        {
+            leftActive = await reader.ReadNextAsync(deadline);
+        }
+        while (!leftActive.Payload.Screens.Single(frame => frame.Screen.ScreenId == "left").Pointers.Any());
+        var preFailureSequence = leftActive.EnvelopeSequence;
+
         factory.Fail("left", "l1", new IOException("simulated disconnect"));
+        OrderedPointerBatch isolated;
+        do
+        {
+            isolated = await reader.ReadNextAsync(deadline);
+        }
+        while (isolated.Payload.Screens.Single(frame => frame.Screen.ScreenId == "left").Pointers.Count != 0);
 
-        var batch = await ReadNextBatchAsync(
-            client,
-            value => value.Screens.Single(frame => frame.Screen.ScreenId == "front").Pointers.Count > 0,
-            AcceptanceTimeout);
+        snapshots.Clear();
+        var freshTimestamp = DateTimeOffset.UtcNow;
+        factory.Publish("front", "f1", Detection("f1", 1900, 700, freshTimestamp));
+        factory.Publish("front", "f2", Detection("f2", 1940, 710, freshTimestamp));
+        factory.Publish("right", "r1", Detection("r1", 600, 500, freshTimestamp));
 
-        Assert.Equal(3, batch.Screens.Count);
-        Assert.Single(batch.Screens.Single(frame => frame.Screen.ScreenId == "front").Pointers);
-        Assert.Empty(batch.Screens.Single(frame => frame.Screen.ScreenId == "left").Pointers);
+        OrderedPointerBatch observed;
+        RadarScreenRuntimeSnapshot frontSnapshot;
+        do
+        {
+            observed = await reader.ReadNextAsync(deadline);
+            frontSnapshot = snapshots.SingleOrDefault(snapshot =>
+                snapshot.Screen.ScreenId == "front" &&
+                snapshot.Sequence == observed.EnvelopeSequence &&
+                snapshot.Targets.Any(target => target.SourceSensorCount == 2))!;
+        }
+        while (observed.EnvelopeSequence <= preFailureSequence ||
+               observed.EnvelopeSequence <= isolated.EnvelopeSequence ||
+               frontSnapshot is null ||
+               observed.Payload.Screens.Single(frame => frame.Screen.ScreenId == "left").Pointers.Count != 0 ||
+               Front(observed.Payload).Pointers.Count == 0 ||
+               observed.Payload.Screens.Single(frame => frame.Screen.ScreenId == "right").Pointers.Count == 0);
+
+        Assert.True(observed.EnvelopeSequence > preFailureSequence);
+        Assert.Equal(3, observed.Payload.Screens.Count);
+        var mergedTarget = Assert.Single(frontSnapshot.Targets);
+        Assert.Equal(2, mergedTarget.SourceSensorCount);
+        Assert.Single(Front(observed.Payload).Pointers);
+        Assert.Empty(observed.Payload.Screens.Single(frame => frame.Screen.ScreenId == "left").Pointers);
+        Assert.Single(observed.Payload.Screens.Single(frame => frame.Screen.ScreenId == "right").Pointers);
         Assert.Equal(RadarSensorRuntimeState.Running, factory.Get("right", "r1").State);
         Assert.Equal(RadarSensorRuntimeState.Faulted, factory.Get("left", "l1").State);
     }
@@ -53,18 +93,58 @@ public sealed class MultiScreenRadarEndToEndTests
     {
         var pipeName = "RadarControl.E2E." + Guid.NewGuid().ToString("N");
         var configuration = ThreeScreenFourSensorConfiguration(pipeName);
+        foreach (var screen in configuration.Screens)
+        {
+            screen.Fusion.OutputRateHz = 1;
+            screen.Fusion.SensorDataMaxAgeMilliseconds = 5000;
+        }
         var factory = new ControlledSensorPipelineFactory();
         await using var coordinator = CreateCoordinator(configuration, factory);
         await coordinator.StartInfrastructureAsync();
         await using var client = await ConnectV2ClientAsync(pipeName, ThreeScreenHello());
+        await using var heartbeat = new PipeHeartbeat(client);
+        var reader = new OrderedBatchReader(client);
         await coordinator.ConnectAllAsync();
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(15);
+
+        factory.Publish("front", "f1", Detection("f1", 800, 500));
+        RadarScreenPointer firstDown;
+        while (true)
+        {
+            var batch = (await reader.ReadNextAsync(deadline)).Payload;
+            firstDown = Front(batch).Pointers.SingleOrDefault(pointer => pointer.Phase == RadarPointerPhase.Down)!;
+            if (firstDown is not null) break;
+        }
+
+        factory.Publish("front", "f1", new SensorDetectionFrame("f1", DateTimeOffset.UtcNow, []));
+        while (true)
+        {
+            var batch = (await reader.ReadNextAsync(deadline)).Payload;
+            var firstUp = Front(batch).Pointers.SingleOrDefault(pointer => pointer.Phase == RadarPointerPhase.Up);
+            if (firstUp is null) continue;
+            Assert.Equal(firstDown.PointerId, firstUp.PointerId);
+            break;
+        }
 
         factory.Publish("front", "f1", Detection("f1", 1900, 700));
-        factory.Publish("front", "f2", Detection("f2", 1940, 710));
-        var downBatch = await ReadNextBatchAsync(client, HasFrontPhase(RadarPointerPhase.Down), AcceptanceTimeout);
-        var down = Assert.Single(Front(downBatch).Pointers);
-        var moveBatch = await ReadNextBatchAsync(client, HasFrontPhase(RadarPointerPhase.Move), AcceptanceTimeout);
-        Assert.Equal(down.PointerId, Assert.Single(Front(moveBatch).Pointers).PointerId);
+        RadarScreenPointer activeDown;
+        while (true)
+        {
+            var batch = (await reader.ReadNextAsync(deadline)).Payload;
+            activeDown = Front(batch).Pointers.SingleOrDefault(pointer => pointer.Phase == RadarPointerPhase.Down)!;
+            if (activeDown is not null) break;
+        }
+        Assert.NotEqual(firstDown.PointerId, activeDown.PointerId);
+
+        while (true)
+        {
+            var batch = (await reader.ReadNextAsync(deadline)).Payload;
+            var move = Front(batch).Pointers.SingleOrDefault(pointer => pointer.Phase == RadarPointerPhase.Move);
+            if (move is null) continue;
+            Assert.Equal(activeDown.PointerId, move.PointerId);
+            break;
+        }
+        var preChangeCheckpoint = reader.LastSequence;
 
         var front = configuration.Screens.Single(screen => screen.ScreenId == "front");
         front.WidthPixels = 3840;
@@ -73,38 +153,63 @@ public sealed class MultiScreenRadarEndToEndTests
         front.Sensors.Single(sensor => sensor.SensorId == "f2").OutputRectPixels = new Yuexin.Radar.Configuration.RadarPixelRect(1740, 0, 2100, 1440);
         await coordinator.ApplyConfigurationAsync();
 
-        var transitionBatches = new List<PointerBatchPayload>();
+        var transitionBatches = new List<OrderedPointerBatch>();
+        OrderedPointerBatch upBatch;
         while (true)
         {
-            var batch = await ReadNextBatchAsync(client, _ => true, AcceptanceTimeout);
+            var batch = await reader.ReadNextAsync(deadline);
             transitionBatches.Add(batch);
-            var frame = Front(batch);
-            var sawUp = transitionBatches.SelectMany(value => Front(value).Pointers).Any(pointer => pointer.Phase == RadarPointerPhase.Up);
-            if (sawUp && frame.Pointers.Count == 0 && frame.Screen.WidthPixels == 4096) break;
+            if (!Front(batch.Payload).Pointers.Any(pointer => pointer.Phase == RadarPointerPhase.Up)) continue;
+            upBatch = batch;
+            break;
         }
 
-        var frontPointers = transitionBatches.SelectMany(value => Front(value).Pointers).ToArray();
+        Assert.All(transitionBatches, batch => Assert.True(batch.EnvelopeSequence > preChangeCheckpoint));
+        var frontPointers = transitionBatches.SelectMany(value => Front(value.Payload).Pointers).ToArray();
         var up = Assert.Single(frontPointers.Where(pointer => pointer.Phase == RadarPointerPhase.Up));
-        Assert.Equal(down.PointerId, up.PointerId);
-        var upBatchIndex = transitionBatches.FindIndex(value => Front(value).Pointers.Any(pointer => pointer.Phase == RadarPointerPhase.Up));
-        Assert.True(upBatchIndex >= 0 && upBatchIndex + 1 < transitionBatches.Count);
-        Assert.Empty(Front(transitionBatches[upBatchIndex + 1]).Pointers);
+        Assert.Equal(activeDown.PointerId, up.PointerId);
+        Assert.Same(upBatch, transitionBatches[^1]);
 
-        var settled = await ReadNextBatchAsync(
-            client,
-            value => Front(value).Screen.WidthPixels == 3840,
-            AcceptanceTimeout);
-        Assert.Empty(Front(settled).Pointers);
+        var zeroBatch = await reader.ReadNextAsync(deadline);
+        Assert.True(zeroBatch.EnvelopeSequence > upBatch.EnvelopeSequence);
+        Assert.Empty(Front(zeroBatch.Payload).Pointers);
+        Assert.Equal(4096, Front(zeroBatch.Payload).Screen.WidthPixels);
+
+        var afterZeroBatches = new List<OrderedPointerBatch>();
+        OrderedPointerBatch settled;
+        while (true)
+        {
+            settled = await reader.ReadNextAsync(deadline);
+            afterZeroBatches.Add(settled);
+            Assert.Empty(Front(settled.Payload).Pointers);
+            if (Front(settled.Payload).Screen.WidthPixels == 3840) break;
+        }
         Assert.Equal(new Yuexin.Radar.Configuration.RadarPixelRect(0, 0, 2100, 1440), factory.Get("front", "f1").OutputRectPixels);
         Assert.Equal(new Yuexin.Radar.Configuration.RadarPixelRect(1740, 0, 2100, 1440), factory.Get("front", "f2").OutputRectPixels);
 
+        var preFreshCheckpoint = await reader.ReadNextAsync(deadline);
+        Assert.True(preFreshCheckpoint.EnvelopeSequence > settled.EnvelopeSequence);
+        Assert.Equal(3840, Front(preFreshCheckpoint.Payload).Screen.WidthPixels);
+        Assert.Empty(Front(preFreshCheckpoint.Payload).Pointers);
+
         factory.Publish("front", "f1", Detection("f1", 1800, 650));
         factory.Publish("front", "f2", Detection("f2", 1840, 660));
-        var fresh = await ReadNextBatchAsync(client, HasFrontPhase(RadarPointerPhase.Down), AcceptanceTimeout);
-        var freshPointer = Assert.Single(Front(fresh).Pointers);
+        var postPublishBatches = new List<OrderedPointerBatch>();
+        RadarScreenPointer freshPointer;
+        while (true)
+        {
+            var batch = await reader.ReadNextAsync(deadline);
+            postPublishBatches.Add(batch);
+            freshPointer = Front(batch.Payload).Pointers.SingleOrDefault(pointer => pointer.Phase == RadarPointerPhase.Down)!;
+            if (freshPointer is not null) break;
+            Assert.Empty(Front(batch.Payload).Pointers);
+        }
+
         Assert.Equal(RadarPointerPhase.Down, freshPointer.Phase);
+        Assert.NotEqual(activeDown.PointerId, freshPointer.PointerId);
+        Assert.True(postPublishBatches[0].EnvelopeSequence > preFreshCheckpoint.EnvelopeSequence);
         Assert.DoesNotContain(
-            transitionBatches.Skip(upBatchIndex + 1).SelectMany(value => Front(value).Pointers),
+            afterZeroBatches.SelectMany(value => Front(value.Payload).Pointers),
             pointer => pointer.Phase is RadarPointerPhase.Down or RadarPointerPhase.Move);
     }
 
@@ -241,26 +346,60 @@ public sealed class MultiScreenRadarEndToEndTests
         }
     }
 
-    private static async Task<PointerBatchPayload> ReadNextBatchAsync(
-        Stream stream,
-        Func<PointerBatchPayload, bool> predicate,
-        TimeSpan timeout)
+    private static RadarScreenPointerFrame Front(PointerBatchPayload batch) =>
+        batch.Screens.Single(frame => frame.Screen.ScreenId == "front");
+
+    private sealed record OrderedPointerBatch(long EnvelopeSequence, PointerBatchPayload Payload);
+
+    private sealed class PipeHeartbeat : IAsyncDisposable
     {
-        using var cancellation = new CancellationTokenSource(timeout);
-        while (true)
+        private readonly CancellationTokenSource _cancellation = new();
+        private readonly Task _task;
+
+        public PipeHeartbeat(Stream stream)
         {
-            var envelope = await IpcStream.ReadAsync(stream, cancellation.Token);
-            if (envelope.MessageType != IpcMessageType.PointerBatch) continue;
-            var batch = envelope.DeserializePayload<PointerBatchPayload>();
-            if (predicate(batch)) return batch;
+            _task = SendHeartbeatsAsync(stream, _cancellation.Token);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            _cancellation.Cancel();
+            await _task;
+            _cancellation.Dispose();
         }
     }
 
-    private static Func<PointerBatchPayload, bool> HasFrontPhase(RadarPointerPhase phase) =>
-        batch => Front(batch).Pointers.Any(pointer => pointer.Phase == phase);
+    private sealed class OrderedBatchReader(Stream stream)
+    {
+        private readonly List<OrderedPointerBatch> _history = [];
 
-    private static RadarScreenPointerFrame Front(PointerBatchPayload batch) =>
-        batch.Screens.Single(frame => frame.Screen.ScreenId == "front");
+        public long LastSequence { get; private set; }
+        public IReadOnlyList<OrderedPointerBatch> History => _history;
+
+        public async Task<OrderedPointerBatch> ReadNextAsync(TimeSpan timeout)
+        {
+            using var cancellation = new CancellationTokenSource(timeout);
+            while (true)
+            {
+                var envelope = await IpcStream.ReadAsync(stream, cancellation.Token);
+                if (envelope.MessageType != IpcMessageType.PointerBatch) continue;
+                Assert.True(envelope.Sequence > LastSequence, $"IPC envelope sequence {envelope.Sequence} did not follow {LastSequence}.");
+                var payload = envelope.DeserializePayload<PointerBatchPayload>();
+                Assert.Equal(envelope.Sequence, Assert.Single(payload.Screens.Select(frame => frame.Sequence).Distinct()));
+                var observed = new OrderedPointerBatch(envelope.Sequence, payload);
+                LastSequence = envelope.Sequence;
+                _history.Add(observed);
+                return observed;
+            }
+        }
+
+        public Task<OrderedPointerBatch> ReadNextAsync(DateTimeOffset deadline)
+        {
+            var remaining = deadline - DateTimeOffset.UtcNow;
+            Assert.True(remaining > TimeSpan.Zero, $"The absolute IPC read deadline {deadline:O} expired.");
+            return ReadNextAsync(remaining);
+        }
+    }
 
     private static HelloPayload ThreeScreenHello() => new(
         Environment.ProcessId,
@@ -368,10 +507,10 @@ public sealed class MultiScreenRadarEndToEndTests
                 if (envelope.MessageType != IpcMessageType.PointerBatch) continue;
                 var batch = envelope.DeserializePayload<PointerBatchPayload>();
                 Assert.Equal(3, batch.Screens.Count);
-                var sequence = Assert.Single(batch.Screens.Select(frame => frame.Sequence).Distinct());
-                Assert.True(sequence > observations.LastSequence, $"IPC sequence {sequence} did not follow {observations.LastSequence}.");
-                if (observations.BatchCount == 0) observations.FirstSequence = sequence;
-                observations.LastSequence = sequence;
+                Assert.All(batch.Screens, frame => Assert.Equal(envelope.Sequence, frame.Sequence));
+                Assert.True(envelope.Sequence > observations.LastSequence, $"IPC envelope sequence {envelope.Sequence} did not follow {observations.LastSequence}.");
+                if (observations.BatchCount == 0) observations.FirstSequence = envelope.Sequence;
+                observations.LastSequence = envelope.Sequence;
                 observations.BatchCount++;
 
                 var keys = new HashSet<(string ScreenId, int PointerId)>();
@@ -380,7 +519,7 @@ public sealed class MultiScreenRadarEndToEndTests
                     foreach (var pointer in frame.Pointers)
                     {
                         Assert.True(keys.Add((frame.Screen.ScreenId, pointer.PointerId)),
-                            $"Duplicate pointer key ({frame.Screen.ScreenId}, {pointer.PointerId}) in IPC sequence {sequence}.");
+                            $"Duplicate pointer key ({frame.Screen.ScreenId}, {pointer.PointerId}) in IPC sequence {envelope.Sequence}.");
                     }
                 }
             }

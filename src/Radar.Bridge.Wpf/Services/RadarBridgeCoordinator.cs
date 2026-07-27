@@ -20,12 +20,14 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
     private readonly SemaphoreSlim _topologyLock = new(1, 1);
     private readonly Dictionary<string, ScreenRuntime> _screens = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<(string ScreenId, int PointerId), DateTimeOffset> _lastPointerMoveLogAt = [];
     private readonly Queue<TransitionFrame> _transitionFrames = new();
     private TransitionFrame? _inFlightTransition;
     private readonly HashSet<Task> _retirementTasks = [];
     private ScreenRuntime[] _associatedSnapshot = [];
     private static readonly TimeSpan SendTimeout = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan PipelineCleanupTimeout = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan PointerMoveLogInterval = TimeSpan.FromMilliseconds(100);
     private RadarPipeServer? _pipeServer;
     private Task? _pipeTask;
     private Task? _schedulerTask;
@@ -649,9 +651,33 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     {
         var sequence = Volatile.Read(ref _batchSequence) + 1;
         PublishLog($"[{runtime.Info.ScreenId}/FUSION] groups={result.Targets.Count} pointers={result.Pointers.Count}");
+        foreach (var pointer in result.Pointers)
+        {
+            if (!ShouldPublishPointerLog(runtime.Info.ScreenId, pointer, timestamp)) continue;
+            PublishLog($"[{runtime.Info.ScreenId}/P{pointer.PointerId}] {pointer.Phase} normalized=({pointer.NormalizedX:0.####},{pointer.NormalizedY:0.####}) pixel=({pointer.PixelX:0.##},{pointer.PixelY:0.##})");
+        }
         InvokeSafely(ScreenSnapshotUpdated, new RadarScreenRuntimeSnapshot(runtime.Info,
             runtime.Pipelines.Values.Select(binding => binding.LastSnapshot).Where(snapshot => snapshot is not null).Cast<RadarSensorRuntimeSnapshot>().ToArray(),
             result.Targets, result.Pointers, sequence, timestamp));
+    }
+
+    private bool ShouldPublishPointerLog(string screenId, RadarScreenPointer pointer, DateTimeOffset timestamp)
+    {
+        var key = (screenId, pointer.PointerId);
+        if (pointer.Phase != RadarPointerPhase.Move)
+        {
+            _lastPointerMoveLogAt.Remove(key);
+            return true;
+        }
+
+        if (_lastPointerMoveLogAt.TryGetValue(key, out var lastPublishedAt) &&
+            timestamp - lastPublishedAt < PointerMoveLogInterval)
+        {
+            return false;
+        }
+
+        _lastPointerMoveLogAt[key] = timestamp;
+        return true;
     }
 
     private void RetireRuntime(ScreenRuntime runtime, DateTimeOffset timestamp, bool remove, ScreenRuntime? replaceWith)

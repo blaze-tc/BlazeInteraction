@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.IO.Pipes;
 using Yuexin.Radar.Bridge.Wpf.Services;
-using Yuexin.Radar.Bridge.Wpf.ViewModels;
 using Yuexin.Radar.Configuration;
 using Yuexin.Radar.Contracts;
 using Yuexin.Radar.Ipc;
@@ -60,32 +59,52 @@ public sealed class RuntimeLoggingTests
     }
 
     [Fact]
-    public async Task MoveLogs_AreLimitedToTenHertzPerScreenPointer_WithoutThrottlingOperationalEvents()
+    public async Task CoordinatorPointerLogs_LimitMoveToTenHertzPerKeyWithoutThrottlingLifecycleOrOperationalEvents()
     {
-        using var viewModel = new MainViewModel(Configuration("unused"), new SilentRuntime());
+        var configuration = Configuration("unused");
+        var factory = new LoggingPipelineFactory();
+        await using var coordinator = new RadarBridgeCoordinator(
+            configuration,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<RadarBridgeCoordinator>.Instance,
+            factory);
+        var logs = new ConcurrentQueue<string>();
+        coordinator.LogReceived += logs.Enqueue;
+        await coordinator.ApplyUnityTopologyAsync(new HelloPayload(
+            Environment.ProcessId,
+            "2021.3.45f1",
+            [new RadarScreenDefinitionPayload("front", "Front", 1920, 1080, true, 0)]));
+        await coordinator.ConnectAllAsync();
+        factory.Pipeline.EmitLog("[front/f1] connection pulse");
+        factory.Pipeline.EmitLog("[front/f1] connection pulse");
+        factory.Pipeline.EmitLog("[front/f1] error: simulated disconnect");
+        factory.Pipeline.EmitLog("[front/f1] error: simulated disconnect");
 
-        viewModel.ReceiveLogForTest("[front/f1] connection running");
-        viewModel.ReceiveLogForTest("[front/f1] error: simulated disconnect");
-        viewModel.ReceiveLogForTest("[front/P7] Down");
-        viewModel.ReceiveLogForTest("[front/P7] Move x=1");
-        viewModel.ReceiveLogForTest("[front/P7] Move x=2");
-        viewModel.ReceiveLogForTest("[front/P8] Move x=3");
-        viewModel.ReceiveLogForTest("[left/P7] Move x=4");
-        viewModel.ReceiveLogForTest("[front/P7] Up");
-        viewModel.ReceiveLogForTest("[front/FUSION] Configuration applied.");
+        var start = DateTimeOffset.UnixEpoch.AddSeconds(10);
+        factory.Pipeline.PublishDetection(Detection(start, 400, 300));
+        Assert.Equal(RadarPointerPhase.Down, Assert.Single(coordinator.TickForTest(start).Screens.Single().Pointers).Phase);
+        for (var index = 1; index <= 10; index++)
+        {
+            var timestamp = start.AddMilliseconds(index * 34);
+            factory.Pipeline.PublishDetection(Detection(timestamp, 400 + index, 300));
+            Assert.Equal(RadarPointerPhase.Move, Assert.Single(coordinator.TickForTest(timestamp).Screens.Single().Pointers).Phase);
+        }
 
-        Assert.Equal(1, viewModel.VisibleLogEntries.Count(entry => entry.StartsWith("[front/P7] Move", StringComparison.Ordinal)));
-        Assert.Contains("[front/f1] connection running", viewModel.VisibleLogEntries);
-        Assert.Contains("[front/f1] error: simulated disconnect", viewModel.VisibleLogEntries);
-        Assert.Contains("[front/P7] Down", viewModel.VisibleLogEntries);
-        Assert.Contains("[front/P7] Up", viewModel.VisibleLogEntries);
-        Assert.Contains("[front/FUSION] Configuration applied.", viewModel.VisibleLogEntries);
-        Assert.Contains("[front/P8] Move x=3", viewModel.VisibleLogEntries);
-        Assert.Contains("[left/P7] Move x=4", viewModel.VisibleLogEntries);
+        var firstUpAt = start.AddMilliseconds(400);
+        factory.Pipeline.PublishDetection(new SensorDetectionFrame("f1", firstUpAt, []));
+        Assert.Equal(RadarPointerPhase.Up, Assert.Single(coordinator.TickForTest(firstUpAt).Screens.Single().Pointers).Phase);
 
-        await Task.Delay(110);
-        viewModel.ReceiveLogForTest("[front/P7] Move x=5");
-        Assert.Equal(2, viewModel.VisibleLogEntries.Count(entry => entry.StartsWith("[front/P7] Move", StringComparison.Ordinal)));
+        var secondDownAt = start.AddMilliseconds(500);
+        factory.Pipeline.PublishDetection(Detection(secondDownAt, 700, 400));
+        Assert.Equal(RadarPointerPhase.Down, Assert.Single(coordinator.TickForTest(secondDownAt).Screens.Single().Pointers).Phase);
+        var secondUpAt = start.AddMilliseconds(550);
+        factory.Pipeline.PublishDetection(new SensorDetectionFrame("f1", secondUpAt, []));
+        Assert.Equal(RadarPointerPhase.Up, Assert.Single(coordinator.TickForTest(secondUpAt).Screens.Single().Pointers).Phase);
+
+        Assert.Equal(2, logs.Count(value => value.StartsWith("[front/P", StringComparison.Ordinal) && value.Contains(" Down ", StringComparison.Ordinal)));
+        Assert.Equal(4, logs.Count(value => value.StartsWith("[front/P1] Move ", StringComparison.Ordinal)));
+        Assert.Equal(2, logs.Count(value => value.StartsWith("[front/P", StringComparison.Ordinal) && value.Contains(" Up ", StringComparison.Ordinal)));
+        Assert.Equal(2, logs.Count(value => value == "[front/f1] connection pulse"));
+        Assert.Equal(2, logs.Count(value => value == "[front/f1] error: simulated disconnect"));
     }
 
     private static async Task<NamedPipeClientStream> ConnectAsync(string pipeName)
@@ -141,6 +160,7 @@ public sealed class RuntimeLoggingTests
                 HeightPixels = 1080,
                 Fusion = new RadarFusionConfiguration { OutputRateHz = 30, SensorDataMaxAgeMilliseconds = 250, FusionDistancePixels = 80 },
                 Tracking = new RadarScreenTrackingConfiguration { ConfirmFrames = 1, LostFrames = 1 },
+                Interaction = new RadarInteractionConfiguration { MinimumPressMilliseconds = 0 },
                 Sensors =
                 [
                     new RadarSensorConfiguration
@@ -177,6 +197,7 @@ public sealed class RuntimeLoggingTests
         public Task StopAsync() { State = RadarSensorRuntimeState.Stopped; StateChanged?.Invoke(State); return Task.CompletedTask; }
         public void PublishSnapshot(RadarSensorRuntimeSnapshot snapshot) => SnapshotUpdated?.Invoke(snapshot);
         public void PublishDetection(SensorDetectionFrame frame) => DetectionFrameUpdated?.Invoke(frame);
+        public void EmitLog(string message) => LogReceived?.Invoke(message);
         public Task StartRecordingAsync(string path, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task StopRecordingAsync() => Task.CompletedTask;
         public Task ReplayAsync(string path, double speed, bool loop, CancellationToken cancellationToken = default) => Task.CompletedTask;
@@ -187,32 +208,6 @@ public sealed class RuntimeLoggingTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class SilentRuntime : IRadarBridgeRuntime
-    {
-        public RadarAppConfiguration Configuration { get; } = Configuration("unused");
-        public UnityClientStatus UnityStatus => UnityClientStatus.Disconnected;
-        public event Action<RadarSensorRuntimeSnapshot>? SensorSnapshotUpdated { add { } remove { } }
-        public event Action<RadarScreenRuntimeSnapshot>? ScreenSnapshotUpdated { add { } remove { } }
-        public event Action<RadarSensorRuntimeStateChanged>? SensorStateChanged { add { } remove { } }
-        public event Action<string>? LogReceived { add { } remove { } }
-        public event Action<UnityClientStatus>? UnityStatusChanged { add { } remove { } }
-        public Task StartInfrastructureAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task ApplyUnityTopologyAsync(HelloPayload hello, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task ApplyConfigurationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task ConnectSensorAsync(string screenId, string sensorId, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task DisconnectSensorAsync(string screenId, string sensorId) => Task.CompletedTask;
-        public Task ConnectScreenAsync(string screenId, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task DisconnectScreenAsync(string screenId) => Task.CompletedTask;
-        public Task ConnectAllAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task DisconnectAllAsync() => Task.CompletedTask;
-        public Task StartAllSimulationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task StartRecordingAsync(string screenId, string sensorId, string path, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task StopRecordingAsync(string screenId, string sensorId) => Task.CompletedTask;
-        public Task ReplaySensorAsync(string screenId, string sensorId, string path, double speed, bool loop, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public void PauseReplay(string screenId, string sensorId) { }
-        public void ResumeReplay(string screenId, string sensorId) { }
-        public void StepReplay(string screenId, string sensorId) { }
-        public Task StopReplayAsync(string screenId, string sensorId) => Task.CompletedTask;
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
+    private static SensorDetectionFrame Detection(DateTimeOffset timestamp, float x, float y) =>
+        new("f1", timestamp, [new SensorDetection(1, x, y, 1)]);
 }
