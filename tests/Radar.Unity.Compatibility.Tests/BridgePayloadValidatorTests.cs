@@ -95,6 +95,54 @@ public sealed class BridgePayloadValidatorTests
     }
 
     [Fact]
+    public void FlattenedManagedPathsWithCaseOnlyBasenameCollision_AreRejected()
+    {
+        using var fixture = PayloadFixture.Create();
+        fixture.AddManagedPathCollision();
+        var error = Validate(fixture.Root);
+        Assert.Contains("collision", error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("lib/a/Foo.dll", error, StringComparison.Ordinal);
+        Assert.Contains("lib/b/foo.dll", error, StringComparison.Ordinal);
+        Assert.Contains("Foo.dll", error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RuntimeAndNativeAssetsWithSameBasename_AreRejected()
+    {
+        using var fixture = PayloadFixture.Create();
+        fixture.AddRuntimeNativeCollision();
+        var error = Validate(fixture.Root);
+        Assert.Contains("collision", error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("runtime", error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("native", error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("SectionCollision.dll", error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ResourceLocaleAndPathCaseCollision_IsRejected()
+    {
+        using var fixture = PayloadFixture.Create();
+        fixture.AddResourceCaseCollision();
+        var error = Validate(fixture.Root);
+        Assert.Contains("collision", error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("lib/net8.0/fr/LocaleCollision.resources.dll", error, StringComparison.Ordinal);
+        Assert.Contains("lib/net8.0/FR/localecollision.resources.dll", error, StringComparison.Ordinal);
+        Assert.Contains("fr", error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RuntimeTargetsMappedPathCollision_IsRejected()
+    {
+        using var fixture = PayloadFixture.Create();
+        fixture.AddRuntimeTargetsCollision();
+        var error = Validate(fixture.Root);
+        Assert.Contains("collision", error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("runtimes/win-x64/lib/net8.0/RidCollision.dll", error, StringComparison.Ordinal);
+        Assert.Contains("runtimes/win-x64/native/ridcollision.dll", error, StringComparison.Ordinal);
+        Assert.Contains("RidCollision.dll", error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void MismatchedRuntimeIdentifier_IsRejected()
     {
         using var fixture = PayloadFixture.Create();
@@ -244,6 +292,45 @@ public sealed class BridgePayloadValidatorTests
 
         public JsonObject ReadDeps() => JsonNode.Parse(File.ReadAllText(DepsPath))!.AsObject();
         public void WriteDeps(JsonObject deps) => File.WriteAllText(DepsPath, deps.ToJsonString());
+
+        public void AddManagedPathCollision()
+        {
+            var deps = ReadDeps();
+            var runtime = deps["targets"]![TargetName]!["App/1.2.0"]!["runtime"]!.AsObject();
+            runtime["lib/a/Foo.dll"] = new JsonObject();
+            runtime["lib/b/foo.dll"] = new JsonObject();
+            WriteDeps(deps);
+            File.WriteAllText(Path.Combine(Root, "Foo.dll"), "one flattened file");
+        }
+
+        public void AddRuntimeNativeCollision()
+        {
+            var deps = ReadDeps();
+            deps["targets"]![TargetName]!["App/1.2.0"]!["runtime"]!["lib/net8.0/SectionCollision.dll"] = new JsonObject();
+            deps["targets"]![TargetName]!["RuntimePack/1.0.0"]!["native"]!["native/SectionCollision.dll"] = new JsonObject();
+            WriteDeps(deps);
+            File.WriteAllText(Path.Combine(Root, "SectionCollision.dll"), "one flattened file");
+        }
+
+        public void AddResourceCaseCollision()
+        {
+            var deps = ReadDeps();
+            var resources = deps["targets"]![TargetName]!["ResourcePack/1.0.0"]!["resources"]!.AsObject();
+            resources["lib/net8.0/fr/LocaleCollision.resources.dll"] = new JsonObject { ["locale"] = "fr" };
+            resources["lib/net8.0/FR/localecollision.resources.dll"] = new JsonObject { ["locale"] = "FR" };
+            WriteDeps(deps);
+            File.WriteAllText(Path.Combine(Root, "fr", "LocaleCollision.resources.dll"), "one resource file");
+        }
+
+        public void AddRuntimeTargetsCollision()
+        {
+            var deps = ReadDeps();
+            var runtimeTargets = deps["targets"]![TargetName]!["RidPack/1.0.0"]!["runtimeTargets"]!.AsObject();
+            runtimeTargets["runtimes/win-x64/lib/net8.0/RidCollision.dll"] = RuntimeTarget("win-x64", "runtime");
+            runtimeTargets["runtimes/win-x64/native/ridcollision.dll"] = RuntimeTarget("win-x64", "native");
+            WriteDeps(deps);
+            File.WriteAllText(Path.Combine(Root, "RidCollision.dll"), "one flattened file");
+        }
 
         private static JsonObject Assets(params string[] paths)
         {

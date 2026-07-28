@@ -75,9 +75,26 @@ function Get-JsonPropertyValue {
         [Parameter(Mandatory)] [string]$Name
     )
     if ($null -eq $Object) { return $null }
+    if ($Object -is [System.Collections.IDictionary]) {
+        if (-not $Object.ContainsKey($Name)) { return $null }
+        return $Object[$Name]
+    }
     $property = $Object.PSObject.Properties[$Name]
     if ($null -eq $property) { return $null }
     return $property.Value
+}
+
+function Get-JsonObjectEntries {
+    param([Parameter(Mandatory)] [object]$Object)
+    if ($Object -is [System.Collections.IDictionary]) {
+        foreach ($key in $Object.Keys) {
+            [PSCustomObject]@{ Name = [string]$key; Value = $Object[$key] }
+        }
+        return
+    }
+    foreach ($property in $Object.PSObject.Properties) {
+        [PSCustomObject]@{ Name = $property.Name; Value = $property.Value }
+    }
 }
 
 function Assert-JsonObject {
@@ -85,7 +102,8 @@ function Assert-JsonObject {
         [AllowNull()] [object]$Value,
         [Parameter(Mandatory)] [string]$Description
     )
-    if ($null -eq $Value -or $Value -isnot [PSCustomObject]) {
+    if ($null -eq $Value -or
+        ($Value -isnot [PSCustomObject] -and $Value -isnot [System.Collections.IDictionary])) {
         throw "$Description must be an object."
     }
 }
@@ -94,7 +112,7 @@ function Get-PublishedAssetRelativePath {
     param(
         [Parameter(Mandatory)] [string]$AssetPath,
         [Parameter(Mandatory)] [string]$AssetType,
-        [Parameter(Mandatory)] [PSCustomObject]$Metadata
+        [Parameter(Mandatory)] [object]$Metadata
     )
 
     $fileName = [System.IO.Path]::GetFileName($AssetPath.Replace('/', '\'))
@@ -114,6 +132,20 @@ function Get-PublishedAssetRelativePath {
     return [System.IO.Path]::Combine($locale, $fileName)
 }
 
+function Add-RequiredDependencyAsset {
+    param(
+        [Parameter(Mandatory)] [System.Collections.Generic.Dictionary[string,string]]$RequiredAssets,
+        [Parameter(Mandatory)] [string]$RelativePath,
+        [Parameter(Mandatory)] [string]$Provenance
+    )
+    if ($RequiredAssets.ContainsKey($RelativePath)) {
+        $existingProvenance = $RequiredAssets[$RelativePath]
+        if ($existingProvenance -ceq $Provenance) { return }
+        throw "Dependency asset collision for mapped output '$RelativePath': $existingProvenance conflicts with $Provenance."
+    }
+    $RequiredAssets.Add($RelativePath, $Provenance)
+}
+
 function Assert-DependencyManifest {
     param(
         [Parameter(Mandatory)] [string]$Directory,
@@ -121,7 +153,13 @@ function Assert-DependencyManifest {
     )
 
     $depsPath = Join-Path $Directory 'RadarBridge.deps.json'
-    try { $deps = Get-Content -LiteralPath $depsPath -Raw -Encoding UTF8 | ConvertFrom-Json }
+    try {
+        Add-Type -AssemblyName System.Web.Extensions
+        $serializer = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+        $serializer.MaxJsonLength = [int]::MaxValue
+        $serializer.RecursionLimit = 256
+        $deps = $serializer.DeserializeObject((Get-Content -LiteralPath $depsPath -Raw -Encoding UTF8))
+    }
     catch { throw "RadarBridge.deps.json must contain valid JSON: $($_.Exception.Message)" }
     Assert-JsonObject -Value $deps -Description 'RadarBridge.deps.json root'
 
@@ -146,15 +184,16 @@ function Assert-DependencyManifest {
 
     $libraries = Get-JsonPropertyValue -Object $deps -Name 'libraries'
     Assert-JsonObject -Value $libraries -Description 'RadarBridge.deps.json libraries'
-    if (@($libraries.PSObject.Properties).Count -eq 0) { throw 'RadarBridge.deps.json is missing libraries.' }
+    if (@(Get-JsonObjectEntries -Object $libraries).Count -eq 0) { throw 'RadarBridge.deps.json is missing libraries.' }
 
-    $requiredAssets = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $requiredAssets = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::OrdinalIgnoreCase)
     $discoveredAssetCount = 0
-    foreach ($libraryProperty in $selectedTarget.PSObject.Properties) {
+    foreach ($libraryProperty in (Get-JsonObjectEntries -Object $selectedTarget)) {
         $library = $libraryProperty.Value
         Assert-JsonObject -Value $library -Description "RadarBridge.deps.json target library '$($libraryProperty.Name)'"
         $catalogLibrary = Get-JsonPropertyValue -Object $libraries -Name $libraryProperty.Name
-        if ($null -eq $catalogLibrary -or $catalogLibrary -isnot [PSCustomObject]) {
+        if ($null -eq $catalogLibrary -or
+            ($catalogLibrary -isnot [PSCustomObject] -and $catalogLibrary -isnot [System.Collections.IDictionary])) {
             throw "RadarBridge.deps.json target library '$($libraryProperty.Name)' is missing from libraries."
         }
 
@@ -162,10 +201,11 @@ function Assert-DependencyManifest {
             $section = Get-JsonPropertyValue -Object $library -Name $assetType
             if ($null -eq $section) { continue }
             Assert-JsonObject -Value $section -Description "RadarBridge.deps.json library '$($libraryProperty.Name)' $assetType assets"
-            foreach ($asset in $section.PSObject.Properties) {
+            foreach ($asset in (Get-JsonObjectEntries -Object $section)) {
                 Assert-JsonObject -Value $asset.Value -Description "$assetType asset '$($asset.Name)' metadata"
                 $relativePath = Get-PublishedAssetRelativePath -AssetPath $asset.Name -AssetType $assetType -Metadata $asset.Value
-                [void]$requiredAssets.Add($relativePath)
+                $provenance = "library '$($libraryProperty.Name)', section '$assetType', asset '$($asset.Name)'"
+                Add-RequiredDependencyAsset -RequiredAssets $requiredAssets -RelativePath $relativePath -Provenance $provenance
                 $discoveredAssetCount++
             }
         }
@@ -173,7 +213,7 @@ function Assert-DependencyManifest {
         $runtimeTargets = Get-JsonPropertyValue -Object $library -Name 'runtimeTargets'
         if ($null -ne $runtimeTargets) {
             Assert-JsonObject -Value $runtimeTargets -Description "RadarBridge.deps.json library '$($libraryProperty.Name)' runtimeTargets assets"
-            foreach ($asset in $runtimeTargets.PSObject.Properties) {
+            foreach ($asset in (Get-JsonObjectEntries -Object $runtimeTargets)) {
                 Assert-JsonObject -Value $asset.Value -Description "runtimeTargets asset '$($asset.Name)' metadata"
                 $rid = [string](Get-JsonPropertyValue -Object $asset.Value -Name 'rid')
                 $assetType = [string](Get-JsonPropertyValue -Object $asset.Value -Name 'assetType')
@@ -182,7 +222,8 @@ function Assert-DependencyManifest {
                 }
                 if ($rid -ine $ExpectedRuntimeIdentifier) { continue }
                 $relativePath = Get-PublishedAssetRelativePath -AssetPath $asset.Name -AssetType $assetType -Metadata $asset.Value
-                [void]$requiredAssets.Add($relativePath)
+                $provenance = "library '$($libraryProperty.Name)', section 'runtimeTargets', asset '$($asset.Name)', RID '$rid', assetType '$assetType'"
+                Add-RequiredDependencyAsset -RequiredAssets $requiredAssets -RelativePath $relativePath -Provenance $provenance
                 $discoveredAssetCount++
             }
         }
@@ -191,7 +232,7 @@ function Assert-DependencyManifest {
     if ($discoveredAssetCount -eq 0) {
         throw "RadarBridge.deps.json selected target '$targetName' contains no runtime, native, resources or runtimeTargets assets."
     }
-    foreach ($relativePath in $requiredAssets) {
+    foreach ($relativePath in $requiredAssets.Keys) {
         $path = Join-Path $Directory $relativePath
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
             throw "RadarBridge dependency asset is missing: $relativePath"

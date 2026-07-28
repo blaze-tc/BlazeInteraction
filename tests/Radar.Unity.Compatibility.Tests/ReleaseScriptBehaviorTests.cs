@@ -120,6 +120,32 @@ public sealed class ReleaseScriptBehaviorTests
         Assert.Contains("Does.Not.Exist.dll", result.Output, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("Managed", "lib/a/Foo.dll", "lib/b/foo.dll", "Foo.dll")]
+    [InlineData("RuntimeNative", "lib/net8.0/SectionCollision.dll", "native/SectionCollision.dll", "SectionCollision.dll")]
+    [InlineData("Resource", "lib/net8.0/fr/LocaleCollision.resources.dll", "lib/net8.0/FR/localecollision.resources.dll", "fr\\LocaleCollision.resources.dll")]
+    [InlineData("RuntimeTargets", "runtimes/win-x64/lib/net8.0/RidCollision.dll", "runtimes/win-x64/native/ridcollision.dll", "RidCollision.dll")]
+    public void PowerShellValidator_RejectsMappedAssetCollision(
+        string collisionKind,
+        string firstSource,
+        string secondSource,
+        string mappedPath)
+    {
+        using var fixture = ReleaseFixture.Create();
+        fixture.CreateValidPayload();
+        fixture.AddCollision(collisionKind);
+
+        var result = RunPowerShell(
+            "tests/Radar.Unity.Compatibility.Tests/InvokeReleaseFunctions.ps1",
+            "-Scenario", "PrepareOutput", "-FixtureRoot", fixture.Root);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("collision", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(firstSource, result.Output, StringComparison.Ordinal);
+        Assert.Contains(secondSource, result.Output, StringComparison.Ordinal);
+        Assert.Contains(mappedPath, result.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public void EmbeddedSmokeCommand_ExecutesTheCommittedPayload()
     {
@@ -304,6 +330,41 @@ public sealed class ReleaseScriptBehaviorTests
             var assets = new JsonObject();
             foreach (var path in paths) assets[path] = new JsonObject();
             return assets;
+        }
+
+        public void AddCollision(string collisionKind)
+        {
+            var depsPath = Path.Combine(Payload, "RadarBridge.deps.json");
+            var deps = JsonNode.Parse(File.ReadAllText(depsPath))!.AsObject();
+            switch (collisionKind)
+            {
+                case "Managed":
+                    var runtime = deps["targets"]![TargetName]!["App/1.2.0"]!["runtime"]!.AsObject();
+                    runtime["lib/a/Foo.dll"] = new JsonObject();
+                    runtime["lib/b/foo.dll"] = new JsonObject();
+                    File.WriteAllText(Path.Combine(Payload, "Foo.dll"), "one flattened file");
+                    break;
+                case "RuntimeNative":
+                    deps["targets"]![TargetName]!["App/1.2.0"]!["runtime"]!["lib/net8.0/SectionCollision.dll"] = new JsonObject();
+                    deps["targets"]![TargetName]!["RuntimePack/1.0.0"]!["native"]!["native/SectionCollision.dll"] = new JsonObject();
+                    File.WriteAllText(Path.Combine(Payload, "SectionCollision.dll"), "one flattened file");
+                    break;
+                case "Resource":
+                    var resources = deps["targets"]![TargetName]!["ResourcePack/1.0.0"]!["resources"]!.AsObject();
+                    resources["lib/net8.0/fr/LocaleCollision.resources.dll"] = new JsonObject { ["locale"] = "fr" };
+                    resources["lib/net8.0/FR/localecollision.resources.dll"] = new JsonObject { ["locale"] = "FR" };
+                    File.WriteAllText(Path.Combine(Payload, "fr", "LocaleCollision.resources.dll"), "one resource file");
+                    break;
+                case "RuntimeTargets":
+                    var runtimeTargets = deps["targets"]![TargetName]!["RidPack/1.0.0"]!["runtimeTargets"]!.AsObject();
+                    runtimeTargets["runtimes/win-x64/lib/net8.0/RidCollision.dll"] = RuntimeTarget("win-x64", "runtime");
+                    runtimeTargets["runtimes/win-x64/native/ridcollision.dll"] = RuntimeTarget("win-x64", "native");
+                    File.WriteAllText(Path.Combine(Payload, "RidCollision.dll"), "one flattened file");
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(collisionKind), collisionKind, null);
+            }
+            File.WriteAllText(depsPath, deps.ToJsonString());
         }
 
         private static JsonObject RuntimeTarget(string rid, string assetType) =>

@@ -82,7 +82,7 @@ namespace Blaze.Radar.Internal
             if (libraries == null || !libraries.Properties().Any())
                 return "RadarBridge.deps.json is missing libraries.";
 
-            var requiredAssets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var requiredAssets = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var discoveredAssetCount = 0;
             foreach (var libraryProperty in selectedTarget.Properties())
             {
@@ -95,13 +95,13 @@ namespace Blaze.Radar.Internal
                 foreach (var assetType in new[] { "runtime", "native", "resources" })
                 {
                     var sectionError = CollectAssetSection(
-                        library, assetType, requiredAssets, ref discoveredAssetCount);
+                        libraryProperty.Name, library, assetType, requiredAssets, ref discoveredAssetCount);
                     if (sectionError != null)
                         return $"RadarBridge.deps.json library '{libraryProperty.Name}' {sectionError}";
                 }
 
                 var runtimeTargetsError = CollectRuntimeTargets(
-                    library, requiredAssets, ref discoveredAssetCount);
+                    libraryProperty.Name, library, requiredAssets, ref discoveredAssetCount);
                 if (runtimeTargetsError != null)
                     return $"RadarBridge.deps.json library '{libraryProperty.Name}' {runtimeTargetsError}";
             }
@@ -109,7 +109,7 @@ namespace Blaze.Radar.Internal
             if (discoveredAssetCount == 0)
                 return $"RadarBridge.deps.json selected target '{targetName}' contains no runtime, native, resources or runtimeTargets assets.";
 
-            foreach (var relativePath in requiredAssets.OrderBy(value => value, StringComparer.OrdinalIgnoreCase))
+            foreach (var relativePath in requiredAssets.Keys.OrderBy(value => value, StringComparer.OrdinalIgnoreCase))
             {
                 if (!File.Exists(Path.Combine(directory, relativePath)))
                     return $"RadarBridge dependency asset is missing: {relativePath}";
@@ -119,9 +119,10 @@ namespace Blaze.Radar.Internal
         }
 
         private static string CollectAssetSection(
+            string libraryName,
             JObject library,
             string assetType,
-            ISet<string> requiredAssets,
+            IDictionary<string, string> requiredAssets,
             ref int discoveredAssetCount)
         {
             var token = library[assetType];
@@ -135,15 +136,18 @@ namespace Blaze.Radar.Internal
                     return $"{assetType} asset '{asset.Name}' metadata must be an object.";
                 var relativePath = MapPublishedAsset(asset.Name, assetType, metadata, out var mappingError);
                 if (mappingError != null) return mappingError;
-                requiredAssets.Add(relativePath);
+                var provenance = $"library '{libraryName}', section '{assetType}', asset '{asset.Name}'";
+                var collisionError = RegisterMappedAsset(requiredAssets, relativePath, provenance);
+                if (collisionError != null) return collisionError;
                 discoveredAssetCount++;
             }
             return null;
         }
 
         private static string CollectRuntimeTargets(
+            string libraryName,
             JObject library,
-            ISet<string> requiredAssets,
+            IDictionary<string, string> requiredAssets,
             ref int discoveredAssetCount)
         {
             var token = library["runtimeTargets"];
@@ -163,9 +167,28 @@ namespace Blaze.Radar.Internal
 
                 var relativePath = MapPublishedAsset(asset.Name, assetType, metadata, out var mappingError);
                 if (mappingError != null) return mappingError;
-                requiredAssets.Add(relativePath);
+                var provenance =
+                    $"library '{libraryName}', section 'runtimeTargets', asset '{asset.Name}', " +
+                    $"RID '{rid}', assetType '{assetType}'";
+                var collisionError = RegisterMappedAsset(requiredAssets, relativePath, provenance);
+                if (collisionError != null) return collisionError;
                 discoveredAssetCount++;
             }
+            return null;
+        }
+
+        private static string RegisterMappedAsset(
+            IDictionary<string, string> requiredAssets,
+            string relativePath,
+            string provenance)
+        {
+            if (requiredAssets.TryGetValue(relativePath, out var existingProvenance))
+            {
+                if (string.Equals(existingProvenance, provenance, StringComparison.Ordinal)) return null;
+                return $"dependency asset collision for mapped output '{relativePath}': " +
+                       $"{existingProvenance} conflicts with {provenance}.";
+            }
+            requiredAssets.Add(relativePath, provenance);
             return null;
         }
 
