@@ -63,7 +63,7 @@ public sealed class RadarRangeConfiguration
     public float VisualizationRangeMeters { get; set; } = 4f;
     public float MinimumAngleDegrees { get; set; }
     public float MaximumAngleDegrees { get; set; } = 360f;
-    public List<RadarPoint2> ActivePolygon { get; set; } = [];
+    public List<RadarPoint2> ActivePolygon { get; set; } = [new(-2.5f, 2.5f), new(2.5f, 2.5f), new(2.5f, -2.5f), new(-2.5f, -2.5f)];
     public List<List<RadarPoint2>> MaskedPolygons { get; set; } = [];
     public RadarEdgeDeadZoneConfiguration EdgeDeadZones { get; set; } = new();
 }

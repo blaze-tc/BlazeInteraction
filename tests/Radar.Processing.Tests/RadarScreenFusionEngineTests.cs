@@ -217,6 +217,33 @@ public sealed class RadarScreenFusionEngineTests
         Assert.Empty(engine.Tick(now.AddMilliseconds(16)).Pointers);
     }
 
+    [Theory]
+    [InlineData(RadarInteractionMode.Touch)]
+    [InlineData(RadarInteractionMode.HoverOnly)]
+    [InlineData(RadarInteractionMode.Dwell)]
+    [InlineData(RadarInteractionMode.EnterTrigger)]
+    public void RetiredTrackChurn_ReleasesAllPointerPositionState(RadarInteractionMode mode)
+    {
+        var engine = CreateEngine(confirmFrames: 1, lostFrames: 1, interactionMode: mode);
+        var timestamp = DateTimeOffset.UnixEpoch;
+
+        for (var index = 0; index < 500; index++)
+        {
+            timestamp = timestamp.AddMilliseconds(1);
+            engine.Publish(new SensorDetectionFrame(
+                "f1",
+                timestamp,
+                [new SensorDetection(index, 100 + index % 100, 100, 1f)]));
+            engine.Tick(timestamp);
+            Assert.InRange(PointerPositionCount(engine), 0, 1);
+
+            timestamp = timestamp.AddMilliseconds(1);
+            engine.Publish(new SensorDetectionFrame("f1", timestamp, []));
+            engine.Tick(timestamp);
+            Assert.Equal(0, PointerPositionCount(engine));
+        }
+    }
+
     [Fact]
     public void Reset_EmitsUpForPressedTouchPointersAndIsIdempotent()
     {
@@ -325,5 +352,14 @@ public sealed class RadarScreenFusionEngineTests
             MaximumClickMovementNormalized = maximumClickMovementNormalized,
             MinimumPressMilliseconds = 0
         };
+    }
+
+    private static int PointerPositionCount(RadarScreenFusionEngine engine)
+    {
+        var field = typeof(RadarScreenFusionEngine).GetField(
+            "_pointerPositions",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        return Assert.IsAssignableFrom<System.Collections.IDictionary>(field.GetValue(engine)).Count;
     }
 }

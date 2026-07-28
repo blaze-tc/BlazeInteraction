@@ -8,6 +8,9 @@ namespace Blaze.Radar
     [AddComponentMenu("Event/Radar Input Module")]
     public sealed class RadarInputModule : BaseInputModule
     {
+        private const int MaximumFramesPerProcess = 8;
+        private const int PendingScreenFrameCapacity = 64;
+
         [Header("Radar Source")]
         [SerializeField, Tooltip("Dispatcher that supplies normalized radar pointer frames.")]
         private RadarFrameDispatcher dispatcher;
@@ -21,8 +24,9 @@ namespace Blaze.Radar
         private readonly Dictionary<int, PointerEventData> _pointerData =
             new Dictionary<int, PointerEventData>();
         private readonly List<RaycastResult> _raycastResults = new List<RaycastResult>();
+        private readonly LinkedList<RadarScreenPointerFrame> _pendingScreenFrames =
+            new LinkedList<RadarScreenPointerFrame>();
         private RadarPointerFrameMessage _pendingFrame;
-        private RadarScreenPointerFrame _pendingScreenFrame;
         private bool _dispatcherConnected = true;
 
         public RadarFrameDispatcher Dispatcher
@@ -98,7 +102,7 @@ namespace Blaze.Radar
         public void CancelAllPointers()
         {
             _pendingFrame = null;
-            _pendingScreenFrame = null;
+            _pendingScreenFrames.Clear();
             var activePointers = new List<PointerEventData>(_pointerData.Values);
             _pointerData.Clear();
 
@@ -125,13 +129,16 @@ namespace Blaze.Radar
 
         public override void Process()
         {
-            if (_pendingScreenFrame != null)
+            var processedFrames = 0;
+            while (processedFrames < MaximumFramesPerProcess && _pendingScreenFrames.First != null)
             {
-                var frame = _pendingScreenFrame;
-                _pendingScreenFrame = null;
+                var frame = _pendingScreenFrames.First.Value;
+                _pendingScreenFrames.RemoveFirst();
                 ProcessScreenFrame(frame);
+                processedFrames++;
             }
-            else if (_pendingFrame != null)
+
+            if (processedFrames == 0 && _pendingFrame != null)
             {
                 var frame = _pendingFrame;
                 _pendingFrame = null;
@@ -146,7 +153,7 @@ namespace Blaze.Radar
 
         public void InjectFrame(RadarPointerFrameMessage frame)
         {
-            _pendingScreenFrame = null;
+            _pendingScreenFrames.Clear();
             _pendingFrame = frame;
         }
 
@@ -168,8 +175,69 @@ namespace Blaze.Radar
             }
 
             _pendingFrame = null;
-            _pendingScreenFrame = frame;
+            EnqueueScreenFrame(frame);
         }
+
+        private void EnqueueScreenFrame(RadarScreenPointerFrame frame)
+        {
+            var lifecycle = ContainsLifecycleEdge(frame);
+            if (!lifecycle && _pendingScreenFrames.Last != null &&
+                !ContainsLifecycleEdge(_pendingScreenFrames.Last.Value))
+            {
+                _pendingScreenFrames.Last.Value = frame;
+                return;
+            }
+
+            if (_pendingScreenFrames.Count >= PendingScreenFrameCapacity)
+            {
+                var visual = _pendingScreenFrames.First;
+                while (visual != null && ContainsLifecycleEdge(visual.Value))
+                {
+                    visual = visual.Next;
+                }
+
+                if (visual != null)
+                {
+                    _pendingScreenFrames.Remove(visual);
+                }
+                else if (!lifecycle)
+                {
+                    return;
+                }
+                else
+                {
+                    // Dispatcher callbacks run on Unity's main thread. Processing the oldest edge here
+                    // is the bounded fallback when EventSystem.Process has been stalled for many frames.
+                    var oldest = _pendingScreenFrames.First.Value;
+                    _pendingScreenFrames.RemoveFirst();
+                    ProcessScreenFrame(oldest);
+                }
+            }
+
+            _pendingScreenFrames.AddLast(frame);
+        }
+
+        private static bool ContainsLifecycleEdge(RadarScreenPointerFrame frame)
+        {
+            if (frame == null || frame.pointers == null)
+            {
+                return false;
+            }
+
+            for (var index = 0; index < frame.pointers.Count; index++)
+            {
+                var pointer = frame.pointers[index];
+                if (pointer != null &&
+                    (pointer.phase == RadarPointerPhase.Down || pointer.phase == RadarPointerPhase.Up))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        internal int PendingScreenFrameCount => _pendingScreenFrames.Count;
 
         private void ProcessRadarFrame(RadarPointerFrameMessage frame)
         {

@@ -10,6 +10,39 @@ namespace Radar.Unity.Compatibility.Tests;
 public sealed class RadarPipeClientTests
 {
     [Fact]
+    public async Task Client_UnityStallPreservesDownMoveUpAndFollowingZeroBatchInOrder()
+    {
+        var pipeName = PipeName();
+        using var timeout = Timeout();
+        await using var server = Server(pipeName);
+        using var client = Client(pipeName);
+        await ConnectAndAckAsync(server, client, timeout.Token);
+
+        await WriteFragmentedEnvelopesAsync(
+            server,
+            new[]
+            {
+                RadarIpcProtocol.Create(RadarIpcMessageType.PointerBatch, 10, Batch(Frame("main", 10, Pointer(7, 100, 100, .1f, .1f, 1010, RadarPointerPhase.Down)))),
+                RadarIpcProtocol.Create(RadarIpcMessageType.PointerBatch, 11, Batch(Frame("main", 11, Pointer(7, 200, 200, .2f, .2f, 1011, RadarPointerPhase.Move)))),
+                RadarIpcProtocol.Create(RadarIpcMessageType.PointerBatch, 12, Batch(Frame("main", 12, Pointer(7, 200, 200, .2f, .2f, 1012, RadarPointerPhase.Up)))),
+                RadarIpcProtocol.Create(RadarIpcMessageType.PointerBatch, 13, Batch(Frame("main", 13)))
+            },
+            timeout.Token,
+            fragment: false);
+        await Task.Delay(100, timeout.Token);
+
+        var received = new List<RadarPointerBatchPayload>();
+        while (client.TryConsumeLatestBatch(out var batch)) received.Add(batch);
+
+        Assert.Equal([10L, 11L, 12L, 13L], received.Select(batch => batch.screens.Single().sequence));
+        Assert.Equal(
+            [RadarPointerPhase.Down, RadarPointerPhase.Move, RadarPointerPhase.Up],
+            received.Take(3).Select(batch => batch.screens.Single().pointers.Single().phase));
+        Assert.Empty(received[3].screens.Single().pointers);
+        await client.StopAsync();
+    }
+
+    [Fact]
     public void Protocol_CreateUsesV2AndRejectsLegacyPointerFrame()
     {
         var hello = RadarIpcProtocol.Create(RadarIpcMessageType.Hello, 1, Hello("main"));
@@ -495,12 +528,13 @@ public sealed class RadarPipeClientTests
         float pixelY,
         float normalizedX,
         float normalizedY,
-        long timestamp)
+        long timestamp,
+        RadarPointerPhase phase = RadarPointerPhase.Move)
     {
         return new RadarScreenPointer
         {
             pointerId = pointerId,
-            phase = RadarPointerPhase.Move,
+            phase = phase,
             normalizedX = normalizedX,
             normalizedY = normalizedY,
             pixelX = pixelX,

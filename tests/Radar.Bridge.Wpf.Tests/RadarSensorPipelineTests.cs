@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Yuexin.Radar.Bridge.Wpf.Services;
+using Yuexin.Radar.Bridge.Wpf.ViewModels;
 using Yuexin.Radar.Configuration;
 using Yuexin.Radar.Contracts;
 using Yuexin.Radar.Device;
@@ -254,6 +255,116 @@ public sealed class RadarSensorPipelineTests
     }
 
     [Fact]
+    public async Task SlowRecordingWriter_UsesOneBoundedQueueAndStopDrainsEveryByteInOrder()
+    {
+        var (screen, sensor) = CreateConfiguration("main", "sensor-1", new ConfigurationPixelRect(0, 0, 1920, 1080));
+        sensor.SourceMode = RadarSensorSourceMode.Real;
+        var slowStream = new ControlledSlowStream();
+        var pipeline = new RadarSensorPipeline(screen, sensor, NullLogger<RadarSensorPipeline>.Instance, _ => slowStream);
+        var recordingPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".radarrec");
+        try
+        {
+            SetActiveRealSourceForRecording(pipeline);
+            await pipeline.StartRecordingAsync(recordingPath);
+            slowStream.BlockWrites();
+
+            var produce = Task.Run(() =>
+            {
+                for (var index = 0; index < RadarSensorPipeline.RecordingQueueCapacity + 8; index++)
+                {
+                    pipeline.EnqueueRecordingBytesForTests(new[] { checked((byte)index) });
+                }
+            });
+
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await WaitUntilAsync(
+                () => pipeline.PendingRecordingEntryCount == RadarSensorPipeline.RecordingQueueCapacity,
+                timeout.Token);
+            Assert.False(produce.IsCompleted);
+            Assert.Equal(1, pipeline.RecordingWriterTaskStartCount);
+            Assert.InRange(pipeline.PendingRecordingEntryCount, 0, RadarSensorPipeline.RecordingQueueCapacity);
+
+            slowStream.ReleaseWrites();
+            await produce.WaitAsync(timeout.Token);
+            await pipeline.StopRecordingAsync().WaitAsync(timeout.Token);
+
+            Assert.Equal(0, pipeline.PendingRecordingEntryCount);
+            Assert.Null(GetRecordingWriter(pipeline));
+            var entries = await ReadRawEntriesAsync(slowStream.ToArray(), timeout.Token);
+            Assert.Equal(
+                Enumerable.Range(0, RadarSensorPipeline.RecordingQueueCapacity + 8).Select(index => (byte)index),
+                entries.SelectMany(entry => entry.Payload));
+        }
+        finally
+        {
+            slowStream.ReleaseWrites();
+            await pipeline.DisposeAsync();
+            File.Delete(recordingPath);
+        }
+    }
+
+    [Theory]
+    [InlineData(0.1)]
+    [InlineData(4.0)]
+    [InlineData(4.25)]
+    [InlineData(8.0)]
+    public async Task Replay_AcceptsEveryFiniteSpeedInApprovedInclusiveRange(double speed)
+    {
+        await using var pipeline = CreatePipeline("main", "sensor-1", new ConfigurationPixelRect(0, 0, 1920, 1080));
+        var replayPath = await CreateRecordingAsync();
+        try
+        {
+            await pipeline.ReplayAsync(replayPath, speed, loop: false);
+            await pipeline.StopReplayAsync();
+        }
+        finally
+        {
+            File.Delete(replayPath);
+        }
+    }
+
+    [Theory]
+    [InlineData(0.099)]
+    [InlineData(8.001)]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    public async Task Replay_RejectsOutOfRangeOrNonFiniteSpeed(double speed)
+    {
+        await using var pipeline = CreatePipeline("main", "sensor-1", new ConfigurationPixelRect(0, 0, 1920, 1080));
+        var replayPath = await CreateRecordingAsync();
+        try
+        {
+            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+                pipeline.ReplayAsync(replayPath, speed, loop: false));
+        }
+        finally
+        {
+            File.Delete(replayPath);
+        }
+    }
+
+    [Theory]
+    [InlineData(0.1, true)]
+    [InlineData(4.0, true)]
+    [InlineData(4.25, true)]
+    [InlineData(8.0, true)]
+    [InlineData(0.099, false)]
+    [InlineData(8.001, false)]
+    [InlineData(double.NaN, false)]
+    [InlineData(double.PositiveInfinity, false)]
+    public void ReplaySpeedEditor_PreservesValueAndReportsApprovedRange(double speed, bool valid)
+    {
+        var (_, sensor) = CreateConfiguration("main", "sensor-1", new ConfigurationPixelRect(0, 0, 1920, 1080));
+        var viewModel = new SensorItemViewModel(sensor);
+
+        viewModel.ReplaySpeed = speed;
+
+        Assert.Equal(speed, viewModel.ReplaySpeed);
+        Assert.Equal(valid, string.IsNullOrEmpty(viewModel[nameof(SensorItemViewModel.ReplaySpeed)]));
+    }
+
+    [Fact]
     public async Task Lifecycle_IsIdempotentAndSnapshotsAreImmutable()
     {
         await using var pipeline = CreatePipeline("main", "sensor-1", new ConfigurationPixelRect(0, 0, 1920, 1080));
@@ -329,6 +440,25 @@ public sealed class RadarSensorPipelineTests
         return path;
     }
 
+    private static async Task<IReadOnlyList<RadarRecordingEntry>> ReadRawEntriesAsync(
+        byte[] bytes,
+        CancellationToken cancellationToken)
+    {
+        await using var stream = new MemoryStream(bytes, writable: false);
+        await using var reader = new RadarRecordingReader(stream, leaveOpen: true);
+        await reader.ReadHeaderAsync(cancellationToken);
+        var entries = new List<RadarRecordingEntry>();
+        await foreach (var entry in reader.ReadEntriesAsync(cancellationToken))
+        {
+            if (entry.EntryType == RadarRecordingEntryType.RawBytes)
+            {
+                entries.Add(entry);
+            }
+        }
+
+        return entries;
+    }
+
     private static void SetActiveRealSourceForRecording(RadarSensorPipeline pipeline)
     {
         typeof(RadarSensorPipeline).GetField("_activeSource", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
@@ -347,6 +477,55 @@ public sealed class RadarSensorPipelineTests
         while (!predicate())
         {
             await Task.Delay(10, cancellationToken);
+        }
+    }
+
+    private sealed class ControlledSlowStream : Stream
+    {
+        private readonly MemoryStream _inner = new();
+        private TaskCompletionSource _writeRelease = Released();
+
+        public void BlockWrites() => Volatile.Write(
+            ref _writeRelease,
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+
+        public void ReleaseWrites() => Volatile.Read(ref _writeRelease).TrySetResult();
+
+        public byte[] ToArray() => _inner.ToArray();
+
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => _inner.Length;
+        public override long Position { get => _inner.Position; set => throw new NotSupportedException(); }
+        public override void Flush() => _inner.Flush();
+        public override Task FlushAsync(CancellationToken cancellationToken) => _inner.FlushAsync(cancellationToken);
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) =>
+            WriteAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+
+        public override async ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            await Volatile.Read(ref _writeRelease).Task.WaitAsync(cancellationToken);
+            await _inner.WriteAsync(buffer, cancellationToken);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            // Keep the captured bytes readable after the pipeline closes its recording stream.
+        }
+
+        public override ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private static TaskCompletionSource Released()
+        {
+            var source = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            source.SetResult();
+            return source;
         }
     }
 }

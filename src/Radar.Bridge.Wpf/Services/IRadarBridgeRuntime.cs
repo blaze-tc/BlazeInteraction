@@ -37,6 +37,7 @@ public interface IRadarBridgeRuntime : IAsyncDisposable
     event Action<RadarSensorRuntimeSnapshot>? SensorSnapshotUpdated { add { } remove { } }
     event Action<RadarScreenRuntimeSnapshot>? ScreenSnapshotUpdated { add { } remove { } }
     event Action<RadarSensorRuntimeStateChanged>? SensorStateChanged { add { } remove { } }
+    event Action? ConfigurationChanged { add { } remove { } }
     event Action<string>? LogReceived;
     event Action<UnityClientStatus>? UnityStatusChanged;
 

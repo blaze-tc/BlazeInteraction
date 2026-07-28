@@ -7,6 +7,116 @@ namespace Yuexin.Radar.Ipc.Tests;
 public sealed class RadarPipeServerTests
 {
     [Fact]
+    public async Task Server_RejectsClaimedPidMismatchThenAcceptsLegitimateClient()
+    {
+        var pipeName = "RadarControl.Tests." + Guid.NewGuid().ToString("N");
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var authenticationCalls = 0;
+        await using var server = new RadarPipeServer(new RadarPipeServerOptions
+        {
+            PipeName = pipeName,
+            AuthenticateHelloAsync = (_, _, _) =>
+            {
+                Interlocked.Increment(ref authenticationCalls);
+                return Accept();
+            }
+        });
+        var runTask = server.RunAsync(cancellation.Token);
+
+        await using (var attacker = Client(pipeName))
+        {
+            await attacker.ConnectAsync(cancellation.Token);
+            await IpcStream.WriteAsync(attacker, IpcEnvelope.Create(
+                IpcMessageType.Hello,
+                1,
+                Hello(Environment.ProcessId + 1)), cancellation.Token);
+            var rejection = await IpcStream.ReadAsync(attacker, cancellation.Token);
+            Assert.Equal(IpcMessageType.Error, rejection.MessageType);
+            Assert.Equal("client_pid_mismatch", rejection.DeserializePayload<ErrorPayload>().Code);
+        }
+
+        await using var legitimate = Client(pipeName);
+        await legitimate.ConnectAsync(cancellation.Token);
+        await IpcStream.WriteAsync(legitimate, IpcEnvelope.Create(
+            IpcMessageType.Hello,
+            2,
+            Hello(Environment.ProcessId)), cancellation.Token);
+        Assert.Equal(IpcMessageType.HelloAck, (await IpcStream.ReadAsync(legitimate, cancellation.Token)).MessageType);
+        Assert.Equal(1, authenticationCalls);
+
+        cancellation.Cancel();
+        await runTask;
+    }
+
+    [Fact]
+    public async Task Server_RejectsRealClientThatDoesNotMatchExpectedParentPid()
+    {
+        var pipeName = "RadarControl.Tests." + Guid.NewGuid().ToString("N");
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var authenticationCalls = 0;
+        await using var server = new RadarPipeServer(new RadarPipeServerOptions
+        {
+            PipeName = pipeName,
+            ExpectedClientProcessId = Environment.ProcessId + 1,
+            AuthenticateHelloAsync = (_, _, _) =>
+            {
+                Interlocked.Increment(ref authenticationCalls);
+                return Accept();
+            }
+        });
+        var runTask = server.RunAsync(cancellation.Token);
+
+        await using var client = Client(pipeName);
+        await client.ConnectAsync(cancellation.Token);
+        await IpcStream.WriteAsync(client, IpcEnvelope.Create(
+            IpcMessageType.Hello,
+            1,
+            Hello(Environment.ProcessId)), cancellation.Token);
+        var rejection = await IpcStream.ReadAsync(client, cancellation.Token);
+
+        Assert.Equal(IpcMessageType.Error, rejection.MessageType);
+        Assert.Equal("unexpected_client_process", rejection.DeserializePayload<ErrorPayload>().Code);
+        Assert.Equal(0, authenticationCalls);
+        cancellation.Cancel();
+        await runTask;
+    }
+
+    [Fact]
+    public async Task Server_PassesVerifiedCurrentUserProcessAndSessionContextToAuthentication()
+    {
+        var pipeName = "RadarControl.Tests." + Guid.NewGuid().ToString("N");
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        PipeClientAuthenticationContext? observed = null;
+        await using var server = new RadarPipeServer(new RadarPipeServerOptions
+        {
+            PipeName = pipeName,
+            ExpectedClientProcessId = Environment.ProcessId,
+            AuthenticateHelloAsync = (_, context, _) =>
+            {
+                observed = context;
+                return Accept();
+            }
+        });
+        var runTask = server.RunAsync(cancellation.Token);
+
+        await using var client = Client(pipeName);
+        await client.ConnectAsync(cancellation.Token);
+        await IpcStream.WriteAsync(client, IpcEnvelope.Create(
+            IpcMessageType.Hello,
+            1,
+            Hello(Environment.ProcessId)), cancellation.Token);
+        Assert.Equal(IpcMessageType.HelloAck, (await IpcStream.ReadAsync(client, cancellation.Token)).MessageType);
+
+        Assert.NotNull(observed);
+        Assert.Equal(Environment.ProcessId, observed.ClientProcessId);
+        Assert.Equal(Environment.ProcessId, observed.ExpectedClientProcessId);
+        Assert.Equal(System.Diagnostics.Process.GetCurrentProcess().SessionId, observed.ClientSessionId);
+        Assert.True(observed.CurrentUserOnlyEnforced);
+        cancellation.Cancel();
+        await runTask;
+    }
+
+    [Fact]
     public async Task Server_DisposeWhileWaiting_StopsRunAndRejectsRestart()
     {
         var pipeName = "RadarControl.Tests." + Guid.NewGuid().ToString("N");
@@ -113,7 +223,7 @@ public sealed class RadarPipeServerTests
         {
             PipeName = pipeName,
             HeartbeatTimeout = TimeSpan.FromSeconds(2),
-            AuthenticateHelloAsync = (_, _) => ValueTask.FromResult(HelloAuthenticationResult.Accept(new HelloAckPayload(
+            AuthenticateHelloAsync = (_, _, _) => ValueTask.FromResult(HelloAuthenticationResult.Accept(new HelloAckPayload(
                 "1.0.0",
                 IpcProtocolVersion.Current,
                 true,
@@ -158,7 +268,7 @@ public sealed class RadarPipeServerTests
         {
             PipeName = pipeName,
             HeartbeatTimeout = TimeSpan.FromSeconds(2),
-            AuthenticateHelloAsync = (_, _) => ValueTask.FromResult(HelloAuthenticationResult.Accept(new HelloAckPayload(
+            AuthenticateHelloAsync = (_, _, _) => ValueTask.FromResult(HelloAuthenticationResult.Accept(new HelloAckPayload(
                 "1.2.0",
                 IpcProtocolVersion.Current,
                 false,
@@ -217,7 +327,7 @@ public sealed class RadarPipeServerTests
         await using var server = new RadarPipeServer(new RadarPipeServerOptions
         {
             PipeName = pipeName,
-            AuthenticateHelloAsync = (_, _) =>
+            AuthenticateHelloAsync = (_, _, _) =>
             {
                 Interlocked.Increment(ref authenticationCalls);
                 return ValueTask.FromResult(HelloAuthenticationResult.Accept(new HelloAckPayload(
@@ -311,12 +421,22 @@ public sealed class RadarPipeServerTests
         await runTask;
     }
 
-    private static HelloPayload Hello() => new(
-        42,
+    private static NamedPipeClientStream Client(string pipeName) =>
+        new(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+
+    private static HelloPayload Hello(int? processId = null) => new(
+        processId ?? Environment.ProcessId,
         "2021.3",
         [new RadarScreenDefinitionPayload("main", "Main", 1920, 1080, true, 0)]);
 
-    private static ValueTask<HelloAuthenticationResult> AcceptHelloAsync(HelloPayload _, CancellationToken __) =>
+    private static ValueTask<HelloAuthenticationResult> Accept() =>
+        ValueTask.FromResult(HelloAuthenticationResult.Accept(new HelloAckPayload(
+            "1.2.0", IpcProtocolVersion.Current, false, "multi-screen", [])));
+
+    private static ValueTask<HelloAuthenticationResult> AcceptHelloAsync(
+        HelloPayload _,
+        PipeClientAuthenticationContext __,
+        CancellationToken ___) =>
         ValueTask.FromResult(HelloAuthenticationResult.Accept(new HelloAckPayload(
             "1.2.0", IpcProtocolVersion.Current, false, "multi-screen", [])));
 

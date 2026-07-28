@@ -61,6 +61,28 @@ namespace Blaze.Radar.Tests
         }
 
         [Test]
+        public void UnityStall_DrainsLifecycleAndLatestVisualBatchInOrderWithinOneBoundedTick()
+        {
+            using (var fixture = Fixture(Screen("front", true, true, 0)))
+            {
+                var frames = new List<RadarScreenPointerFrame>();
+                fixture.Dispatcher.ScreenFrameReceived += frames.Add;
+                fixture.Client.Publish(Batch(Frame("front", 1, Pointer(7, RadarPointerPhase.Down))));
+                fixture.Client.Publish(Batch(Frame("front", 2, Pointer(7, RadarPointerPhase.Move))));
+                fixture.Client.Publish(Batch(Frame("front", 3, Pointer(7, RadarPointerPhase.Up))));
+                fixture.Client.Publish(Batch(Frame("front", 4)));
+
+                fixture.Dispatcher.TickForTests();
+
+                CollectionAssert.AreEqual(new long[] { 1, 2, 3, 4 }, frames.ConvertAll(frame => frame.sequence));
+                CollectionAssert.AreEqual(
+                    new[] { RadarPointerPhase.Down, RadarPointerPhase.Move, RadarPointerPhase.Up },
+                    frames.GetRange(0, 3).ConvertAll(frame => frame.pointers[0].phase));
+                Assert.That(frames[3].pointers, Is.Empty);
+            }
+        }
+
+        [Test]
         public void Batch_OnlyPrimaryScreenRaisesLegacyEventAndSetsLatestFrame()
         {
             using (var fixture = Fixture(Screen("left", true, false, 0), Screen("front", true, true, 1)))
@@ -223,12 +245,12 @@ namespace Blaze.Radar.Tests
             };
         }
 
-        private static RadarScreenPointer Pointer(int id)
+        private static RadarScreenPointer Pointer(int id, RadarPointerPhase phase = RadarPointerPhase.Move)
         {
             return new RadarScreenPointer
             {
                 pointerId = id,
-                phase = RadarPointerPhase.Move,
+                phase = phase,
                 normalizedX = 0.25f,
                 normalizedY = 0.75f,
                 pixelX = 480,
@@ -280,8 +302,7 @@ namespace Blaze.Radar.Tests
 
         private sealed class FakeRadarPipeClient : IRadarPipeClient
         {
-            private readonly LatestValueBuffer<RadarPointerBatchPayload> batches =
-                new LatestValueBuffer<RadarPointerBatchPayload>();
+            private readonly LifecycleBatchBuffer batches = new LifecycleBatchBuffer();
 
             public bool IsConnected { get; private set; }
             public long DroppedBatchCount { get { return batches.DroppedCount; } }

@@ -71,11 +71,7 @@ public static partial class ConfigurationValidator
         if (screen.Interaction is null) errors.Add($"{path}.interaction is required.");
         else ValidateInteraction(screen.Interaction, path, errors);
 
-        if (screen.Sensors is null || screen.Sensors.Count == 0)
-        {
-            errors.Add($"{path}.sensors must contain at least one radar sensor.");
-            return;
-        }
+        screen.Sensors ??= [];
 
         var sensorIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         for (var sensorIndex = 0; sensorIndex < screen.Sensors.Count; sensorIndex++)
@@ -181,6 +177,13 @@ public static partial class ConfigurationValidator
                 errors.Add($"{path}.calibration requires four physical corners and a 3x3 homography matrix.");
             if (calibration.DeviceModel != device.DeviceModel) warnings.Add($"{path}.calibration was created for another radar model; review or recalibrate before use.");
         }
+
+        if (sensor.Enabled)
+        {
+            var mappingCorners = calibration.IsValid ? calibration.PhysicalCorners : range.ActivePolygon;
+            if (!IsStrictConvexQuadrilateral(mappingCorners))
+                errors.Add($"{path} must have a valid four-corner active polygon or calibration before it can be enabled.");
+        }
     }
 
     private static void ValidatePoints(IEnumerable<RadarPoint2> points, string path, ICollection<string> errors)
@@ -194,6 +197,23 @@ public static partial class ConfigurationValidator
     }
 
     private static string ScreenPath(RadarScreenConfiguration screen) => $"screens[{screen.ScreenId ?? "<missing>"}]";
+    private static bool IsStrictConvexQuadrilateral(IReadOnlyList<RadarPoint2> corners)
+    {
+        if (corners.Count != 4 || corners.Any(point => !float.IsFinite(point.X) || !float.IsFinite(point.Y))) return false;
+        float? sign = null;
+        for (var index = 0; index < corners.Count; index++)
+        {
+            var a = corners[index];
+            var b = corners[(index + 1) % corners.Count];
+            var c = corners[(index + 2) % corners.Count];
+            var cross = (b.X - a.X) * (c.Y - b.Y) - (b.Y - a.Y) * (c.X - b.X);
+            if (MathF.Abs(cross) < 1e-6f) return false;
+            var currentSign = MathF.Sign(cross);
+            if (sign.HasValue && currentSign != sign.Value) return false;
+            sign = currentSign;
+        }
+        return true;
+    }
     private static bool IsFinitePositive(float value) => float.IsFinite(value) && value > 0f;
     private static bool IsFiniteNonNegative(float value) => float.IsFinite(value) && value >= 0f;
 }

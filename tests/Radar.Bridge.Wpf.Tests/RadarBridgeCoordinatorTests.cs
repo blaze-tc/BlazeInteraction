@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using System.IO.Pipes;
 using Yuexin.Radar.Bridge.Wpf;
 using Yuexin.Radar.Bridge.Wpf.Services;
+using Yuexin.Radar.Bridge.Wpf.ViewModels;
 using Yuexin.Radar.Configuration;
 using Yuexin.Radar.Contracts;
 using Yuexin.Radar.Ipc;
@@ -186,6 +187,149 @@ public sealed class RadarBridgeCoordinatorTests
         Assert.Equal(["front"], configuration.Screens.Select(screen => screen.ScreenId));
         Assert.True(factory.AllDisposed);
         Assert.Empty(coordinator.TickForTest(DateTimeOffset.UnixEpoch.AddSeconds(1)).Screens);
+    }
+
+    [Fact]
+    public async Task Coordinator_HelloPersistsNewZeroSensorScreenAndAcknowledgesStableTopology()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "RadarControl.ZeroSensors." + Guid.NewGuid().ToString("N") + ".json");
+        var configuration = new RadarAppConfiguration
+        {
+            Screens =
+            [
+                new RadarScreenConfiguration
+                {
+                    ScreenId = "front",
+                    UnityDisplayName = "Configured Front",
+                    ResolutionMode = RadarResolutionMode.Override,
+                    WidthPixels = 3000,
+                    HeightPixels = 1200,
+                    Sensors = [Sensor("f1")]
+                }
+            ]
+        };
+        configuration.Ipc.PipeName = "RadarControl.Tests." + Guid.NewGuid().ToString("N");
+        await RadarConfigurationStore.SaveAsync(path, configuration);
+
+        try
+        {
+            await using var coordinator = new RadarBridgeCoordinator(
+                configuration,
+                NullLogger<RadarBridgeCoordinator>.Instance,
+                new FakePipelineFactory(),
+                configurationPath: path);
+            using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            await coordinator.StartInfrastructureAsync(cancellation.Token);
+            await using var client = new NamedPipeClientStream(".", configuration.Ipc.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            await client.ConnectAsync(cancellation.Token);
+            await IpcStream.WriteAsync(client, IpcEnvelope.Create(IpcMessageType.Hello, 1, Hello(
+                Screen("left", "Left", false, 1920, 1440, 0),
+                Screen("front", "Unity Front", true, 4096, 1536, 1))), cancellation.Token);
+
+            var response = await IpcStream.ReadAsync(client, cancellation.Token);
+
+            Assert.Equal(IpcMessageType.HelloAck, response.MessageType);
+            var acknowledgement = response.DeserializePayload<HelloAckPayload>();
+            Assert.Equal(["left", "front"], acknowledgement.Screens.Select(screen => screen.ScreenId));
+            var persisted = await RadarConfigurationStore.LoadAsync(path, cancellation.Token);
+            Assert.True(persisted.CanPersist);
+            Assert.Equal(["left", "front"], persisted.Screens.OrderBy(screen => screen.UnityOrder).Select(screen => screen.ScreenId));
+            var front = persisted.Screens.Single(screen => screen.ScreenId == "front");
+            Assert.True(front.IsPrimary);
+            Assert.Equal(1, front.UnityOrder);
+            Assert.Equal(3000, front.EffectiveWidthPixels);
+            Assert.Equal(1200, front.EffectiveHeightPixels);
+            Assert.Equal("f1", Assert.Single(front.Sensors).SensorId);
+            var left = persisted.Screens.Single(screen => screen.ScreenId == "left");
+            Assert.False(left.IsPrimary);
+            Assert.Equal(0, left.UnityOrder);
+            Assert.Empty(left.Sensors);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task ViewModelCreatedBeforeHelloRefreshesOnUiThreadPreservesSelectionAndAppliesCurrentObjects()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "RadarControl.ViewModelRefresh." + Guid.NewGuid().ToString("N") + ".json");
+        var sensor = Sensor("f1");
+        sensor.Enabled = false;
+        var configuration = new RadarAppConfiguration
+        {
+            Screens = [new RadarScreenConfiguration { ScreenId = "front", UnityDisplayName = "Front", Sensors = [sensor] }]
+        };
+        await RadarConfigurationStore.SaveAsync(path, configuration);
+
+        try
+        {
+            await using var coordinator = new RadarBridgeCoordinator(
+                configuration,
+                NullLogger<RadarBridgeCoordinator>.Instance,
+                new FakePipelineFactory(),
+                configurationPath: path);
+            using var ui = new DedicatedSynchronizationContext();
+            var viewModel = ui.Invoke(() => new MainViewModel(configuration, coordinator));
+            try
+            {
+                ui.Invoke(() =>
+                {
+                    viewModel.SelectedScreen = viewModel.Screens.Single(screen => screen.ScreenId == "front");
+                    viewModel.SelectedSensor = viewModel.SelectedScreen.Sensors.Single(sensorItem => sensorItem.SensorId == "f1");
+                });
+                var collectionChangedThreadId = 0;
+                ui.Invoke(() => viewModel.Screens.CollectionChanged += (_, _) => collectionChangedThreadId = Environment.CurrentManagedThreadId);
+
+                await coordinator.ApplyUnityTopologyAsync(Hello(
+                    Screen("left", "Left", false, 1920, 1440, 0),
+                    Screen("front", "Front", true, 4096, 1536, 1)));
+                await ui.DrainAsync();
+
+                ui.Invoke(() =>
+                {
+                    Assert.Equal(2, viewModel.Screens.Count);
+                    Assert.Equal("front", viewModel.SelectedScreen?.ScreenId);
+                    Assert.Equal("f1", viewModel.SelectedSensor?.SensorId);
+                });
+                Assert.Equal(ui.ThreadId, collectionChangedThreadId);
+
+                ui.Invoke(() =>
+                {
+                    var left = viewModel.Screens.Single(screen => screen.ScreenId == "left");
+                    viewModel.SelectedScreen = left;
+                    left.ResolutionMode = RadarResolutionMode.Override;
+                    left.WidthPixels = 1800;
+                    left.HeightPixels = 1000;
+                    viewModel.SaveConfigurationCommand.Execute(null);
+                });
+
+                using var saveTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                await WaitUntilAsync(
+                    () => ui.Invoke(() => viewModel.SaveConfigurationCommand.CanExecute(null)),
+                    saveTimeout.Token);
+                await ui.DrainAsync();
+
+                var persisted = await RadarConfigurationStore.LoadAsync(path);
+                var persistedLeft = persisted.Screens.Single(screen => screen.ScreenId == "left");
+                Assert.Equal(RadarResolutionMode.Override, persistedLeft.ResolutionMode);
+                Assert.Equal(1800, persistedLeft.WidthPixels);
+                Assert.Equal(1000, persistedLeft.HeightPixels);
+                var currentLeft = configuration.Screens.Single(screen => screen.ScreenId == "left");
+                Assert.Equal(RadarResolutionMode.Override, currentLeft.ResolutionMode);
+                Assert.Equal(1800, currentLeft.WidthPixels);
+                Assert.Equal(1000, currentLeft.HeightPixels);
+            }
+            finally
+            {
+                ui.Invoke(viewModel.Dispose);
+            }
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
     }
 
     [Fact]
@@ -548,6 +692,11 @@ public sealed class RadarBridgeCoordinatorTests
         while (!predicate()) await Task.Delay(10, cancellationToken);
     }
 
+    private static async Task WaitUntilAsync(Func<Task<bool>> predicate, CancellationToken cancellationToken)
+    {
+        while (!await predicate()) await Task.Delay(10, cancellationToken);
+    }
+
     private static RadarAppConfiguration ThreeScreenFourSensorConfiguration() => new()
     {
         Screens =
@@ -584,7 +733,7 @@ public sealed class RadarBridgeCoordinatorTests
     private static RadarScreenDefinitionPayload Screen(string id, string name, bool primary, int width, int height, int order) =>
         new(id, name, width, height, primary, order);
 
-    private static HelloPayload Hello(params RadarScreenDefinitionPayload[] screens) => new(42, "2021.3", screens);
+    private static HelloPayload Hello(params RadarScreenDefinitionPayload[] screens) => new(Environment.ProcessId, "2021.3", screens);
 
     private static SensorDetectionFrame Detection(string sensorId, float x, float y) =>
         new(sensorId, DateTimeOffset.UnixEpoch.AddMilliseconds(950), [new SensorDetection(1, x, y, 1f)]);
@@ -612,6 +761,59 @@ public sealed class RadarBridgeCoordinatorTests
             _pipelines[(screen.ScreenId, sensor.SensorId)] = pipeline;
             _instances.Add(pipeline);
             return pipeline;
+        }
+    }
+
+    private sealed class DedicatedSynchronizationContext : SynchronizationContext, IDisposable
+    {
+        private readonly System.Collections.Concurrent.BlockingCollection<(SendOrPostCallback Callback, object? State)> _work = [];
+        private readonly Thread _thread;
+        private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public DedicatedSynchronizationContext()
+        {
+            _thread = new Thread(Run) { IsBackground = true, Name = "RadarControl test UI" };
+            _thread.Start();
+            _started.Task.GetAwaiter().GetResult();
+        }
+
+        public int ThreadId { get; private set; }
+
+        public override void Post(SendOrPostCallback d, object? state) => _work.Add((d, state));
+
+        public T Invoke<T>(Func<T> action)
+        {
+            var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+            Post(_ =>
+            {
+                try { completion.SetResult(action()); }
+                catch (Exception exception) { completion.SetException(exception); }
+            }, null);
+            return completion.Task.GetAwaiter().GetResult();
+        }
+
+        public void Invoke(Action action) => Invoke(() => { action(); return true; });
+
+        public Task DrainAsync()
+        {
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Post(_ => completion.SetResult(), null);
+            return completion.Task;
+        }
+
+        public void Dispose()
+        {
+            _work.CompleteAdding();
+            _thread.Join(TimeSpan.FromSeconds(2));
+            _work.Dispose();
+        }
+
+        private void Run()
+        {
+            ThreadId = Environment.CurrentManagedThreadId;
+            SetSynchronizationContext(this);
+            _started.SetResult();
+            foreach (var item in _work.GetConsumingEnumerable()) item.Callback(item.State);
         }
     }
 

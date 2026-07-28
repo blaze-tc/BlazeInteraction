@@ -83,7 +83,7 @@ public sealed class RadarVisualizationLayoutTests
             "ConfirmFrames", "LostFrames", "MaximumAssociationDistancePixels", "SmoothingAlpha", "DwellMilliseconds",
             "Port", "MinimumDistanceMeters", "MaximumDistanceMeters", "VisualizationRangeMeters", "RotationDegrees",
             "BaseGapMeters", "DistanceScale", "MinimumClusterPointCount", "MaximumClusterWidthMeters",
-            "OutputX", "OutputY", "OutputWidth", "OutputHeight"
+            "OutputX", "OutputY", "OutputWidth", "OutputHeight", "ReplaySpeed"
         })
         {
             var binding = xaml.Split('\n').First(line => line.Contains("<TextBox", StringComparison.Ordinal) && (line.Contains($"SelectedScreen.{property}", StringComparison.Ordinal) || line.Contains($"SelectedSensor.{property}", StringComparison.Ordinal)));

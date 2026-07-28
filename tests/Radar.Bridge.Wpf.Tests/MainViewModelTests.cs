@@ -23,12 +23,15 @@ public sealed class MainViewModelTests
 
         viewModel.SelectedScreen = viewModel.Screens.Single(screen => screen.ScreenId == "front");
         viewModel.SelectedSensor!.SourceMode = RadarSensorSourceMode.Replay;
+        viewModel.SelectedSensor.ReplaySpeed = 4.25d;
+        viewModel.SelectedSensor.ReplayLoop = true;
         Assert.True(viewModel.SelectReplayFileCommand.CanExecute(null));
         viewModel.SelectReplayFileCommand.Execute(null);
         await Task.Delay(25);
 
         Assert.Equal(1, dialogs.ReplayDialogCount);
         Assert.Equal(1, runtime.ReplayCallCount);
+        Assert.Equal(("sample.radarrec", 4.25d, true), runtime.LastReplay);
     }
     [Fact]
     public async Task ConnectSensorCommand_TargetsCurrentScreenAndSensor()
@@ -71,6 +74,76 @@ public sealed class MainViewModelTests
     }
 
     [Fact]
+    public async Task AssociatedScreen_AddsNewSensorDisabledByDefault()
+    {
+        var configuration = new RadarAppConfiguration { Screens = [Screen("front", true, "f1")] };
+        configuration.Screens[0].IsPrimary = true;
+        using var viewModel = new MainViewModel(configuration, new TestRuntime());
+
+        Assert.True(viewModel.AddSensorCommand.CanExecute(null));
+        await ExecuteAsync(viewModel.AddSensorCommand);
+
+        var added = Assert.Single(viewModel.SelectedScreen!.Sensors.Where(sensor => sensor.SensorId == "sensor-1"));
+        Assert.False(added.Enabled);
+        Assert.False(configuration.Screens[0].Sensors.Single(sensor => sensor.SensorId == "sensor-1").Enabled);
+    }
+
+    [Fact]
+    public async Task AssociatedScreen_CanRemoveItsLastSensor()
+    {
+        var configuration = new RadarAppConfiguration { Screens = [Screen("front", true, "f1")] };
+        configuration.Screens[0].IsPrimary = true;
+        using var viewModel = new MainViewModel(configuration, new TestRuntime());
+
+        Assert.True(viewModel.DeleteSensorCommand.CanExecute(null));
+        await ExecuteAsync(viewModel.DeleteSensorCommand);
+
+        Assert.Empty(viewModel.SelectedScreen!.Sensors);
+        Assert.Empty(configuration.Screens[0].Sensors);
+        Assert.Null(viewModel.SelectedSensor);
+    }
+
+    [Fact]
+    public async Task EnablingSensorWithoutRunnableMappingRejectsApply()
+    {
+        var configuration = new RadarAppConfiguration { Screens = [Screen("front", true, "f1")] };
+        configuration.Screens[0].IsPrimary = true;
+        configuration.Screens[0].Sensors[0].Enabled = false;
+        configuration.Screens[0].Sensors[0].Range.ActivePolygon = [];
+        var runtime = new TestRuntime();
+        using var viewModel = new MainViewModel(configuration, runtime);
+
+        viewModel.SelectedSensor!.Enabled = true;
+        await ExecuteAsync(viewModel.SaveConfigurationCommand);
+
+        Assert.Equal(0, runtime.ApplyConfigurationCallCount);
+        Assert.Contains(viewModel.VisibleLogEntries, entry => entry.Contains("active polygon", StringComparison.OrdinalIgnoreCase) || entry.Contains("calibration", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData(RadarSensorRuntimeState.Starting)]
+    [InlineData(RadarSensorRuntimeState.Running)]
+    [InlineData(RadarSensorRuntimeState.Reconnecting)]
+    public async Task RemovingActiveAssociatedSensorAwaitsDisconnectBeforeMutation(RadarSensorRuntimeState runtimeState)
+    {
+        var configuration = new RadarAppConfiguration { Screens = [Screen("front", true, "f1")] };
+        configuration.Screens[0].IsPrimary = true;
+        var disconnectGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runtime = new TestRuntime { DisconnectGate = disconnectGate };
+        using var viewModel = new MainViewModel(configuration, runtime);
+        runtime.PublishSensorState(new RadarSensorRuntimeStateChanged("front", "f1", runtimeState));
+
+        viewModel.DeleteSensorCommand.Execute(null);
+        await WaitUntilAsync(() => runtime.DisconnectSensorCallCount == 1);
+
+        Assert.Single(configuration.Screens[0].Sensors);
+        Assert.Single(viewModel.SelectedScreen!.Sensors);
+        disconnectGate.SetResult();
+        await WaitUntilAsync(() => configuration.Screens[0].Sensors.Count == 0);
+        Assert.Equal(["disconnect:front/f1"], runtime.Operations);
+    }
+
+    [Fact]
     public void LogFilter_KeepsLatestFiveHundredMatchingEntries()
     {
         using var viewModel = new MainViewModel(ThreeScreenFourSensorConfiguration(), new TestRuntime());
@@ -107,6 +180,30 @@ public sealed class MainViewModelTests
 
         Assert.Equal(2, viewModel.VisibleLogEntries.Count);
         Assert.Contains(viewModel.VisibleLogEntries, entry => entry.Contains("error", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void MoveLogThrottleState_RemovesOnUpExpiresByTtlAndNeverExceedsHardCap()
+    {
+        using var viewModel = new MainViewModel(ThreeScreenFourSensorConfiguration(), new TestRuntime());
+        var start = DateTimeOffset.UnixEpoch;
+
+        viewModel.ReceiveLogForTest("[front/Pold] Move initial", start);
+        viewModel.ReceiveLogForTest("[front/Pfresh] Move initial", start.AddMinutes(6));
+        Assert.Equal(1, viewModel.MoveLogThrottleStateCount);
+
+        for (var index = 0; index < MainViewModel.MoveLogThrottleStateCapacity + 100; index++)
+        {
+            viewModel.ReceiveLogForTest(
+                $"[front/P{index}] Move churn",
+                start.AddMinutes(6).AddMilliseconds(index));
+        }
+
+        Assert.Equal(MainViewModel.MoveLogThrottleStateCapacity, viewModel.MoveLogThrottleStateCount);
+        viewModel.ReceiveLogForTest(
+            $"[front/P{MainViewModel.MoveLogThrottleStateCapacity + 99}] Up released",
+            start.AddMinutes(7));
+        Assert.Equal(MainViewModel.MoveLogThrottleStateCapacity - 1, viewModel.MoveLogThrottleStateCount);
     }
 
     [Fact]
@@ -290,6 +387,12 @@ public sealed class MainViewModelTests
         await Task.Delay(25);
     }
 
+    private static async Task WaitUntilAsync(Func<bool> predicate)
+    {
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        while (!predicate()) await Task.Delay(10, cancellation.Token);
+    }
+
     private static RadarAppConfiguration ThreeScreenFourSensorConfiguration() => new()
     {
         Screens =
@@ -333,9 +436,13 @@ public sealed class MainViewModelTests
         public (string ScreenId, string SensorId)? LastDisconnectedSensor { get; private set; }
         public int DisconnectSensorCallCount { get; private set; }
         public int ReplayCallCount { get; private set; }
+        public (string Path, double Speed, bool Loop)? LastReplay { get; private set; }
         public int StartRecordingCallCount { get; private set; }
+        public int ApplyConfigurationCallCount { get; private set; }
         public Exception? ConnectSensorException { get; init; }
         public TaskCompletionSource? ConnectGate { get; init; }
+        public TaskCompletionSource? DisconnectGate { get; init; }
+        public List<string> Operations { get; } = [];
         public UnityClientStatus UnityStatus => UnityClientStatus.Disconnected;
         public Task StartInfrastructureAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task ConnectSensorAsync(string screenId, string sensorId, CancellationToken cancellationToken = default)
@@ -344,11 +451,12 @@ public sealed class MainViewModelTests
             return ConnectAsyncCore();
         }
         private async Task ConnectAsyncCore() { if (ConnectGate is not null) await ConnectGate.Task; if (ConnectSensorException is not null) throw ConnectSensorException; }
-        public Task DisconnectSensorAsync(string screenId, string sensorId)
+        public async Task DisconnectSensorAsync(string screenId, string sensorId)
         {
             DisconnectSensorCallCount++;
             LastDisconnectedSensor = (screenId, sensorId);
-            return Task.FromException(new InvalidOperationException("Unassociated screen deletion must not disconnect through the runtime."));
+            Operations.Add($"disconnect:{screenId}/{sensorId}");
+            if (DisconnectGate is not null) await DisconnectGate.Task;
         }
         public Task ConnectScreenAsync(string screenId, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task DisconnectScreenAsync(string screenId) => Task.CompletedTask;
@@ -357,15 +465,17 @@ public sealed class MainViewModelTests
         public Task StartAllSimulationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task StartRecordingAsync(string screenId, string sensorId, string path, CancellationToken cancellationToken = default) { StartRecordingCallCount++; return Task.CompletedTask; }
         public Task StopRecordingAsync(string screenId, string sensorId) => Task.CompletedTask;
-        public Task ReplaySensorAsync(string screenId, string sensorId, string path, double speed, bool loop, CancellationToken cancellationToken = default) { ReplayCallCount++; return Task.CompletedTask; }
+        public Task ReplaySensorAsync(string screenId, string sensorId, string path, double speed, bool loop, CancellationToken cancellationToken = default) { ReplayCallCount++; LastReplay = (path, speed, loop); return Task.CompletedTask; }
         public void PauseReplay(string screenId, string sensorId) { }
         public void ResumeReplay(string screenId, string sensorId) { }
         public void StepReplay(string screenId, string sensorId) { }
         public Task StopReplayAsync(string screenId, string sensorId) => Task.CompletedTask;
-        public Task ApplyConfigurationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task ApplyConfigurationAsync(CancellationToken cancellationToken = default) { ApplyConfigurationCallCount++; return Task.CompletedTask; }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         public void PublishLog(string entry) => LogReceived?.Invoke(entry);
         public void PublishSensorSnapshot(RadarSensorRuntimeSnapshot snapshot) => SensorSnapshotUpdated?.Invoke(snapshot);
+        public void PublishSensorState(RadarSensorRuntimeStateChanged state) => SensorStateChanged?.Invoke(state);
+        public event Action<RadarSensorRuntimeStateChanged>? SensorStateChanged;
     }
 
     private sealed class FakeDialogs : IFileDialogService

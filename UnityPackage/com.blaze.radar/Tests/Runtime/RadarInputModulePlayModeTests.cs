@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Threading.Tasks;
+using Blaze.Radar.Internal;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -316,6 +317,50 @@ namespace Blaze.Radar.Tests
 
             Assert.That(clicks, Is.EqualTo(1));
             Assert.That(_module.ActivePointers, Is.Empty);
+        }
+
+        [UnityTest]
+        public IEnumerator DispatcherStall_PreservesDownMoveUpAndZeroThroughInputInExactOrder()
+        {
+            var button = CreateButton("Center", new Vector2(0.5f, 0.5f));
+            var recorder = button.gameObject.AddComponent<PointerOrderRecorder>();
+            var fixture = ConfigureDispatcher();
+            fixture.Client.SetConnected(true);
+            fixture.Dispatcher.TickForTests();
+            yield return null;
+
+            fixture.Client.Publish(Batch(
+                ScreenFrame("front", true, ScreenPointer(61, 0.5f, 0.5f, RadarPointerPhase.Down))));
+            fixture.Client.Publish(Batch(
+                ScreenFrame("front", true, ScreenPointer(61, 0.55f, 0.5f, RadarPointerPhase.Move))));
+            fixture.Client.Publish(Batch(
+                ScreenFrame("front", true, ScreenPointer(61, 0.55f, 0.5f, RadarPointerPhase.Up))));
+            fixture.Client.Publish(Batch(ScreenFrame("front", true)));
+
+            fixture.Dispatcher.TickForTests();
+            _module.Process();
+
+            CollectionAssert.AreEqual(new[] { "down", "up", "click" }, recorder.Events);
+            Assert.That(_module.ActivePointers, Is.Empty);
+        }
+
+        [Test]
+        public void HighRateMoves_AreCoalescedInBoundedInputQueueWithoutDroppingLifecycleEdges()
+        {
+            _module.ScreenId = "front";
+            _module.InjectScreenFrame(ScreenFrame(
+                "front", true, ScreenPointer(62, 0.5f, 0.5f, RadarPointerPhase.Down)));
+            for (var index = 0; index < 500; index++)
+            {
+                _module.InjectScreenFrame(ScreenFrame(
+                    "front", true, ScreenPointer(62, 0.5f + index / 2000f, 0.5f, RadarPointerPhase.Move)));
+            }
+
+            _module.InjectScreenFrame(ScreenFrame(
+                "front", true, ScreenPointer(62, 0.75f, 0.5f, RadarPointerPhase.Up)));
+            _module.InjectScreenFrame(ScreenFrame("front", true));
+
+            Assert.That(_module.PendingScreenFrameCount, Is.EqualTo(4));
         }
 
         [UnityTest]
@@ -790,10 +835,10 @@ namespace Blaze.Radar.Tests
         private sealed class FakeRadarPipeClient : IRadarPipeClient
         {
             private readonly Queue<Action> _mainThreadActions = new Queue<Action>();
-            private RadarPointerBatchPayload _latestBatch;
+            private readonly LifecycleBatchBuffer _batches = new LifecycleBatchBuffer();
 
             public bool IsConnected { get; private set; }
-            public long DroppedBatchCount { get; private set; }
+            public long DroppedBatchCount { get { return _batches.DroppedCount; } }
 
             public event Action<bool> ConnectionChanged;
             public event Action<string> ErrorReceived
@@ -809,9 +854,7 @@ namespace Blaze.Radar.Tests
 
             public bool TryConsumeLatestBatch(out RadarPointerBatchPayload batch)
             {
-                batch = _latestBatch;
-                _latestBatch = null;
-                return batch != null;
+                return _batches.TryConsume(out batch);
             }
 
             public void DrainMainThreadEvents()
@@ -825,25 +868,20 @@ namespace Blaze.Radar.Tests
             public Task StopAsync()
             {
                 SetConnected(false);
-                _latestBatch = null;
+                _batches.Clear();
                 return Task.CompletedTask;
             }
 
             public void Dispose()
             {
-                _latestBatch = null;
+                _batches.Clear();
                 _mainThreadActions.Clear();
                 IsConnected = false;
             }
 
             public void Publish(RadarPointerBatchPayload batch)
             {
-                if (_latestBatch != null)
-                {
-                    DroppedBatchCount++;
-                }
-
-                _latestBatch = batch;
+                _batches.Publish(batch);
             }
 
             public void SetConnected(bool connected)
@@ -866,6 +904,15 @@ namespace Blaze.Radar.Tests
             {
                 Module.CancelAllPointers();
             }
+        }
+
+        private sealed class PointerOrderRecorder : MonoBehaviour, IPointerDownHandler, IPointerUpHandler, IPointerClickHandler
+        {
+            public List<string> Events { get; } = new List<string>();
+
+            public void OnPointerDown(PointerEventData eventData) { Events.Add("down"); }
+            public void OnPointerUp(PointerEventData eventData) { Events.Add("up"); }
+            public void OnPointerClick(PointerEventData eventData) { Events.Add("click"); }
         }
 
         private sealed class DragPathRecorder : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDragHandler

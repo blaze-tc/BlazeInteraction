@@ -11,6 +11,8 @@ namespace Blaze.Radar
     [DefaultExecutionOrder(-1000)]
     public sealed class RadarFrameDispatcher : MonoBehaviour
     {
+        private const int MaximumBatchesPerFrame = 8;
+
         [SerializeField] private RadarRuntimeSettings settings;
         [SerializeField] private bool autoConnect = true;
 
@@ -134,11 +136,16 @@ namespace Blaze.Radar
 
             client.DrainMainThreadEvents();
             RadarPointerBatchPayload batch;
-            if (!client.TryConsumeLatestBatch(out batch))
+            for (var batchIndex = 0;
+                 batchIndex < MaximumBatchesPerFrame && client.TryConsumeLatestBatch(out batch);
+                 batchIndex++)
             {
-                return;
+                ProcessBatch(batch);
             }
+        }
 
+        private void ProcessBatch(RadarPointerBatchPayload batch)
+        {
             if (batch == null || batch.screens == null)
             {
                 ReportError("RadarBridge supplied an empty or malformed PointerBatch.");

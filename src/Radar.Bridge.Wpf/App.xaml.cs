@@ -33,6 +33,7 @@ public partial class App : Application
 
         try
         {
+            var expectedParentProcessId = ReadExpectedParentProcessId(eventArgs.Args);
             _configurationPath = ReadArgument(eventArgs.Args, "--profile")
                 ?? RadarConfigurationStore.GetDefaultUserConfigurationPath();
             _configuration = await RadarConfigurationStore.LoadAsync(_configurationPath);
@@ -49,7 +50,8 @@ public partial class App : Application
                 _configuration,
                 provider.GetRequiredService<ILogger<RadarBridgeCoordinator>>(),
                 provider.GetRequiredService<IRadarSensorPipelineFactory>(),
-                _configurationPath));
+                _configurationPath,
+                expectedUnityProcessId: expectedParentProcessId));
             services.AddSingleton<MainViewModel>();
             services.AddSingleton<MainWindow>();
             _services = services.BuildServiceProvider(validateScopes: true);
@@ -64,7 +66,7 @@ public partial class App : Application
                 window.WindowState = WindowState.Minimized;
             }
 
-            if (int.TryParse(ReadArgument(eventArgs.Args, "--parent-pid"), out var parentProcessId))
+            if (expectedParentProcessId is int parentProcessId)
             {
                 _ = MonitorParentProcessAsync(parentProcessId);
             }
@@ -108,6 +110,11 @@ public partial class App : Application
         ArgumentNullException.ThrowIfNull(configuration);
         return configuration.CanPersist;
     }
+
+    internal static int? ReadExpectedParentProcessId(IReadOnlyList<string> arguments) =>
+        int.TryParse(ReadArgument(arguments, "--parent-pid"), out var processId) && processId > 0
+            ? processId
+            : null;
 
     private async Task MonitorParentProcessAsync(int processId)
     {

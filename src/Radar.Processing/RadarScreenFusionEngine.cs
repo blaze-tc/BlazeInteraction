@@ -172,6 +172,14 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
             }
         }
 
+        foreach (var retiredPointerId in _pointerPositions.Keys
+                     .Where(pointerId => !_pointerStateMachine.ContainsPointer(pointerId))
+                     .ToArray())
+        {
+            _pointerPositions.Remove(retiredPointerId);
+            _pressedTouchPointers.Remove(retiredPointerId);
+        }
+
         return new RadarScreenFusionResult(targets, pointers);
     }
 

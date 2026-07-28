@@ -192,6 +192,37 @@ public sealed class RuntimeLoggingTests
         Assert.Equal(0, PointerMoveLogStateCount(coordinator));
     }
 
+    [Fact]
+    public async Task CoordinatorMoveLogState_ExpiresAndHasHardCapWhenUpIsMissing()
+    {
+        await using var coordinator = new RadarBridgeCoordinator(
+            Configuration("unused"),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<RadarBridgeCoordinator>.Instance,
+            new LoggingPipelineFactory());
+        var start = DateTimeOffset.UnixEpoch;
+
+        Assert.True(coordinator.ShouldPublishPointerLogForTest(
+            "front", Pointer(1, RadarPointerPhase.Move), start));
+        Assert.True(coordinator.ShouldPublishPointerLogForTest(
+            "front", Pointer(2, RadarPointerPhase.Move), start.AddMinutes(6)));
+        Assert.Equal(1, PointerMoveLogStateCount(coordinator));
+
+        for (var index = 0; index < RadarBridgeCoordinator.PointerMoveLogStateCapacity + 100; index++)
+        {
+            Assert.True(coordinator.ShouldPublishPointerLogForTest(
+                "front",
+                Pointer(index + 10, RadarPointerPhase.Move),
+                start.AddMinutes(6).AddMilliseconds(index * 101L)));
+        }
+
+        Assert.Equal(RadarBridgeCoordinator.PointerMoveLogStateCapacity, PointerMoveLogStateCount(coordinator));
+        Assert.True(coordinator.ShouldPublishPointerLogForTest(
+            "front",
+            Pointer(RadarBridgeCoordinator.PointerMoveLogStateCapacity + 109, RadarPointerPhase.Up),
+            start.AddMinutes(9)));
+        Assert.Equal(RadarBridgeCoordinator.PointerMoveLogStateCapacity - 1, PointerMoveLogStateCount(coordinator));
+    }
+
     private static async Task<NamedPipeClientStream> ConnectAsync(string pipeName)
     {
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(3));
@@ -304,4 +335,14 @@ public sealed class RuntimeLoggingTests
 
     private static SensorDetectionFrame Detection(string sensorId, DateTimeOffset timestamp, float x, float y) =>
         new(sensorId, timestamp, [new SensorDetection(1, x, y, 1)]);
+
+    private static RadarScreenPointer Pointer(int pointerId, RadarPointerPhase phase) => new(
+        pointerId,
+        phase,
+        0.5f,
+        0.5f,
+        960f,
+        540f,
+        1f,
+        0L);
 }

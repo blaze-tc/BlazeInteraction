@@ -10,12 +10,14 @@ namespace Yuexin.Radar.Bridge.Wpf.Services;
 /// <summary>Owns the screen-scoped fusion boundaries and the single v2 IPC connection.</summary>
 public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
 {
+    internal const int PointerMoveLogStateCapacity = 1024;
     private readonly RadarAppConfiguration _configuration;
     private readonly ILogger<RadarBridgeCoordinator> _logger;
     private readonly IRadarSensorPipelineFactory _pipelineFactory;
     private readonly string? _configurationPath;
     private readonly Func<RadarAppConfiguration, CancellationToken, Task> _persistConfigurationAsync;
     private readonly Func<PointerBatchPayload, CancellationToken, Task<bool>>? _sendPointerBatchAsync;
+    private readonly int? _expectedUnityProcessId;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
     private readonly SemaphoreSlim _topologyLock = new(1, 1);
@@ -28,6 +30,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private static readonly TimeSpan SendTimeout = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan PipelineCleanupTimeout = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan PointerMoveLogInterval = TimeSpan.FromMilliseconds(100);
+    private static readonly TimeSpan PointerMoveLogStateTtl = TimeSpan.FromMinutes(5);
     private RadarPipeServer? _pipeServer;
     private Task? _pipeTask;
     private Task? _schedulerTask;
@@ -42,7 +45,8 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         IRadarSensorPipelineFactory pipelineFactory,
         string? configurationPath = null,
         Func<RadarAppConfiguration, CancellationToken, Task>? persistConfigurationAsync = null,
-        Func<PointerBatchPayload, CancellationToken, Task<bool>>? sendPointerBatchAsync = null)
+        Func<PointerBatchPayload, CancellationToken, Task<bool>>? sendPointerBatchAsync = null,
+        int? expectedUnityProcessId = null)
     {
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -50,11 +54,14 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         _configurationPath = configurationPath;
         _persistConfigurationAsync = persistConfigurationAsync ?? PersistWithStoreAsync;
         _sendPointerBatchAsync = sendPointerBatchAsync;
+        if (expectedUnityProcessId is <= 0) throw new ArgumentOutOfRangeException(nameof(expectedUnityProcessId));
+        _expectedUnityProcessId = expectedUnityProcessId;
     }
 
     public event Action<RadarSensorRuntimeSnapshot>? SensorSnapshotUpdated;
     public event Action<RadarScreenRuntimeSnapshot>? ScreenSnapshotUpdated;
     public event Action<RadarSensorRuntimeStateChanged>? SensorStateChanged;
+    public event Action? ConfigurationChanged;
     public event Action<string>? LogReceived;
     public event Action<UnityClientStatus>? UnityStatusChanged;
 
@@ -73,6 +80,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             {
                 PipeName = _configuration.Ipc.PipeName,
                 HeartbeatTimeout = TimeSpan.FromSeconds(3),
+                ExpectedClientProcessId = _expectedUnityProcessId,
                 AuthenticateHelloAsync = AuthenticateHelloAsync
             });
             server.ClientConnected += OnUnityConnected;
@@ -185,6 +193,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         {
             _topologyLock.Release();
         }
+        InvokeSafely(ConfigurationChanged);
     }
 
     public async Task ApplyConfigurationAsync(CancellationToken cancellationToken = default)
@@ -226,6 +235,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         {
             _topologyLock.Release();
         }
+        InvokeSafely(ConfigurationChanged);
     }
 
     public Task ConnectSensorAsync(string screenId, string sensorId, CancellationToken cancellationToken = default) =>
@@ -333,11 +343,17 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         _lifetime.Dispose();
     }
 
-    private async ValueTask<HelloAuthenticationResult> AuthenticateHelloAsync(HelloPayload hello, CancellationToken cancellationToken)
+    private async ValueTask<HelloAuthenticationResult> AuthenticateHelloAsync(
+        HelloPayload hello,
+        PipeClientAuthenticationContext clientContext,
+        CancellationToken cancellationToken)
     {
         if (!TryValidateTopology(hello, out var error)) return HelloAuthenticationResult.Reject(error.Code, error.Message);
         try
         {
+            PublishLog(
+                $"[GLOBAL/IPC] verified Unity client pid={clientContext.ClientProcessId} " +
+                $"session={clientContext.ClientSessionId} mode={(clientContext.ExpectedClientProcessId.HasValue ? "expected-parent" : "manual-current-user")}");
             await ApplyUnityTopologyAsync(hello, cancellationToken).ConfigureAwait(false);
             return HelloAuthenticationResult.Accept(new HelloAckPayload(
                 BridgeVersion.Value,
@@ -668,6 +684,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
 
     private bool ShouldPublishPointerLog(string screenId, RadarScreenPointer pointer, DateTimeOffset timestamp)
     {
+        PrunePointerMoveLogState(timestamp);
         var key = (screenId, pointer.PointerId);
         if (pointer.Phase != RadarPointerPhase.Move)
         {
@@ -681,8 +698,34 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             return false;
         }
 
+        if (!_lastPointerMoveLogAt.ContainsKey(key) && _lastPointerMoveLogAt.Count >= PointerMoveLogStateCapacity)
+        {
+            var oldest = _lastPointerMoveLogAt
+                .OrderBy(pair => pair.Value)
+                .ThenBy(pair => pair.Key.ScreenId, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(pair => pair.Key.PointerId)
+                .First().Key;
+            _lastPointerMoveLogAt.Remove(oldest);
+        }
+
         _lastPointerMoveLogAt[key] = timestamp;
         return true;
+    }
+
+    internal bool ShouldPublishPointerLogForTest(
+        string screenId,
+        RadarScreenPointer pointer,
+        DateTimeOffset timestamp) => ShouldPublishPointerLog(screenId, pointer, timestamp);
+
+    private void PrunePointerMoveLogState(DateTimeOffset timestamp)
+    {
+        foreach (var key in _lastPointerMoveLogAt
+                     .Where(pair => pair.Value > timestamp || timestamp - pair.Value > PointerMoveLogStateTtl)
+                     .Select(pair => pair.Key)
+                     .ToArray())
+        {
+            _lastPointerMoveLogAt.Remove(key);
+        }
     }
 
     private void RetireRuntime(ScreenRuntime runtime, DateTimeOffset timestamp, bool remove, ScreenRuntime? replaceWith)
@@ -1092,6 +1135,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private static bool IsConfigurationId(string? value) => value is { Length: >= 1 and <= 64 } && value.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '-');
     private static async Task AwaitStoppedAsync(Task? task) { if (task is null) return; try { await task.ConfigureAwait(false); } catch (OperationCanceledException) { } catch (ObjectDisposedException) { } }
     private static void InvokeSafely<T>(Action<T>? handlers, T value) { if (handlers is null) return; foreach (Action<T> handler in handlers.GetInvocationList()) try { handler(value); } catch { } }
+    private static void InvokeSafely(Action? handlers) { if (handlers is null) return; foreach (Action handler in handlers.GetInvocationList()) try { handler(); } catch { } }
 
     private sealed class ScreenRuntime(RadarScreenConfiguration configuration, RadarScreenInfo info, IRadarScreenFusionEngine fusion)
     {

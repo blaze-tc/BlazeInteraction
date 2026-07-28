@@ -36,8 +36,7 @@ namespace Blaze.Radar
         private readonly int _connectTimeoutMilliseconds;
         private readonly int _reconnectDelayMilliseconds;
         private readonly int _serverResponseTimeoutMilliseconds;
-        private readonly LatestValueBuffer<RadarPointerBatchPayload> _latestBatch =
-            new LatestValueBuffer<RadarPointerBatchPayload>();
+        private readonly LifecycleBatchBuffer _latestBatch = new LifecycleBatchBuffer();
         private readonly ConcurrentQueue<Action> _mainThreadActions = new ConcurrentQueue<Action>();
         private readonly SemaphoreSlim _writeLock = new SemaphoreSlim(1, 1);
         private readonly object _lifecycleSync = new object();
@@ -169,8 +168,8 @@ namespace Blaze.Radar
                     cancellation.Dispose();
                 }
 
-                SetConnected(false);
                 _latestBatch.Clear();
+                SetConnected(false);
 
                 lock (_lifecycleSync)
                 {
@@ -301,6 +300,7 @@ namespace Blaze.Radar
                     finally
                     {
                         Interlocked.CompareExchange(ref _activePipe, null, pipe);
+                        _latestBatch.Clear();
                         SetConnected(false);
                     }
                 }
@@ -348,7 +348,7 @@ namespace Blaze.Radar
                                     " is incompatible with Unity SDK protocol " + RadarIpcProtocol.Version + ".");
                             }
 
-                            acknowledged = HandleEnvelope(envelope, acknowledged);
+                            acknowledged = HandleEnvelope(envelope, acknowledged, cancellationToken);
                         }
                     }
                     catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -360,7 +360,7 @@ namespace Blaze.Radar
             }
         }
 
-        private bool HandleEnvelope(RadarIpcEnvelope envelope, bool acknowledged)
+        private bool HandleEnvelope(RadarIpcEnvelope envelope, bool acknowledged, CancellationToken cancellationToken)
         {
             switch (envelope.messageType)
             {
@@ -398,7 +398,7 @@ namespace Blaze.Radar
                         throw new InvalidDataException("RadarBridge sent an invalid PointerBatch payload: screens is required.");
                     }
 
-                    _latestBatch.Publish(batch);
+                    _latestBatch.Publish(batch, cancellationToken);
                     return acknowledged;
 
                 case RadarIpcMessageType.PointerFrame:

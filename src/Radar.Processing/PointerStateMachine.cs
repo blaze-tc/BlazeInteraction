@@ -100,6 +100,8 @@ public sealed class PointerStateMachine
         _states.Clear();
     }
 
+    internal bool ContainsPointer(int pointerId) => _states.ContainsKey(pointerId);
+
     private void EmitObserved(PointerState state, DateTimeOffset timestamp, List<RadarPointer> output)
     {
         switch (_options.Mode)

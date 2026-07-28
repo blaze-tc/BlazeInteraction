@@ -204,6 +204,39 @@ public sealed class RadarConfigurationTests
         Assert.Contains(result.Errors, value => value.Contains("interaction", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Theory]
+    [InlineData(0.1)]
+    [InlineData(4.0)]
+    [InlineData(4.25)]
+    [InlineData(8.0)]
+    public void Validator_AcceptsApprovedReplaySpeedRangeWithoutSnapping(double speed)
+    {
+        var configuration = RadarAppConfiguration.CreateDefault();
+        configuration.Screens[0].Sensors[0].ReplaySpeed = speed;
+
+        var result = ConfigurationValidator.ValidateAndNormalize(configuration);
+
+        Assert.True(result.IsValid);
+        Assert.Equal(speed, configuration.Screens[0].Sensors[0].ReplaySpeed);
+    }
+
+    [Theory]
+    [InlineData(0.099)]
+    [InlineData(8.001)]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    public void Validator_RejectsOutOfRangeOrNonFiniteReplaySpeed(double speed)
+    {
+        var configuration = RadarAppConfiguration.CreateDefault();
+        configuration.Screens[0].Sensors[0].ReplaySpeed = speed;
+
+        var result = ConfigurationValidator.ValidateAndNormalize(configuration);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, error => error.Contains("replaySpeed", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Fact]
     public async Task SaveAsync_WritesOnlySchemaTwoSections()
     {

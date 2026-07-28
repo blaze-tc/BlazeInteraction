@@ -11,6 +11,8 @@ namespace Yuexin.Radar.Bridge.Wpf.ViewModels;
 public sealed class MainViewModel : ObservableObject, IDisposable
 {
     private const int MaximumLogEntries = 500;
+    internal const int MoveLogThrottleStateCapacity = 1024;
+    private static readonly TimeSpan MoveLogThrottleStateTtl = TimeSpan.FromMinutes(5);
     private readonly RadarAppConfiguration _configuration;
     private readonly IRadarBridgeRuntime _runtime;
     private readonly IFileDialogService _fileDialogs;
@@ -35,7 +37,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         SelectedScreen = Screens.FirstOrDefault();
 
         AddSensorCommand = CreateCommand(AddSensorAsync, () => CanEditSelectedScreen);
-        DeleteSensorCommand = CreateCommand(DeleteSensorAsync, () => CanEditSelectedScreen && SelectedSensor is not null && SelectedScreen!.Sensors.Count > 1);
+        DeleteSensorCommand = CreateCommand(DeleteSensorAsync, () => CanEditSelectedScreen && SelectedSensor is not null);
         DeleteOrphanedScreenConfigurationCommand = CreateCommand(DeleteOrphanedScreenConfigurationAsync, () => SelectedScreen is { IsAssociated: false });
         RestoreUnityResolutionCommand = new RelayCommand(() => { if (SelectedScreen is not null) SelectedScreen.ResolutionMode = RadarResolutionMode.FollowUnityDefault; }, () => SelectedScreen is not null);
         ConnectSensorCommand = CreateCommand(token => WithSelectedSensorAsync((screen, sensor) => _runtime.ConnectSensorAsync(screen.ScreenId, sensor.SensorId, token)), CanOperateSelectedSensor);
@@ -66,6 +68,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _runtime.SensorSnapshotUpdated += OnSensorSnapshotUpdated;
         _runtime.ScreenSnapshotUpdated += OnScreenSnapshotUpdated;
         _runtime.SensorStateChanged += OnSensorStateChanged;
+        _runtime.ConfigurationChanged += OnConfigurationChanged;
         _runtime.LogReceived += OnLogReceived;
         _runtime.UnityStatusChanged += OnUnityStatusChanged;
     }
@@ -73,7 +76,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ObservableCollection<ScreenItemViewModel> Screens { get; }
     public ObservableCollection<string> VisibleLogEntries { get; } = [];
     public UnityClientStatus UnityStatus { get => _unityStatus; private set => SetProperty(ref _unityStatus, value); }
-    public bool CanEditSelectedScreen => SelectedScreen is { IsAssociated: false };
+    public bool CanEditSelectedScreen => SelectedScreen is not null;
     public bool HasSelectedScreen => SelectedScreen is not null;
     public bool HasSelectedSensor => SelectedSensor is not null;
 
@@ -166,7 +169,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (SelectedSensor is null || index < 0 || index >= SelectedSensor.RegionVertices.Count) return;
         SelectedSensor.UpdateRegionVertex(index, value);
     }
-    public void ReceiveLogForTest(string entry) => ReceiveLog(entry);
+    public void ReceiveLogForTest(string entry, DateTimeOffset? timestamp = null) => ReceiveLog(entry, timestamp);
+    internal int MoveLogThrottleStateCount => _lastMoveLogAt.Count;
 
     private Task StartRecordingFromDialogAsync(CancellationToken token)
     {
@@ -176,7 +180,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private Task ReplayFromDialogAsync(CancellationToken token)
     {
         var path = _fileDialogs.SelectReplayPath();
-        return string.IsNullOrWhiteSpace(path) ? Task.CompletedTask : ReplaySelectedSensorAsync(path, 1d, false, token);
+        return string.IsNullOrWhiteSpace(path) || SelectedSensor is null
+            ? Task.CompletedTask
+            : ReplaySelectedSensorAsync(path, SelectedSensor.ReplaySpeed, SelectedSensor.ReplayLoop, token);
     }
 
     private AsyncRelayCommand CreateCommand(Func<CancellationToken, Task> action, Func<bool>? canExecute = null)
@@ -196,17 +202,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             SensorId = $"sensor-{next}",
             DisplayName = $"Radar {next}",
+            Enabled = false,
             OutputRectPixels = new RadarPixelRect(0, 0, SelectedScreen.EffectiveWidthPixels, SelectedScreen.EffectiveHeightPixels)
         });
         await Task.CompletedTask;
     }
 
-    private Task DeleteSensorAsync(CancellationToken _)
+    private async Task DeleteSensorAsync(CancellationToken _)
     {
-        if (SelectedScreen is null || SelectedSensor is null || SelectedScreen.Sensors.Count <= 1) return Task.CompletedTask;
-        SelectedScreen.RemoveSensor(SelectedSensor);
-        SelectedSensor = SelectedScreen.Sensors.FirstOrDefault();
-        return Task.CompletedTask;
+        var screen = SelectedScreen;
+        var sensor = SelectedSensor;
+        if (screen is null || sensor is null || !screen.Sensors.Contains(sensor)) return;
+        if (screen.IsAssociated && sensor.RuntimeState is RadarSensorRuntimeState.Starting or RadarSensorRuntimeState.Running or RadarSensorRuntimeState.Reconnecting)
+        {
+            await _runtime.DisconnectSensorAsync(screen.ScreenId, sensor.SensorId).ConfigureAwait(true);
+        }
+        if (!screen.Sensors.Contains(sensor)) return;
+        screen.RemoveSensor(sensor);
+        if (ReferenceEquals(SelectedScreen, screen)) SelectedSensor = screen.Sensors.FirstOrDefault();
     }
 
     private Task DeleteOrphanedScreenConfigurationAsync(CancellationToken _)
@@ -215,6 +228,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             _configuration.Screens.Remove(screen.Configuration);
             Screens.Remove(screen);
+            ClearMoveLogStateForScreen(screen.ScreenId);
             SelectedScreen = Screens.FirstOrDefault();
         }
         return Task.CompletedTask;
@@ -241,14 +255,32 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     });
     private void OnScreenSnapshotUpdated(RadarScreenRuntimeSnapshot snapshot) => Dispatch(() => FindScreen(snapshot.Screen.ScreenId)?.ApplySnapshot(snapshot));
     private void OnSensorStateChanged(RadarSensorRuntimeStateChanged state) => Dispatch(() => FindScreen(state.ScreenId)?.Sensors.FirstOrDefault(sensor => string.Equals(sensor.SensorId, state.SensorId, StringComparison.OrdinalIgnoreCase))?.ApplyRuntimeState(state.State));
+    private void OnConfigurationChanged() => Dispatch(RefreshScreensFromConfiguration);
     private void OnLogReceived(string entry) => Dispatch(() => ReceiveLog(entry));
     private void OnUnityStatusChanged(UnityClientStatus status) => Dispatch(() => UnityStatus = status);
     private ScreenItemViewModel? FindScreen(string screenId) => Screens.FirstOrDefault(screen => string.Equals(screen.ScreenId, screenId, StringComparison.OrdinalIgnoreCase));
     private void OnSelectedSensorPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) { OnPropertyChanged(string.Empty); NotifyCommandState(); }
 
-    private void ReceiveLog(string entry)
+    private void RefreshScreensFromConfiguration()
     {
-        if (IsThrottledMove(entry)) return;
+        var selectedScreenId = SelectedScreen?.ScreenId;
+        var selectedSensorId = SelectedSensor?.SensorId;
+        Screens.Clear();
+        foreach (var screen in _configuration.Screens) Screens.Add(new ScreenItemViewModel(screen));
+        _lastMoveLogAt.Clear();
+        SelectedScreen = selectedScreenId is null ? Screens.FirstOrDefault() : FindScreen(selectedScreenId) ?? Screens.FirstOrDefault();
+        if (selectedSensorId is not null && SelectedScreen is not null)
+        {
+            SelectedSensor = SelectedScreen.Sensors.FirstOrDefault(sensor => string.Equals(sensor.SensorId, selectedSensorId, StringComparison.OrdinalIgnoreCase))
+                ?? SelectedScreen.Sensors.FirstOrDefault();
+        }
+        OnPropertyChanged(nameof(Screens));
+        NotifyCommandState();
+    }
+
+    private void ReceiveLog(string entry, DateTimeOffset? timestamp = null)
+    {
+        if (IsThrottledMove(entry, timestamp ?? DateTimeOffset.UtcNow)) return;
         _rawLogs.Enqueue(entry);
         while (_rawLogs.Count > MaximumLogEntries) _rawLogs.Dequeue();
         if (!MatchesFilter(entry)) return;
@@ -267,16 +299,56 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (_selectedLogScreenId == "*" && _selectedLogSensorId != "*") return entry.Contains($"/{_selectedLogSensorId}]", StringComparison.OrdinalIgnoreCase);
         return entry.StartsWith($"[{_selectedLogScreenId}/{_selectedLogSensorId}]", StringComparison.OrdinalIgnoreCase);
     }
-    private bool IsThrottledMove(string entry)
+    private bool IsThrottledMove(string entry, DateTimeOffset now)
     {
-        if (!entry.Contains("move", StringComparison.OrdinalIgnoreCase) || entry.Contains("error", StringComparison.OrdinalIgnoreCase) || entry.Contains("warning", StringComparison.OrdinalIgnoreCase)) return false;
-        var match = System.Text.RegularExpressions.Regex.Match(entry, @"^\[([a-z0-9_-]+)/P([a-z0-9_-]+)\].*\bMove\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        PruneMoveLogState(now);
+        var match = System.Text.RegularExpressions.Regex.Match(
+            entry,
+            @"^\[([a-z0-9_-]+)/P([a-z0-9_-]+)\]\s+(Move|Up)\b",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
         if (!match.Success) return false;
         var key = $"{match.Groups[1].Value}/{match.Groups[2].Value}";
-        var now = DateTimeOffset.UtcNow;
+        if (string.Equals(match.Groups[3].Value, "Up", StringComparison.OrdinalIgnoreCase))
+        {
+            _lastMoveLogAt.Remove(key);
+            return false;
+        }
+
+        if (entry.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+            entry.Contains("warning", StringComparison.OrdinalIgnoreCase)) return false;
         if (_lastMoveLogAt.TryGetValue(key, out var last) && now - last < TimeSpan.FromMilliseconds(100)) return true;
+        if (!_lastMoveLogAt.ContainsKey(key) && _lastMoveLogAt.Count >= MoveLogThrottleStateCapacity)
+        {
+            var oldest = _lastMoveLogAt
+                .OrderBy(pair => pair.Value)
+                .ThenBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .First().Key;
+            _lastMoveLogAt.Remove(oldest);
+        }
         _lastMoveLogAt[key] = now;
         return false;
+    }
+
+    private void PruneMoveLogState(DateTimeOffset now)
+    {
+        foreach (var key in _lastMoveLogAt
+                     .Where(pair => pair.Value > now || now - pair.Value > MoveLogThrottleStateTtl)
+                     .Select(pair => pair.Key)
+                     .ToArray())
+        {
+            _lastMoveLogAt.Remove(key);
+        }
+    }
+
+    private void ClearMoveLogStateForScreen(string screenId)
+    {
+        var prefix = screenId + "/";
+        foreach (var key in _lastMoveLogAt.Keys
+                     .Where(key => key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                     .ToArray())
+        {
+            _lastMoveLogAt.Remove(key);
+        }
     }
     private static string NormalizeFilter(string? value) => string.IsNullOrWhiteSpace(value) ? "*" : value.Trim();
     private void Dispatch(Action action)
@@ -303,6 +375,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _runtime.SensorSnapshotUpdated -= OnSensorSnapshotUpdated;
         _runtime.ScreenSnapshotUpdated -= OnScreenSnapshotUpdated;
         _runtime.SensorStateChanged -= OnSensorStateChanged;
+        _runtime.ConfigurationChanged -= OnConfigurationChanged;
         _runtime.LogReceived -= OnLogReceived;
         _runtime.UnityStatusChanged -= OnUnityStatusChanged;
         if (_selectedSensor is not null) _selectedSensor.PropertyChanged -= OnSelectedSensorPropertyChanged;

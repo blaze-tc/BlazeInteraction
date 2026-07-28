@@ -1,4 +1,8 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using System.IO.Pipes;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 using Yuexin.Radar.Contracts;
 
 namespace Yuexin.Radar.Ipc;
@@ -7,11 +11,19 @@ public sealed class RadarPipeServerOptions
 {
     public string PipeName { get; set; } = "Yuexin.RadarBridge";
     public TimeSpan HeartbeatTimeout { get; set; } = TimeSpan.FromSeconds(3);
-    public Func<HelloPayload, CancellationToken, ValueTask<HelloAuthenticationResult>> AuthenticateHelloAsync { get; set; } =
-        (_, _) => ValueTask.FromResult(HelloAuthenticationResult.Reject(
+    public int? ExpectedClientProcessId { get; set; }
+    public Func<HelloPayload, PipeClientAuthenticationContext, CancellationToken, ValueTask<HelloAuthenticationResult>> AuthenticateHelloAsync { get; set; } =
+        (_, _, _) => ValueTask.FromResult(HelloAuthenticationResult.Reject(
             "hello_handler_missing",
             "Hello handler is not configured."));
 }
+
+public sealed record PipeClientAuthenticationContext(
+    int ClientProcessId,
+    int ClientSessionId,
+    int ServerSessionId,
+    int? ExpectedClientProcessId,
+    bool CurrentUserOnlyEnforced);
 
 public sealed record HelloAuthenticationResult(HelloAckPayload? Ack, ErrorPayload? Error)
 {
@@ -45,6 +57,11 @@ public sealed class RadarPipeServer : IAsyncDisposable
         {
             throw new ArgumentException("HeartbeatTimeout must be positive.", nameof(options));
         }
+
+        if (_options.ExpectedClientProcessId is <= 0)
+        {
+            throw new ArgumentException("ExpectedClientProcessId must be positive when supplied.", nameof(options));
+        }
     }
 
     public bool IsClientConnected => _activePipe?.IsConnected == true;
@@ -75,13 +92,15 @@ public sealed class RadarPipeServer : IAsyncDisposable
                     PipeDirection.InOut,
                     1,
                     PipeTransmissionMode.Byte,
-                    PipeOptions.Asynchronous);
+                    PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
                 var authenticated = false;
                 try
                 {
                     await pipe.WaitForConnectionAsync(linked.Token).ConfigureAwait(false);
+                    var clientContext = ResolveClientContext(pipe);
                     await HandleClientAsync(
                         pipe,
+                        clientContext,
                         linked.Token,
                         () =>
                         {
@@ -94,7 +113,8 @@ public sealed class RadarPipeServer : IAsyncDisposable
                     break;
                 }
                 catch (Exception exception) when (
-                    exception is IOException or TimeoutException or InvalidDataException or ObjectDisposedException)
+                    exception is IOException or TimeoutException or InvalidDataException or ObjectDisposedException or
+                        Win32Exception or UnauthorizedAccessException)
                 {
                     if (authenticated || exception is not EndOfStreamException)
                     {
@@ -178,6 +198,7 @@ public sealed class RadarPipeServer : IAsyncDisposable
 
     private async Task HandleClientAsync(
         NamedPipeServerStream pipe,
+        PipeClientAuthenticationContext clientContext,
         CancellationToken cancellationToken,
         Action authenticated)
     {
@@ -217,7 +238,17 @@ public sealed class RadarPipeServer : IAsyncDisposable
             return;
         }
 
-        var authentication = await _options.AuthenticateHelloAsync(hello, cancellationToken).ConfigureAwait(false);
+        var identityError = ValidateClientIdentity(hello, clientContext);
+        if (identityError is not null)
+        {
+            await WriteLockedAsync(
+                pipe,
+                IpcEnvelope.Create(IpcMessageType.Error, NextSequence(), identityError),
+                cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var authentication = await _options.AuthenticateHelloAsync(hello, clientContext, cancellationToken).ConfigureAwait(false);
         if (!authentication.Accepted)
         {
             var error = authentication.Error ?? new ErrorPayload(
@@ -309,6 +340,66 @@ public sealed class RadarPipeServer : IAsyncDisposable
 
     private long NextSequence() => Interlocked.Increment(ref _sequence);
 
+    private PipeClientAuthenticationContext ResolveClientContext(NamedPipeServerStream pipe)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException("Secure RadarBridge named-pipe authentication requires Windows.");
+        }
+
+        if (!GetNamedPipeClientProcessId(pipe.SafePipeHandle, out var clientProcessId))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not resolve the named-pipe client process ID.");
+        }
+
+        if (!GetNamedPipeClientSessionId(pipe.SafePipeHandle, out var clientSessionId))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not resolve the named-pipe client session ID.");
+        }
+
+        if (clientProcessId == 0 || clientProcessId > int.MaxValue || clientSessionId > int.MaxValue)
+        {
+            throw new InvalidDataException("The named-pipe client identity is outside the supported range.");
+        }
+
+        using var currentProcess = Process.GetCurrentProcess();
+        return new PipeClientAuthenticationContext(
+            checked((int)clientProcessId),
+            checked((int)clientSessionId),
+            currentProcess.SessionId,
+            _options.ExpectedClientProcessId,
+            CurrentUserOnlyEnforced: true);
+    }
+
+    private static ErrorPayload? ValidateClientIdentity(
+        HelloPayload hello,
+        PipeClientAuthenticationContext context)
+    {
+        if (hello.UnityProcessId != context.ClientProcessId)
+        {
+            return new ErrorPayload(
+                "client_pid_mismatch",
+                $"Hello PID {hello.UnityProcessId} does not match verified pipe client PID {context.ClientProcessId}.");
+        }
+
+        if (context.ClientSessionId != context.ServerSessionId)
+        {
+            return new ErrorPayload(
+                "client_session_mismatch",
+                $"Pipe client session {context.ClientSessionId} does not match Bridge session {context.ServerSessionId}.");
+        }
+
+        if (context.ExpectedClientProcessId is int expectedProcessId &&
+            context.ClientProcessId != expectedProcessId)
+        {
+            return new ErrorPayload(
+                "unexpected_client_process",
+                $"Verified pipe client PID {context.ClientProcessId} does not match expected parent PID {expectedProcessId}.");
+        }
+
+        return null;
+    }
+
     private static bool TryValidateTopology(HelloPayload hello, out ErrorPayload error)
     {
         if (hello.Screens is null || hello.Screens.Count == 0)
@@ -343,6 +434,18 @@ public sealed class RadarPipeServer : IAsyncDisposable
 
     private static bool IsConfigurationId(string? value) => value is { Length: >= 1 and <= 64 } &&
         value.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '-');
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetNamedPipeClientProcessId(
+        SafePipeHandle pipe,
+        out uint clientProcessId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetNamedPipeClientSessionId(
+        SafePipeHandle pipe,
+        out uint clientSessionId);
 
     private void DisposeResources()
     {

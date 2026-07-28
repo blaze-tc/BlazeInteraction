@@ -44,6 +44,8 @@ LEFT/L1、FRONT/F1+F2 overlap、RIGHT/R1 中，F1/F2 是 FRONT 内的两个独�
 
 启动：读取/迁移 Schema 2 → 日志/DI → 每屏/每 Sensor runtime → IPC server → 软件渲染 WPF。Unity Launcher 先探测 Pipe，只在需要时启动当前 Resolved Package 内 Bridge，并传 `--parent-pid`。停止：取消 active pointers → 停传感器/调度/IPC → 保存配置/刷新日志；父进程结束时 Bridge 返回 code 0。
 
+IPC 身份边界：Bridge 的 Named Pipe 以 `CurrentUserOnly` 创建，并从 Windows 管道句柄读取真实客户端 PID/Session。真实 PID 必须与 Hello 声明一致、客户端必须与 Bridge 同 Session；由 Unity 自动启动时，真实 PID 还必须与 `--parent-pid` 一致。手工启动未提供 `--parent-pid` 时，只能保证当前用户、同 Session 与真实 PID/Hello 一致；同一交互登录用户下的其他进程仍可能发起诚实声明的连接，因此手工模式的信任边界弱于自动启动模式。
+
 Bridge 使用 `[SCREEN/SENSOR]`、`[GLOBAL/IPC]` 标签。与 `Player.log` 的 SDK/Bridge/IPC、screenId、batch/frame sequence、pointer/dropped count 和 latency 对齐。安装固定标签为 `https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.0`；构建处理器从当前 Package Manager Resolved Path 复制完整 Bridge 并验证 1.2.0 marker/SHA。
 
 部署架构验收还包括独立 Display、Camera `pixelRect`/RenderTexture、per-camera world particles、IPC v1/v2 recovery、投影 click/drag/resize/minimize/focus 清晰度以及三投影四雷达 8 小时运行。

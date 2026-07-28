@@ -83,6 +83,7 @@ public sealed class SensorItemViewModel : ObservableObject, System.ComponentMode
         nameof(BaseGapMeters) or nameof(DistanceScale) when !float.IsFinite(BaseGapMeters) || !float.IsFinite(DistanceScale) || BaseGapMeters <= 0f || DistanceScale <= 0f => "Clustering values must be positive.",
         nameof(MinimumClusterPointCount) when MinimumClusterPointCount < 1 => "Minimum cluster point count must be positive.",
         nameof(MaximumClusterWidthMeters) when !float.IsFinite(MaximumClusterWidthMeters) || MaximumClusterWidthMeters <= 0f => "Maximum cluster width must be positive.",
+        nameof(ReplaySpeed) when !double.IsFinite(ReplaySpeed) || ReplaySpeed is < 0.1d or > 8d => "Replay speed must be between 0.1 and 8.0.",
         _ => string.Empty
     };
 
