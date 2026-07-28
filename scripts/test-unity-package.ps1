@@ -471,11 +471,21 @@ foreach ($platform in $platforms) {
         "-runTests",
         "-testPlatform", $platform,
         "-testResults", $resultPath,
-        "-logFile", $logPath,
-        "-quit"
+        "-logFile", $logPath
     )
 
-    $editorPath = $editor.Path
-    & $editorPath @arguments
-    Assert-UnityTestResults -ResultPath $resultPath -LogPath $logPath -Platform $platform -ExitCode $LASTEXITCODE
+    $argumentLine = ($arguments | ForEach-Object {
+        '"' + $_.Replace('"', '\"') + '"'
+    }) -join ' '
+    $process = Start-Process `
+        -FilePath $editor.Path `
+        -ArgumentList $argumentLine `
+        -WindowStyle Hidden `
+        -Wait `
+        -PassThru
+    Assert-UnityTestResults `
+        -ResultPath $resultPath `
+        -LogPath $logPath `
+        -Platform $platform `
+        -ExitCode $process.ExitCode
 }

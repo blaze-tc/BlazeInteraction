@@ -78,7 +78,7 @@ namespace Blaze.Radar.Tests
             });
 
             Assert.That(result.IsValid, Is.False);
-            Assert.That(string.Join("\n", result.Errors), Does.Contain("exactly one enabled screen").And.Contain("primary").IgnoreCase);
+            Assert.That(string.Join("\n", result.Errors), Does.Contain("Exactly one enabled screen").And.Contain("primary"));
         }
 
         [Test]
@@ -91,7 +91,7 @@ namespace Blaze.Radar.Tests
             });
 
             Assert.That(result.IsValid, Is.False);
-            Assert.That(string.Join("\n", result.Errors), Does.Contain("exactly one enabled screen").And.Contain("2"));
+            Assert.That(string.Join("\n", result.Errors), Does.Contain("Exactly one enabled screen").And.Contain("2"));
         }
 
         [Test]

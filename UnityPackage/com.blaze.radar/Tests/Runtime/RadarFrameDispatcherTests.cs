@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Blaze.Radar.Internal;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.TestTools;
 using Object = UnityEngine.Object;
 
 namespace Blaze.Radar.Tests
@@ -142,6 +144,16 @@ namespace Blaze.Radar.Tests
                     }
                 });
 
+                LogAssert.Expect(
+                    LogType.Error,
+                    "[Blaze Radar] IPC error: PointerBatch contains a null screen frame at index 0.");
+                LogAssert.Expect(
+                    LogType.Error,
+                    "[Blaze Radar] IPC error: PointerBatch contains a screen frame without a screen ID at index 1.");
+                LogAssert.Expect(
+                    LogType.Error,
+                    "[Blaze Radar] IPC error: Screen frame 'front' contains a null pointer at index 0.");
+
                 Assert.DoesNotThrow(fixture.Dispatcher.TickForTests);
 
                 CollectionAssert.AreEqual(new[] { 9 }, pointers);
@@ -163,6 +175,9 @@ namespace Blaze.Radar.Tests
                 fixture.Dispatcher.ScreenPointerReceived += (_, __) => laterPointer = true;
                 fixture.Client.Publish(Batch(Frame("front", 1, Pointer(1))));
 
+                LogAssert.Expect(LogType.Exception, new Regex("^InvalidOperationException: frame observer"));
+                LogAssert.Expect(LogType.Exception, new Regex("^InvalidOperationException: pointer observer"));
+
                 Assert.DoesNotThrow(fixture.Dispatcher.TickForTests);
                 Assert.That(laterFrame, Is.True);
                 Assert.That(laterPointer, Is.True);
@@ -176,6 +191,13 @@ namespace Blaze.Radar.Tests
             {
                 var errors = new List<string>();
                 fixture.Dispatcher.ErrorReceived += errors.Add;
+
+                LogAssert.Expect(
+                    LogType.Error,
+                    "[Blaze Radar] IPC error: Invalid screen topology: screens[0](id='INVALID ID').screenId must match ^[a-z0-9_-]{1,64}$.");
+                LogAssert.Expect(
+                    LogType.Error,
+                    "[Blaze Radar] IPC error: Invalid screen topology: Exactly one enabled screen must be primary; found 0.");
 
                 fixture.Dispatcher.Connect();
 

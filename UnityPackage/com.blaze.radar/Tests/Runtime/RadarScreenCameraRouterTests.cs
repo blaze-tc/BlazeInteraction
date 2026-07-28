@@ -60,12 +60,17 @@ namespace Blaze.Radar.Tests
             var camera = CreateCamera("FrontCamera");
             camera.pixelRect = new Rect(100f, 50f, 800f, 600f);
             var router = CreateRouter(Binding("front", camera));
+            var actualPixelRect = camera.pixelRect;
 
             Assert.That(
                 router.TryMapToCameraPixel(Screen("front", 4000, 2000), Pointer(2000f, 500f), out var pixel),
                 Is.True);
-            Assert.That(pixel.x, Is.EqualTo(500f).Within(0.001f));
-            Assert.That(pixel.y, Is.EqualTo(200f).Within(0.001f));
+            Assert.That(
+                pixel.x,
+                Is.EqualTo(actualPixelRect.x + actualPixelRect.width * 0.5f).Within(0.001f));
+            Assert.That(
+                pixel.y,
+                Is.EqualTo(actualPixelRect.y + actualPixelRect.height * 0.25f).Within(0.001f));
         }
 
         [Test]
