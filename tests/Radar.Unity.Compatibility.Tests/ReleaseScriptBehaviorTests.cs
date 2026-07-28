@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json.Nodes;
 
 namespace Radar.Unity.Compatibility.Tests;
 
@@ -50,6 +51,73 @@ public sealed class ReleaseScriptBehaviorTests
         Assert.False(marker.Length >= 3 && marker[0] == 0xEF && marker[1] == 0xBB && marker[2] == 0xBF);
         Assert.Equal(2, ReadSchema(Path.Combine(fixture.Payload, "profiles", "default-profile.json")));
         Assert.Equal(2, ReadSchema(Path.Combine(fixture.Payload, "profiles", "f20-profile.json")));
+    }
+
+    [Fact]
+    public void PowerShellValidator_AcceptsCommitted491FilePayload()
+    {
+        var payload = Path.Combine(FindRepositoryRoot(), "UnityPackage", "com.blaze.radar", "Bridge~", "win-x64");
+        Assert.Equal(491, Directory.GetFiles(payload, "*", SearchOption.AllDirectories).Length);
+        var result = RunPowerShell(
+            "tests/Radar.Unity.Compatibility.Tests/InvokeReleaseFunctions.ps1",
+            "-Scenario", "ValidateOutput", "-FixtureRoot", payload);
+        Assert.Equal(0, result.ExitCode);
+    }
+
+    [Theory]
+    [InlineData("System.Xaml.dll")]
+    [InlineData("PresentationUI.dll")]
+    [InlineData("vcruntime140_cor3.dll")]
+    [InlineData("Managed.Dependency.dll")]
+    [InlineData("Native.Dependency.dll")]
+    [InlineData("Rid.Managed.dll")]
+    [InlineData("Rid.Native.dll")]
+    [InlineData("fr/Resource.Dependency.resources.dll")]
+    public void PowerShellValidator_RejectsMissingDepsDerivedAsset(string relativePath)
+    {
+        using var fixture = ReleaseFixture.Create();
+        fixture.CreateValidPayload();
+        File.Delete(Path.Combine(fixture.Payload, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+
+        var result = RunPowerShell(
+            "tests/Radar.Unity.Compatibility.Tests/InvokeReleaseFunctions.ps1",
+            "-Scenario", "PrepareOutput", "-FixtureRoot", fixture.Root);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains(Path.GetFileName(relativePath), result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PowerShellValidator_RejectsMalformedDepsJson()
+    {
+        using var fixture = ReleaseFixture.Create();
+        fixture.CreateValidPayload();
+        File.WriteAllText(Path.Combine(fixture.Payload, "RadarBridge.deps.json"), "not-json");
+
+        var result = RunPowerShell(
+            "tests/Radar.Unity.Compatibility.Tests/InvokeReleaseFunctions.ps1",
+            "-Scenario", "PrepareOutput", "-FixtureRoot", fixture.Root);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("valid JSON", result.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void PowerShellValidator_RejectsNonexistentDepsReference()
+    {
+        using var fixture = ReleaseFixture.Create();
+        fixture.CreateValidPayload();
+        var depsPath = Path.Combine(fixture.Payload, "RadarBridge.deps.json");
+        var deps = JsonNode.Parse(File.ReadAllText(depsPath))!.AsObject();
+        deps["targets"]![ReleaseFixture.TargetName]!["App/1.2.0"]!["runtime"]!["lib/net8.0/Does.Not.Exist.dll"] = new JsonObject();
+        File.WriteAllText(depsPath, deps.ToJsonString());
+
+        var result = RunPowerShell(
+            "tests/Radar.Unity.Compatibility.Tests/InvokeReleaseFunctions.ps1",
+            "-Scenario", "PrepareOutput", "-FixtureRoot", fixture.Root);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("Does.Not.Exist.dll", result.Output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -142,6 +210,8 @@ public sealed class ReleaseScriptBehaviorTests
 
     private sealed class ReleaseFixture : IDisposable
     {
+        internal const string TargetName = ".NETCoreApp,Version=v8.0/win-x64";
+
         private ReleaseFixture(string root)
         {
             Root = root;
@@ -172,17 +242,74 @@ public sealed class ReleaseScriptBehaviorTests
 
         public void CreateValidPayload()
         {
-            foreach (var file in new[]
+            Directory.CreateDirectory(Path.Combine(Payload, "fr"));
+            foreach (var relativePath in new[]
                      {
-                         "RadarBridge.exe", "RadarBridge.dll", "RadarBridge.deps.json", "coreclr.dll", "hostfxr.dll",
-                         "hostpolicy.dll", "System.Private.CoreLib.dll", "PresentationFramework.dll", "PresentationCore.dll",
-                         "WindowsBase.dll", "wpfgfx_cor3.dll"
-                     }) File.WriteAllText(Path.Combine(Payload, file), file);
+                         "RadarBridge.exe", "RadarBridge.dll", "coreclr.dll", "hostfxr.dll", "hostpolicy.dll",
+                         "System.Private.CoreLib.dll", "PresentationFramework.dll", "PresentationCore.dll", "WindowsBase.dll", "wpfgfx_cor3.dll",
+                         "System.Xaml.dll", "PresentationUI.dll", "vcruntime140_cor3.dll", "Managed.Dependency.dll",
+                         "Native.Dependency.dll", "Rid.Managed.dll", "Rid.Native.dll",
+                         "fr/Resource.Dependency.resources.dll"
+                     })
+            {
+                var path = Path.Combine(Payload, relativePath.Replace('/', Path.DirectorySeparatorChar));
+                File.WriteAllText(path, relativePath);
+            }
             File.WriteAllText(Path.Combine(Payload, "RadarBridge.runtimeconfig.json"),
                 "{\"runtimeOptions\":{\"includedFrameworks\":[{\"name\":\"Microsoft.NETCore.App\"},{\"name\":\"Microsoft.WindowsDesktop.App\"}]}}");
             File.WriteAllText(Path.Combine(Profiles, "default-profile.json"), "{\"schemaVersion\":2}");
             File.WriteAllText(Path.Combine(Profiles, "f20-profile.json"), "{\"schemaVersion\":2}");
+            var deps = new JsonObject
+            {
+                ["runtimeTarget"] = new JsonObject { ["name"] = TargetName },
+                ["targets"] = new JsonObject
+                {
+                    [TargetName] = new JsonObject
+                    {
+                        ["App/1.2.0"] = new JsonObject { ["runtime"] = Assets("RadarBridge.dll", "lib/net8.0/Managed.Dependency.dll") },
+                        ["RuntimePack/1.0.0"] = new JsonObject
+                        {
+                            ["runtime"] = Assets("coreclr.dll", "System.Private.CoreLib.dll", "PresentationFramework.dll", "PresentationCore.dll", "WindowsBase.dll", "System.Xaml.dll", "PresentationUI.dll"),
+                            ["native"] = Assets("runtimes/win-x64/native/wpfgfx_cor3.dll", "runtimes/win-x64/native/vcruntime140_cor3.dll", "native/Native.Dependency.dll")
+                        },
+                        ["ResourcePack/1.0.0"] = new JsonObject
+                        {
+                            ["resources"] = new JsonObject
+                            {
+                                ["lib/net8.0/fr/Resource.Dependency.resources.dll"] = new JsonObject { ["locale"] = "fr" }
+                            }
+                        },
+                        ["RidPack/1.0.0"] = new JsonObject
+                        {
+                            ["runtimeTargets"] = new JsonObject
+                            {
+                                ["runtimes/win-x64/lib/net8.0/Rid.Managed.dll"] = RuntimeTarget("win-x64", "runtime"),
+                                ["runtimes/win-x64/native/Rid.Native.dll"] = RuntimeTarget("win-x64", "native"),
+                                ["runtimes/linux-x64/native/Ignored.Native.so"] = RuntimeTarget("linux-x64", "native")
+                            }
+                        }
+                    }
+                },
+                ["libraries"] = new JsonObject
+                {
+                    ["App/1.2.0"] = Library(), ["RuntimePack/1.0.0"] = Library(),
+                    ["ResourcePack/1.0.0"] = Library(), ["RidPack/1.0.0"] = Library()
+                }
+            };
+            File.WriteAllText(Path.Combine(Payload, "RadarBridge.deps.json"), deps.ToJsonString());
         }
+
+        private static JsonObject Assets(params string[] paths)
+        {
+            var assets = new JsonObject();
+            foreach (var path in paths) assets[path] = new JsonObject();
+            return assets;
+        }
+
+        private static JsonObject RuntimeTarget(string rid, string assetType) =>
+            new() { ["rid"] = rid, ["assetType"] = assetType };
+
+        private static JsonObject Library() => new() { ["type"] = "project", ["serviceable"] = false };
 
         public void Dispose()
         {

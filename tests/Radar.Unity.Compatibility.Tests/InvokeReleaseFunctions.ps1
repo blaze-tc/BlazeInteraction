@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [ValidateSet('UnsafeDeletion', 'FrameworkDependent', 'PrepareOutput')]
+    [ValidateSet('UnsafeDeletion', 'FrameworkDependent', 'PrepareOutput', 'ValidateOutput')]
     [string]$Scenario,
     [Parameter(Mandatory)]
     [string]$FixtureRoot
@@ -32,5 +32,8 @@ switch ($Scenario) {
         Prepare-BridgePublishOutput -Directory $payload `
             -DefaultProfile (Join-Path $profiles 'default-profile.json') `
             -F20Profile (Join-Path $profiles 'f20-profile.json') -Version '1.2.0'
+    }
+    'ValidateOutput' {
+        Assert-BridgePublishOutput -Directory $FixtureRoot -ExpectedVersion '1.2.0'
     }
 }

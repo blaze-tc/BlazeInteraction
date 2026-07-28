@@ -69,16 +69,145 @@ function Assert-Schema2Profile {
     }
 }
 
+function Get-JsonPropertyValue {
+    param(
+        [AllowNull()] [object]$Object,
+        [Parameter(Mandatory)] [string]$Name
+    )
+    if ($null -eq $Object) { return $null }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $null }
+    return $property.Value
+}
+
+function Assert-JsonObject {
+    param(
+        [AllowNull()] [object]$Value,
+        [Parameter(Mandatory)] [string]$Description
+    )
+    if ($null -eq $Value -or $Value -isnot [PSCustomObject]) {
+        throw "$Description must be an object."
+    }
+}
+
+function Get-PublishedAssetRelativePath {
+    param(
+        [Parameter(Mandatory)] [string]$AssetPath,
+        [Parameter(Mandatory)] [string]$AssetType,
+        [Parameter(Mandatory)] [PSCustomObject]$Metadata
+    )
+
+    $fileName = [System.IO.Path]::GetFileName($AssetPath.Replace('/', '\'))
+    if ([string]::IsNullOrWhiteSpace($fileName)) {
+        throw "$AssetType asset path is invalid: '$AssetPath'."
+    }
+    if ($AssetType -ieq 'runtime' -or $AssetType -ieq 'native') { return $fileName }
+    if ($AssetType -ine 'resources') {
+        throw "runtimeTargets asset '$AssetPath' has unsupported assetType '$AssetType'."
+    }
+
+    $locale = [string](Get-JsonPropertyValue -Object $Metadata -Name 'locale')
+    if ([string]::IsNullOrWhiteSpace($locale) -or $locale -eq '.' -or $locale -eq '..' -or
+        $locale.Contains('/') -or $locale.Contains('\')) {
+        throw "resources asset '$AssetPath' has invalid locale '$locale'."
+    }
+    return [System.IO.Path]::Combine($locale, $fileName)
+}
+
+function Assert-DependencyManifest {
+    param(
+        [Parameter(Mandatory)] [string]$Directory,
+        [Parameter(Mandatory)] [string]$ExpectedRuntimeIdentifier
+    )
+
+    $depsPath = Join-Path $Directory 'RadarBridge.deps.json'
+    try { $deps = Get-Content -LiteralPath $depsPath -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch { throw "RadarBridge.deps.json must contain valid JSON: $($_.Exception.Message)" }
+    Assert-JsonObject -Value $deps -Description 'RadarBridge.deps.json root'
+
+    $runtimeTarget = Get-JsonPropertyValue -Object $deps -Name 'runtimeTarget'
+    Assert-JsonObject -Value $runtimeTarget -Description 'RadarBridge.deps.json runtimeTarget'
+    $targetName = [string](Get-JsonPropertyValue -Object $runtimeTarget -Name 'name')
+    if ([string]::IsNullOrWhiteSpace($targetName)) { throw 'RadarBridge.deps.json is missing runtimeTarget.name.' }
+    $separatorIndex = $targetName.LastIndexOf('/')
+    if ($separatorIndex -lt 0 -or $separatorIndex -eq ($targetName.Length - 1)) {
+        throw "RadarBridge.deps.json runtimeTarget.name does not identify RID '$ExpectedRuntimeIdentifier': $targetName"
+    }
+    $runtimeIdentifier = $targetName.Substring($separatorIndex + 1)
+    if ($runtimeIdentifier -ine $ExpectedRuntimeIdentifier) {
+        throw "RadarBridge.deps.json runtime target RID must be '$ExpectedRuntimeIdentifier', found '$runtimeIdentifier'."
+    }
+
+    $targets = Get-JsonPropertyValue -Object $deps -Name 'targets'
+    Assert-JsonObject -Value $targets -Description 'RadarBridge.deps.json targets'
+    $selectedTarget = Get-JsonPropertyValue -Object $targets -Name $targetName
+    if ($null -eq $selectedTarget) { throw "RadarBridge.deps.json is missing selected target '$targetName'." }
+    Assert-JsonObject -Value $selectedTarget -Description "RadarBridge.deps.json selected target '$targetName'"
+
+    $libraries = Get-JsonPropertyValue -Object $deps -Name 'libraries'
+    Assert-JsonObject -Value $libraries -Description 'RadarBridge.deps.json libraries'
+    if (@($libraries.PSObject.Properties).Count -eq 0) { throw 'RadarBridge.deps.json is missing libraries.' }
+
+    $requiredAssets = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $discoveredAssetCount = 0
+    foreach ($libraryProperty in $selectedTarget.PSObject.Properties) {
+        $library = $libraryProperty.Value
+        Assert-JsonObject -Value $library -Description "RadarBridge.deps.json target library '$($libraryProperty.Name)'"
+        $catalogLibrary = Get-JsonPropertyValue -Object $libraries -Name $libraryProperty.Name
+        if ($null -eq $catalogLibrary -or $catalogLibrary -isnot [PSCustomObject]) {
+            throw "RadarBridge.deps.json target library '$($libraryProperty.Name)' is missing from libraries."
+        }
+
+        foreach ($assetType in @('runtime', 'native', 'resources')) {
+            $section = Get-JsonPropertyValue -Object $library -Name $assetType
+            if ($null -eq $section) { continue }
+            Assert-JsonObject -Value $section -Description "RadarBridge.deps.json library '$($libraryProperty.Name)' $assetType assets"
+            foreach ($asset in $section.PSObject.Properties) {
+                Assert-JsonObject -Value $asset.Value -Description "$assetType asset '$($asset.Name)' metadata"
+                $relativePath = Get-PublishedAssetRelativePath -AssetPath $asset.Name -AssetType $assetType -Metadata $asset.Value
+                [void]$requiredAssets.Add($relativePath)
+                $discoveredAssetCount++
+            }
+        }
+
+        $runtimeTargets = Get-JsonPropertyValue -Object $library -Name 'runtimeTargets'
+        if ($null -ne $runtimeTargets) {
+            Assert-JsonObject -Value $runtimeTargets -Description "RadarBridge.deps.json library '$($libraryProperty.Name)' runtimeTargets assets"
+            foreach ($asset in $runtimeTargets.PSObject.Properties) {
+                Assert-JsonObject -Value $asset.Value -Description "runtimeTargets asset '$($asset.Name)' metadata"
+                $rid = [string](Get-JsonPropertyValue -Object $asset.Value -Name 'rid')
+                $assetType = [string](Get-JsonPropertyValue -Object $asset.Value -Name 'assetType')
+                if ([string]::IsNullOrWhiteSpace($rid) -or [string]::IsNullOrWhiteSpace($assetType)) {
+                    throw "runtimeTargets asset '$($asset.Name)' must declare rid and assetType."
+                }
+                if ($rid -ine $ExpectedRuntimeIdentifier) { continue }
+                $relativePath = Get-PublishedAssetRelativePath -AssetPath $asset.Name -AssetType $assetType -Metadata $asset.Value
+                [void]$requiredAssets.Add($relativePath)
+                $discoveredAssetCount++
+            }
+        }
+    }
+
+    if ($discoveredAssetCount -eq 0) {
+        throw "RadarBridge.deps.json selected target '$targetName' contains no runtime, native, resources or runtimeTargets assets."
+    }
+    foreach ($relativePath in $requiredAssets) {
+        $path = Join-Path $Directory $relativePath
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw "RadarBridge dependency asset is missing: $relativePath"
+        }
+    }
+}
+
 function Assert-SelfContainedRuntime {
     param([Parameter(Mandatory)] [string]$Directory)
 
     foreach ($name in @(
         'RadarBridge.exe', 'RadarBridge.dll', 'RadarBridge.deps.json', 'RadarBridge.runtimeconfig.json',
-        'coreclr.dll', 'hostfxr.dll', 'hostpolicy.dll', 'System.Private.CoreLib.dll',
-        'PresentationFramework.dll', 'PresentationCore.dll', 'WindowsBase.dll', 'wpfgfx_cor3.dll')) {
+        'hostfxr.dll', 'hostpolicy.dll')) {
         $path = Join-Path $Directory $name
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-            throw "RadarBridge self-contained runtime dependency is missing: $path"
+            throw "Required RadarBridge host file is missing: $name"
         }
     }
 
@@ -96,6 +225,7 @@ function Assert-SelfContainedRuntime {
             throw "RadarBridge runtimeconfig is missing included framework '$framework'."
         }
     }
+    Assert-DependencyManifest -Directory $Directory -ExpectedRuntimeIdentifier 'win-x64'
 }
 
 function Write-BridgeVersionMarker {
