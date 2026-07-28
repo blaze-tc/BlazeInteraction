@@ -11,6 +11,43 @@ namespace Yuexin.Radar.Bridge.Wpf.Tests;
 public sealed class RuntimeLoggingTests
 {
     [Fact]
+    public async Task RuntimeMetrics_AreSampledOncePerSecondInsteadOfWrittenForEveryFrame()
+    {
+        var configuration = Configuration("unused");
+        var factory = new LoggingPipelineFactory();
+        await using var coordinator = new RadarBridgeCoordinator(
+            configuration,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<RadarBridgeCoordinator>.Instance,
+            factory);
+        var logs = new ConcurrentQueue<string>();
+        coordinator.LogReceived += logs.Enqueue;
+        await coordinator.ApplyUnityTopologyAsync(new HelloPayload(
+            Environment.ProcessId,
+            "2021.3.45f1",
+            [new RadarScreenDefinitionPayload("front", "Front", 1920, 1080, true, 0)]));
+
+        var start = DateTimeOffset.UnixEpoch.AddMinutes(1);
+        for (var index = 0; index < 30; index++)
+        {
+            var timestamp = start.AddMilliseconds(index * 33L);
+            factory.Pipeline.PublishSnapshot(Snapshot(timestamp, index + 1));
+            factory.Pipeline.PublishDetection(Detection(timestamp, 400 + index, 300));
+            coordinator.TickForTest(timestamp);
+        }
+
+        Assert.Single(logs.Where(value => value.Contains("[front/f1]", StringComparison.Ordinal) && value.Contains("raw=", StringComparison.Ordinal)));
+        Assert.Single(logs.Where(value => value.Contains("[front/FUSION]", StringComparison.Ordinal)));
+
+        var afterInterval = start.AddSeconds(1);
+        factory.Pipeline.PublishSnapshot(Snapshot(afterInterval, 31));
+        factory.Pipeline.PublishDetection(Detection(afterInterval, 450, 300));
+        coordinator.TickForTest(afterInterval);
+
+        Assert.Equal(2, logs.Count(value => value.Contains("[front/f1]", StringComparison.Ordinal) && value.Contains("raw=", StringComparison.Ordinal)));
+        Assert.Equal(2, logs.Count(value => value.Contains("[front/FUSION]", StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public async Task RequiredRuntimeDiagnostics_IncludeSensorFusionAndIpcMetrics()
     {
         var pipeName = "RadarControl.Logging." + Guid.NewGuid().ToString("N");
@@ -335,6 +372,21 @@ public sealed class RuntimeLoggingTests
 
     private static SensorDetectionFrame Detection(string sensorId, DateTimeOffset timestamp, float x, float y) =>
         new(sensorId, timestamp, [new SensorDetection(1, x, y, 1)]);
+
+    private static RadarSensorRuntimeSnapshot Snapshot(DateTimeOffset timestamp, long sequence) => new(
+        "front",
+        "f1",
+        sequence,
+        timestamp,
+        [new RadarPoint(100, 100, 1, 1, 1)],
+        [new RadarPoint(100, 100, 1, 1, 1)],
+        [new RadarCluster(1, [new RadarPoint(100, 100, 1, 1, 1)], 1, 1, 0.1f, 1)],
+        [new SensorDetection(1, 400, 300, 1)],
+        30,
+        1024,
+        0,
+        0,
+        0);
 
     private static RadarScreenPointer Pointer(int pointerId, RadarPointerPhase phase) => new(
         pointerId,

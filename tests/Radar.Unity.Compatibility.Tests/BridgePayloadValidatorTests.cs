@@ -10,7 +10,7 @@ public sealed class BridgePayloadValidatorTests
     {
         var payload = Path.Combine(FindRepositoryRoot(), "UnityPackage", "com.blaze.radar", "Bridge~", "win-x64");
         Assert.Equal(491, Directory.GetFiles(payload, "*", SearchOption.AllDirectories).Length);
-        Assert.Null(Validate(payload));
+        Assert.Null(Validate(payload, "1.2.1"));
     }
 
     [Fact]
@@ -196,13 +196,13 @@ public sealed class BridgePayloadValidatorTests
         Assert.Contains(profileName, Validate(fixture.Root), StringComparison.Ordinal);
     }
 
-    private static string? Validate(string directory)
+    private static string? Validate(string directory, string expectedVersion = "1.2.0")
     {
         var type = typeof(BridgePayloadValidatorTests).Assembly.GetType("Blaze.Radar.Internal.BridgePayloadValidator");
         Assert.NotNull(type);
         var method = type.GetMethod("Validate", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
         Assert.NotNull(method);
-        return (string?)method.Invoke(null, new object[] { directory, "1.2.0" });
+        return (string?)method.Invoke(null, new object[] { directory, expectedVersion });
     }
 
     private static string FindRepositoryRoot()

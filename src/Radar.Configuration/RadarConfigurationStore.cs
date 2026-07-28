@@ -52,6 +52,27 @@ public static class RadarConfigurationStore
         return migrated;
     }
 
+    /// <summary>
+    /// Loads a user-facing runtime configuration and recovers rejected legacy or malformed files.
+    /// The original bytes are preserved before a writable default replaces the unusable source.
+    /// </summary>
+    public static async Task<RadarAppConfiguration> LoadOrRecoverAsync(
+        string path,
+        CancellationToken cancellationToken = default)
+    {
+        var loaded = await LoadAsync(path, cancellationToken).ConfigureAwait(false);
+        if (loaded.CanPersist) return loaded;
+
+        var diagnostics = loaded.LoadWarnings.ToArray();
+        var backupPath = CreateRejectedBackup(path);
+        var recovered = RadarAppConfiguration.CreateDefault();
+        recovered.LoadWarnings.AddRange(diagnostics);
+        recovered.LoadWarnings.Add(
+            $"Configuration load was rejected and recovered with writable defaults; original preserved at '{backupPath}'.");
+        await SaveAsync(path, recovered, cancellationToken).ConfigureAwait(false);
+        return recovered;
+    }
+
     public static async Task SaveAsync(string path, RadarAppConfiguration configuration, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -237,6 +258,28 @@ public static class RadarConfigurationStore
             catch (IOException) when (File.Exists(backupPath))
             {
                 // Timestamp collisions are rare but must never overwrite an earlier backup.
+            }
+        }
+    }
+
+    private static string CreateRejectedBackup(string path)
+    {
+        var directory = Path.GetDirectoryName(Path.GetFullPath(path))!;
+        var baseName = Path.GetFileNameWithoutExtension(path);
+        for (var attempt = 0; ; attempt++)
+        {
+            var suffix = attempt == 0 ? string.Empty : $".{attempt}";
+            var backupPath = Path.Combine(
+                directory,
+                $"{baseName}.rejected.{DateTime.UtcNow:yyyyMMddHHmmssfff}{suffix}.bak");
+            try
+            {
+                File.Copy(path, backupPath, overwrite: false);
+                return backupPath;
+            }
+            catch (IOException) when (File.Exists(backupPath))
+            {
+                // Never overwrite an earlier rejected configuration backup.
             }
         }
     }

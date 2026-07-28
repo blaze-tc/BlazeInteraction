@@ -4,6 +4,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
 using System.Text;
@@ -40,6 +41,9 @@ namespace Blaze.Radar
         private readonly ConcurrentQueue<Action> _mainThreadActions = new ConcurrentQueue<Action>();
         private readonly SemaphoreSlim _writeLock = new SemaphoreSlim(1, 1);
         private readonly object _lifecycleSync = new object();
+        private readonly object _errorSync = new object();
+        private readonly Dictionary<string, long> _recentErrorTicks = new Dictionary<string, long>();
+        private static readonly long ErrorRepeatWindowTimestampTicks = Stopwatch.Frequency * 10L;
         private CancellationTokenSource _cancellation;
         private Task _runTask;
         private Task _stopTask;
@@ -253,7 +257,6 @@ namespace Blaze.Radar
                     try
                     {
                         await pipe.ConnectAsync(_connectTimeoutMilliseconds, cancellationToken).ConfigureAwait(false);
-                        LastError = string.Empty;
                         await WriteEnvelopeAsync(
                             pipe,
                             RadarIpcProtocol.Create(RadarIpcMessageType.Hello, NextSequence(), _hello),
@@ -287,6 +290,12 @@ namespace Blaze.Radar
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
                         break;
+                    }
+                    catch (TimeoutException) when (!pipe.IsConnected)
+                    {
+                        // Waiting for RadarBridge is the normal cold-start and reconnect state.
+                        // The connection state already communicates that status to Unity; repeating
+                        // the same Named Pipe timeout every retry only hides actionable errors.
                     }
                     catch (Exception exception) when (
                         exception is IOException ||
@@ -383,6 +392,7 @@ namespace Blaze.Radar
                     Capability = helloAck.capability ?? string.Empty;
                     HasRunningSensors = helloAck.connected;
                     AcknowledgedScreens = CopyScreens(helloAck.screens);
+                    LastError = string.Empty;
                     SetConnected(true);
                     return true;
 
@@ -508,7 +518,38 @@ namespace Blaze.Radar
         private void ReportError(string message)
         {
             var captured = string.IsNullOrWhiteSpace(message) ? "Unknown IPC error." : message;
-            LastError = captured;
+            var nowTicks = Stopwatch.GetTimestamp();
+            lock (_errorSync)
+            {
+                LastError = captured;
+                long previousTicks;
+                if (_recentErrorTicks.TryGetValue(captured, out previousTicks) &&
+                    nowTicks - previousTicks < ErrorRepeatWindowTimestampTicks)
+                {
+                    return;
+                }
+
+                _recentErrorTicks[captured] = nowTicks;
+                if (_recentErrorTicks.Count > 32)
+                {
+                    var oldestMessage = string.Empty;
+                    var oldestTicks = long.MaxValue;
+                    foreach (var entry in _recentErrorTicks)
+                    {
+                        if (entry.Value < oldestTicks)
+                        {
+                            oldestMessage = entry.Key;
+                            oldestTicks = entry.Value;
+                        }
+                    }
+
+                    if (!string.IsNullOrEmpty(oldestMessage))
+                    {
+                        _recentErrorTicks.Remove(oldestMessage);
+                    }
+                }
+            }
+
             _mainThreadActions.Enqueue(() => InvokeSafely(ErrorReceived, captured));
         }
 

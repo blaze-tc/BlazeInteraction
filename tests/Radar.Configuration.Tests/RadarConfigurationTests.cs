@@ -524,6 +524,33 @@ public sealed class RadarConfigurationTests
     }
 
     [Theory]
+    [InlineData("{\"schemaVersion\":99,\"screens\":[]}")]
+    [InlineData("{\"schemaVersion\":2,\"screens\":[")]
+    [InlineData("{\"screens\":[]}")]
+    public async Task LoadOrRecoverAsync_RejectedConfigurationIsBackedUpAndReplacedWithWritableDefaults(
+        string rejectedJson)
+    {
+        await WithTemporaryConfigurationAsync(async (directory, path) =>
+        {
+            var original = System.Text.Encoding.UTF8.GetBytes(rejectedJson);
+            await File.WriteAllBytesAsync(path, original);
+
+            var recovered = await RadarConfigurationStore.LoadOrRecoverAsync(path);
+
+            Assert.True(recovered.CanPersist);
+            Assert.Equal(2, recovered.SchemaVersion);
+            var backup = Assert.Single(Directory.GetFiles(directory, "config.rejected.*.bak"));
+            Assert.Equal(original, await File.ReadAllBytesAsync(backup));
+            Assert.Contains(recovered.LoadWarnings, warning =>
+                warning.Contains("recovered", StringComparison.OrdinalIgnoreCase) &&
+                warning.Contains(backup, StringComparison.OrdinalIgnoreCase));
+            var reloaded = await RadarConfigurationStore.LoadAsync(path);
+            Assert.True(reloaded.CanPersist);
+            Assert.Equal(2, reloaded.SchemaVersion);
+        });
+    }
+
+    [Theory]
     [InlineData("{\"schemaVersion\":1,\"tracking\":null}", "root.tracking")]
     [InlineData("{\"schemaVersion\":2,\"screens\":[null]}", "root.screens[0]")]
     [InlineData("{\"schemaVersion\":2,\"screens\":[{\"screenId\":\"main\",\"sensors\":[null]}]}", "sensors[0]")]

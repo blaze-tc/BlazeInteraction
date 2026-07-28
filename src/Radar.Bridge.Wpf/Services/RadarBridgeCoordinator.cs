@@ -23,6 +23,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private readonly SemaphoreSlim _topologyLock = new(1, 1);
     private readonly Dictionary<string, ScreenRuntime> _screens = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<(string ScreenId, int PointerId), DateTimeOffset> _lastPointerMoveLogAt = [];
+    private readonly Dictionary<string, DateTimeOffset> _lastRuntimeMetricLogAt = new(StringComparer.OrdinalIgnoreCase);
     private readonly Queue<TransitionFrame> _transitionFrames = new();
     private TransitionFrame? _inFlightTransition;
     private readonly HashSet<Task> _retirementTasks = [];
@@ -31,6 +32,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private static readonly TimeSpan PipelineCleanupTimeout = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan PointerMoveLogInterval = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan PointerMoveLogStateTtl = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan RuntimeMetricLogInterval = TimeSpan.FromSeconds(1);
     private RadarPipeServer? _pipeServer;
     private Task? _pipeTask;
     private Task? _schedulerTask;
@@ -487,8 +489,11 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             return;
         }
         SetUnityStatus(UnityStatus with { LastBatchSentAt = batch.Timestamp, LastBatchSequence = batch.Sequence, LastError = null });
-        var latencyMilliseconds = Math.Max(0d, (DateTimeOffset.UtcNow - batch.Timestamp).TotalMilliseconds);
-        PublishLog($"[IPC] batch={batch.Sequence} screens={batch.Payload.Screens.Count} pointers={batch.Payload.Screens.Sum(frame => frame.Pointers.Count)} latencyMs={latencyMilliseconds:0.0}");
+        if (ShouldPublishRuntimeMetricLog("ipc", batch.Timestamp))
+        {
+            var latencyMilliseconds = Math.Max(0d, (DateTimeOffset.UtcNow - batch.Timestamp).TotalMilliseconds);
+            PublishLog($"[IPC] batch={batch.Sequence} screens={batch.Payload.Screens.Count} pointers={batch.Payload.Screens.Sum(frame => frame.Pointers.Count)} latencyMs={latencyMilliseconds:0.0}");
+        }
         var cleanup = await ConfirmTransitionAsync(batch, cancellationToken).ConfigureAwait(false);
         if (cleanup is not null) TrackRetirement(cleanup);
     }
@@ -653,7 +658,12 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private void OnSensorSnapshot(ScreenRuntime runtime, PipelineRuntime binding, RadarSensorRuntimeSnapshot snapshot)
     {
         binding.LastSnapshot = snapshot;
-        PublishLog($"[{runtime.Info.ScreenId}/{binding.Configuration.SensorId}] raw={snapshot.RawPoints.Count} valid={snapshot.ValidPoints.Count} crc={snapshot.CrcErrorCount}");
+        if (ShouldPublishRuntimeMetricLog(
+                $"sensor:{runtime.Info.ScreenId}/{binding.Configuration.SensorId}",
+                snapshot.Timestamp))
+        {
+            PublishLog($"[{runtime.Info.ScreenId}/{binding.Configuration.SensorId}] raw={snapshot.RawPoints.Count} valid={snapshot.ValidPoints.Count} crc={snapshot.CrcErrorCount}");
+        }
         InvokeSafely(SensorSnapshotUpdated, snapshot);
     }
 
@@ -666,7 +676,10 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private void PublishScreenSnapshot(ScreenRuntime runtime, RadarScreenFusionResult result, DateTimeOffset timestamp)
     {
         var sequence = Volatile.Read(ref _batchSequence) + 1;
-        PublishLog($"[{runtime.Info.ScreenId}/FUSION] groups={result.Targets.Count} pointers={result.Pointers.Count}");
+        if (ShouldPublishRuntimeMetricLog($"fusion:{runtime.Info.ScreenId}", timestamp))
+        {
+            PublishLog($"[{runtime.Info.ScreenId}/FUSION] groups={result.Targets.Count} pointers={result.Pointers.Count}");
+        }
         foreach (var pointer in result.Pointers)
         {
             PublishPointerLog(runtime.Info.ScreenId, pointer, timestamp);
@@ -710,6 +723,23 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
 
         _lastPointerMoveLogAt[key] = timestamp;
         return true;
+    }
+
+    private bool ShouldPublishRuntimeMetricLog(string key, DateTimeOffset timestamp)
+    {
+        lock (_lastRuntimeMetricLogAt)
+        {
+            if (_lastRuntimeMetricLogAt.TryGetValue(key, out var previous))
+            {
+                if (timestamp >= previous && timestamp - previous < RuntimeMetricLogInterval)
+                {
+                    return false;
+                }
+            }
+
+            _lastRuntimeMetricLogAt[key] = timestamp;
+            return true;
+        }
     }
 
     internal bool ShouldPublishPointerLogForTest(
@@ -920,10 +950,33 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         }
     }
 
-    private async Task StartIsolatedAsync(string screenId, PipelineRuntime pipeline, CancellationToken cancellationToken)
+    private void StartEnabledPipelinesInBackground()
     {
-        try { await pipeline.Pipeline.StartAsync(cancellationToken).ConfigureAwait(false); }
-        catch (Exception exception) { PublishLog($"[{screenId}/{pipeline.Configuration.SensorId}] start fault: {exception.Message}"); }
+        var pending = AssociatedRuntimes()
+            .SelectMany(runtime => runtime.Pipelines.Values.Select(pipeline =>
+                StartIsolatedAsync(runtime.Info.ScreenId, pipeline.Configuration.SensorId, _lifetime.Token)))
+            .ToArray();
+        if (pending.Length != 0) TrackRetirement(Task.WhenAll(pending));
+    }
+
+    private async Task StartIsolatedAsync(string screenId, string sensorId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await UsePipelineAsync(
+                screenId,
+                sensorId,
+                (pipeline, token) => pipeline.StartAsync(token),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+            // Coordinator shutdown cancels any in-flight automatic connection attempt.
+        }
+        catch (Exception exception)
+        {
+            PublishLog($"[{screenId}/{sensorId}] start fault: {exception.Message}");
+        }
     }
 
     private async Task StopIsolatedAsync(string screenId, PipelineRuntime pipeline)
@@ -1108,8 +1161,12 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             throw new InvalidOperationException("Configuration was rejected during loading and cannot be reconciled or saved. Create a new configuration explicitly first.");
     }
 
-    private void OnUnityConnected(HelloPayload hello) => SetUnityStatus(new UnityClientStatus(true, hello.UnityProcessId, hello.UnityVersion,
-        AssociatedRuntimes().Select(runtime => runtime.Info).ToArray(), UnityStatus.LastBatchSentAt, UnityStatus.LastBatchSequence, null));
+    private void OnUnityConnected(HelloPayload hello)
+    {
+        SetUnityStatus(new UnityClientStatus(true, hello.UnityProcessId, hello.UnityVersion,
+            AssociatedRuntimes().Select(runtime => runtime.Info).ToArray(), UnityStatus.LastBatchSentAt, UnityStatus.LastBatchSequence, null));
+        StartEnabledPipelinesInBackground();
+    }
     private void OnUnityDisconnected() => SetUnityStatus(UnityClientStatus.Disconnected with { LastBatchSequence = UnityStatus.LastBatchSequence, LastBatchSentAt = UnityStatus.LastBatchSentAt });
     private void OnPipeError(Exception exception) => SetUnityStatus(UnityStatus with { LastError = exception.Message });
     private void OnPipeMessage(IpcEnvelope envelope) { if (envelope.MessageType == IpcMessageType.Shutdown) PublishLog("[GLOBAL/IPC] Unity requested shutdown."); }

@@ -12,7 +12,7 @@ public sealed class PackageIdentityTests
 
         using var packageJson = JsonDocument.Parse(File.ReadAllText(Path.Combine(packageRoot, "package.json")));
         Assert.Equal("com.blaze.radar", packageJson.RootElement.GetProperty("name").GetString());
-        const string expectedReleaseVersion = "1.2.0";
+        const string expectedReleaseVersion = "1.2.1";
         Assert.Equal(expectedReleaseVersion, packageJson.RootElement.GetProperty("version").GetString());
         Assert.Equal("Blaze Radar SDK", packageJson.RootElement.GetProperty("displayName").GetString());
 
@@ -24,11 +24,11 @@ public sealed class PackageIdentityTests
             repositoryRoot, "src", "Radar.Bridge.Wpf", "BridgeVersion.cs"));
         Assert.Contains($"Value = \"{expectedReleaseVersion}\"", bridgeCoordinatorSource, StringComparison.Ordinal);
         var mainWindow = File.ReadAllText(Path.Combine(repositoryRoot, "src", "Radar.Bridge.Wpf", "MainWindow.xaml"));
-        Assert.Contains("Bridge 1.2.0 · IPC 2 · Windows x64", mainWindow, StringComparison.Ordinal);
+        Assert.Contains("Bridge 1.2.1 · IPC 2 · Windows x64", mainWindow, StringComparison.Ordinal);
 
         var bridgeProject = File.ReadAllText(Path.Combine(
             repositoryRoot, "src", "Radar.Bridge.Wpf", "Radar.Bridge.Wpf.csproj"));
-        Assert.Contains("<Version>1.2.0</Version>", bridgeProject, StringComparison.Ordinal);
+        Assert.Contains("<Version>1.2.1</Version>", bridgeProject, StringComparison.Ordinal);
 
         var embeddedVersion = File.ReadAllText(Path.Combine(
             packageRoot, "Bridge~", "win-x64", "bridge-version.txt")).Trim();
@@ -123,6 +123,27 @@ public sealed class PackageIdentityTests
     }
 
     [Fact]
+    public void MultiScreenSample_AutoStartsBridgeButKeepsIpcSelectionExplicit()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var packageRoot = Path.Combine(repositoryRoot, "UnityPackage", "com.blaze.radar");
+        var sampleRoot = Path.Combine(packageRoot, "Samples~", "MultiScreenCameraRouting");
+        var scene = File.ReadAllText(Path.Combine(sampleRoot, "MultiScreenCameraRouting.unity"));
+        var settings = File.ReadAllText(Path.Combine(sampleRoot, "MultiScreenRadarSettings.asset"));
+        var launcherGuid = File.ReadLines(Path.Combine(packageRoot, "Runtime", "RadarBridgeLauncher.cs.meta"))
+            .Single(line => line.StartsWith("guid: ", StringComparison.Ordinal))["guid: ".Length..];
+        var settingsGuid = File.ReadLines(Path.Combine(sampleRoot, "MultiScreenRadarSettings.asset.meta"))
+            .Single(line => line.StartsWith("guid: ", StringComparison.Ordinal))["guid: ".Length..];
+
+        Assert.Contains("  autoStart: 1", settings, StringComparison.Ordinal);
+        Assert.Contains($"m_Script: {{fileID: 11500000, guid: {launcherGuid}, type: 3}}", scene, StringComparison.Ordinal);
+        Assert.Contains($"settings: {{fileID: 11400000, guid: {settingsGuid}, type: 2}}", scene, StringComparison.Ordinal);
+        Assert.Contains("  AutoStart: 1", scene, StringComparison.Ordinal);
+        Assert.Contains("  autoConnect: 0", scene, StringComparison.Ordinal);
+        Assert.Contains("  startMode: 0", scene, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void UnityLifecycleCallbacks_GuardBridgeStartupFailures()
     {
         var launcherSource = File.ReadAllText(Path.Combine(
@@ -181,7 +202,7 @@ public sealed class PackageIdentityTests
         var packageRoot = Path.Combine(repositoryRoot, "UnityPackage", "com.blaze.radar");
         using var packageJson = JsonDocument.Parse(File.ReadAllText(Path.Combine(packageRoot, "package.json")));
         Assert.Equal("com.blaze.radar", packageJson.RootElement.GetProperty("name").GetString());
-        Assert.Equal("1.2.0", packageJson.RootElement.GetProperty("version").GetString());
+        Assert.Equal("1.2.1", packageJson.RootElement.GetProperty("version").GetString());
         Assert.Equal("2021.3", packageJson.RootElement.GetProperty("unity").GetString());
 
         var definitionSource = File.ReadAllText(Path.Combine(packageRoot, "Runtime", "RadarScreenDefinition.cs"));
@@ -206,10 +227,10 @@ public sealed class PackageIdentityTests
     }
 
     [Fact]
-    public void ReleaseDocumentation_UsesTheTagged120PackageUrlWithoutLegacy11xUrls()
+    public void ReleaseDocumentation_UsesTheTagged121PackageUrlWithoutLegacy11xUrls()
     {
         const string taggedUrl =
-            "https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.0";
+            "https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.1";
         var repositoryRoot = FindRepositoryRoot();
         var documentationPaths = new[]
         {

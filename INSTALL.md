@@ -1,6 +1,6 @@
-# RadarControl 1.2.0 安装、升级与现场验收
+# RadarControl 1.2.1 安装、升级与现场验收
 
-本文面向 Unity 开发者和现场操作员。Blaze Radar SDK 1.2.0 使用 IPC 2，包内提供 Windows x64 的完整 self-contained Bridge，不需要另装 .NET Runtime。
+本文面向 Unity 开发者和现场操作员。Blaze Radar SDK 1.2.1 使用 IPC 2，包内提供 Windows x64 的完整 self-contained Bridge，不需要另装 .NET Runtime。
 
 ## 1. 环境
 
@@ -16,14 +16,14 @@
 4. Package Manager 选择 **Add package from git URL**，粘贴：
 
    ```text
-   https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.0
+   https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.1
    ```
 
-5. 选择 Blaze Radar SDK，确认 Version 为 `1.2.0`。查看详情中的 Resolved Path：Git 包应来自本项目新解析的 `Library/PackageCache/com.blaze.radar@...`，不能指向旧缓存或意外的本地克隆。`Packages/packages-lock.json` 中也应只有 `com.blaze.radar` 的当前 Git dependency/revision。
+5. 选择 Blaze Radar SDK，确认 Version 为 `1.2.1`。查看详情中的 Resolved Path：Git 包应来自本项目新解析的 `Library/PackageCache/com.blaze.radar@...`，不能指向旧缓存或意外的本地克隆。`Packages/packages-lock.json` 中也应只有 `com.blaze.radar` 的当前 Git dependency/revision。
 6. 若仍解析旧内容，关闭 Unity，只删除该项目 `Library/PackageCache` 下对应的 `com.blaze.radar@...` 缓存和 `packages-lock.json` 中该包条目，再重开 Unity 让 Package Manager 从上述标签重新解析。不要删除共享仓库或整个用户目录。
 7. 重新导入 **Basic Interaction** 与 **Multi-Screen Camera Routing** Samples。
 
-也可在 `Packages/manifest.json` 的 `dependencies` 中使用同一 URL。离线开发可克隆仓库并 checkout `v1.2.0`，然后 **Add package from disk** 选择 `UnityPackage/com.blaze.radar/package.json`；此时 Resolved Path 应明确指向该克隆目录。
+也可在 `Packages/manifest.json` 的 `dependencies` 中使用同一 URL。离线开发可克隆仓库并 checkout `v1.2.1`，然后 **Add package from disk** 选择 `UnityPackage/com.blaze.radar/package.json`；此时 Resolved Path 应明确指向该克隆目录。
 
 ## 3. 配置任意逻辑屏幕
 
@@ -41,7 +41,7 @@
 | `FRONT` | 正墙，Primary | `F1`、`F2` | 两个 OutputRect 保留物理交叠区，同屏融合去重 |
 | `RIGHT` | 右墙 | `R1` | 一个雷达覆盖右墙 |
 
-不要把 F1/F2 拆成两个 Unity 屏幕；它们属于同一个 `FRONT`，融合和 Pointer ID 稳定性以屏幕为边界。1.2.0 不提供跨屏人员身份延续。
+不要把 F1/F2 拆成两个 Unity 屏幕；它们属于同一个 `FRONT`，融合和 Pointer ID 稳定性以屏幕为边界。1.2.1 不提供跨屏人员身份延续。
 
 ## 4. Bridge 操作员配置
 
@@ -75,7 +75,7 @@
 ### Multi-Screen Camera Routing
 
 1. 先选 **LOCAL**：无需 Bridge，逐屏注入本地指针，检查 LEFT/FRONT/RIGHT 的 Display、Camera `pixelRect`、RenderTexture、UI 和 world particles。
-2. 再选 **BRIDGE IPC**：启动 1.2.0 Bridge，让 Project Settings 拓扑完成 Hello/HelloAck，逐屏/逐雷达模拟或真机输入，确认 screenId、逻辑/像素坐标和 Camera 命中一致。
+2. 再选 **BRIDGE IPC**：启动 1.2.1 Bridge，让 Project Settings 拓扑完成 Hello/HelloAck，逐屏/逐雷达模拟或真机输入，确认 screenId、逻辑/像素坐标和 Camera 命中一致。
 3. FRONT 同时运行 F1/F2，反复走过交叠区；只能看到一个稳定 Pointer，不能产生双击。
 
 ## 7. 日志对时
@@ -86,7 +86,7 @@ Bridge 日志位于 `%LOCALAPPDATA%/RadarControl/logs/`，消息包含 `[SCREEN/
 
 ## 8. Windows Player 与 Bridge 身份验证
 
-构建处理器从 Package Manager 当前 Resolved Path 读取 `Bridge~/win-x64`，删除 Player 旁旧 `RadarBridge/`，复制完整目录，并检查 package `1.2.0`、SDK `1.2.0`、`bridge-version.txt`、必需文件和 EXE SHA-256。任一不一致应使 Build 失败。
+构建处理器从 Package Manager 当前 Resolved Path 读取 `Bridge~/win-x64`，删除 Player 旁旧 `RadarBridge/`，复制完整目录，并检查 package `1.2.1`、SDK `1.2.1`、`bridge-version.txt`、必需文件和 EXE SHA-256。任一不一致应使 Build 失败。
 
 构建后在发布机记录：
 
@@ -96,11 +96,11 @@ Get-FileHash .\RadarBridge\RadarBridge.exe -Algorithm SHA256
 Get-ChildItem .\RadarBridge -File -Recurse | Measure-Object
 ```
 
-版本必须是 `1.2.0`，SHA 必须等于已审核包内 `Bridge~/win-x64/RadarBridge.exe`。若不一致，先确认 Package Manager Resolved Path，再按第 2 节清理该项目的陈旧包缓存并重新 Build；不要手工用另一台机器的 EXE 覆盖。
+版本必须是 `1.2.1`，SHA 必须等于已审核包内 `Bridge~/win-x64/RadarBridge.exe`。若不一致，先确认 Package Manager Resolved Path，再按第 2 节清理该项目的陈旧包缓存并重新 Build；不要手工用另一台机器的 EXE 覆盖。
 
 ## 9. IPC v1/v2 不兼容与投影显示检查
 
-IPC 1 客户端不能消费 IPC 2 PointerBatch，IPC 2 客户端也拒绝旧 PointerFrame。看到 protocol mismatch、旧 Bridge version 或 HelloAck 失败时：退出 Play Mode，关闭旧 Bridge，移除 1.1.x URL/缓存，重新安装 `v1.2.0`，确认 package/SDK/Bridge 都是 `1.2.0` 且日志显示 IPC 2，再启动。不要通过修改 Pipe 名或忽略 Error 绕过主版本检查。
+IPC 1 客户端不能消费 IPC 2 PointerBatch，IPC 2 客户端也拒绝旧 PointerFrame。看到 protocol mismatch、旧 Bridge version 或 HelloAck 失败时：退出 Play Mode，关闭旧 Bridge，移除旧 URL/缓存，重新安装 `v1.2.1`，确认 package/SDK/Bridge 都是 `1.2.1` 且日志显示 IPC 2，再启动。不要通过修改 Pipe 名或忽略 Error 绕过主版本检查。
 
 RadarBridge 在窗口创建前强制 WPF 软件渲染，不依赖现场 GPU 驱动的脏区刷新。投影电脑仍必须实际检查：逐个点击/拖动控件、滚动参数、调整窗口大小、最小化/恢复、跨不同 DPI 显示器移动并切换投影焦点。文字/点云应清晰，任何控件都不能点击后消失或变糊；若出现问题，记录 Windows 缩放、投影分辨率、GPU/驱动、窗口操作和日志时间点。
 

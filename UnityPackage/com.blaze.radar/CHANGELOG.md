@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.1 - 2026-07-28
+
+- Recover rejected, malformed or unsupported Bridge configuration at startup after preserving the original bytes in a timestamped backup.
+- Start every enabled radar pipeline automatically after a successful Unity topology handshake.
+- Treat normal Named Pipe cold-start/reconnect timeouts as pending state and throttle identical actionable IPC errors across reconnect attempts.
+- Throttle high-frequency sensor, fusion and IPC metrics while preserving pointer lifecycle and diagnostic events.
+- Make the Multi-Screen Camera Routing sample launch the bundled RadarBridge automatically while keeping LOCAL/BRIDGE input selection explicit.
+
 ## 1.2.0 - 2026-07-28
 
 - Add arbitrary Unity logical screens with stable IDs, logical resolutions, ordering and exactly one enabled primary screen.

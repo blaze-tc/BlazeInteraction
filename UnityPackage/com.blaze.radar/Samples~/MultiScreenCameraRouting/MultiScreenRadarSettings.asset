@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 3b8f570499faeb64cbdf37f568bff9a4, type: 3}
   m_Name: MultiScreenRadarSettings
   m_EditorClassIdentifier:
-  autoStart: 0
+  autoStart: 1
   exitBridgeWithUnity: 1
   pipeName: Yuexin.RadarBridge
   editorBridgeExecutable:

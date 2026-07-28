@@ -5,7 +5,7 @@ Import **Basic Interaction** from Package Manager, open `BasicInteraction.unity`
 The right-side diagnostics deliberately separate two signals:
 
 - `ScreenFrameReceived` is filtered to the configured primary screen (`main`) and supplies live `PRIMARY`, `FRAME`, and pointer data.
-- `PointerFrameReceived` remains visible as a compatibility-frame counter so an existing single-screen integration can be checked during the 1.2.0 upgrade.
+- `PointerFrameReceived` remains visible as a compatibility-frame counter so an existing single-screen integration can be checked during the 1.2.x upgrade.
 - Frame history is capped at 200 lines; EventSystem/UGUI/error history is capped at 300 lines. `Down`, `Up`, and errors are immediate. Repeated `Move` entries are sampled at 10 Hz per pointer, while the live position always refreshes.
 
 ## Path A — mouse debug

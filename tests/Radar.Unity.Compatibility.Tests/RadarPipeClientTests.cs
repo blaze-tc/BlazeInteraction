@@ -10,6 +10,99 @@ namespace Radar.Unity.Compatibility.Tests;
 public sealed class RadarPipeClientTests
 {
     [Fact]
+    public async Task Client_ColdStartConnectionTimeoutsRemainPendingUntilBridgeBecomesAvailable()
+    {
+        var pipeName = PipeName();
+        using var timeout = Timeout();
+        using var client = new RadarPipeClient(pipeName, 75, 25, 2500);
+        var errors = new List<string>();
+        client.ErrorReceived += errors.Add;
+
+        client.Start(Hello("main"));
+        await Task.Delay(250, timeout.Token);
+        client.DrainMainThreadEvents();
+
+        Assert.Empty(errors);
+        Assert.Equal(string.Empty, client.LastError);
+
+        await using var server = Server(pipeName);
+        await server.WaitForConnectionAsync(timeout.Token);
+        await ReadEnvelopeAsync(server, timeout.Token);
+        await WriteEnvelopeAsync(server, Ack(), timeout.Token);
+        await WaitUntilAsync(() => client.IsConnected, timeout.Token);
+
+        client.DrainMainThreadEvents();
+        Assert.True(client.IsConnected);
+        Assert.Empty(errors);
+        await client.StopAsync();
+    }
+
+    [Fact]
+    public async Task Client_ReconnectWaitDoesNotRepeatNamedPipeTimeoutErrors()
+    {
+        var pipeName = PipeName();
+        using var timeout = Timeout();
+        using var client = new RadarPipeClient(pipeName, 75, 25, 2500);
+        var errors = new List<string>();
+        client.ErrorReceived += errors.Add;
+
+        await using (var server = Server(pipeName))
+        {
+            await ConnectAndAckAsync(server, client, timeout.Token);
+        }
+
+        await WaitUntilAsync(() => !client.IsConnected, timeout.Token);
+        await Task.Delay(300, timeout.Token);
+        client.DrainMainThreadEvents();
+
+        Assert.DoesNotContain(errors, value =>
+            value.Contains("timed out", StringComparison.OrdinalIgnoreCase));
+        Assert.InRange(errors.Count, 1, 1);
+        await client.StopAsync();
+    }
+
+    [Fact]
+    public async Task Client_RepeatedServerRejectionIsReportedOnceAcrossReconnectAttempts()
+    {
+        const string rejection =
+            "Configuration was rejected during loading and cannot be reconciled or saved. " +
+            "Create a new configuration explicitly first.";
+        var pipeName = PipeName();
+        using var timeout = Timeout();
+        using var client = new RadarPipeClient(pipeName, 500, 25, 2500);
+        var errors = new List<string>();
+        client.ErrorReceived += errors.Add;
+        client.Start(Hello("main"));
+
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            await using (var server = Server(pipeName))
+            {
+                await server.WaitForConnectionAsync(timeout.Token);
+                await ReadEnvelopeAsync(server, timeout.Token);
+                await WriteEnvelopeAsync(
+                    server,
+                    RadarIpcProtocol.Create(
+                        RadarIpcMessageType.Error,
+                        attempt + 1,
+                        new RadarErrorPayload { code = "configuration_rejected", message = rejection }),
+                    timeout.Token);
+                await Task.Delay(75, timeout.Token);
+            }
+
+            await Task.Delay(75, timeout.Token);
+            client.DrainMainThreadEvents();
+        }
+
+        Assert.Equal(1, errors.Count(value => value == rejection));
+        Assert.InRange(
+            errors.Count(value => value.Contains("closed the Named Pipe", StringComparison.OrdinalIgnoreCase)),
+            0,
+            1);
+        await client.StopAsync();
+    }
+
+    [Fact]
     public async Task Client_UnityStallPreservesDownMoveUpAndFollowingZeroBatchInOrder()
     {
         var pipeName = PipeName();

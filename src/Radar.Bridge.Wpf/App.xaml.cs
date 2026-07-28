@@ -36,7 +36,7 @@ public partial class App : Application
             var expectedParentProcessId = ReadExpectedParentProcessId(eventArgs.Args);
             _configurationPath = ReadArgument(eventArgs.Args, "--profile")
                 ?? RadarConfigurationStore.GetDefaultUserConfigurationPath();
-            _configuration = await RadarConfigurationStore.LoadAsync(_configurationPath);
+            _configuration = await RadarConfigurationStore.LoadOrRecoverAsync(_configurationPath);
 
             var services = new ServiceCollection();
             services.AddLogging(builder => builder

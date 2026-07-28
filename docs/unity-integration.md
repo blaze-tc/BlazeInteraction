@@ -1,12 +1,12 @@
-# Unity 1.2.0 多屏集成
+# Unity 1.2.1 多屏集成
 
 安装固定标签：
 
 ```text
-https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.0
+https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.1
 ```
 
-升级时先移除 `#v1.1.x` URL 和旧 Sample。Package Manager 必须显示 Blaze Radar SDK `1.2.0`，Resolved Path 必须是这次解析的 `Library/PackageCache/com.blaze.radar@...`（本地包则应是预期克隆路径）。发现旧路径时关闭 Unity，只清理本项目该包缓存/lock 条目，再解析标签；详见 [INSTALL.md](../INSTALL.md)。
+升级时先移除旧 URL 和旧 Sample。Package Manager 必须显示 Blaze Radar SDK `1.2.1`，Resolved Path 必须是这次解析的 `Library/PackageCache/com.blaze.radar@...`（本地包则应是预期克隆路径）。发现旧路径时关闭 Unity，只清理本项目该包缓存/lock 条目，再解析标签；详见 [INSTALL.md](../INSTALL.md)。
 
 ## Project Settings 拓扑
 
@@ -38,12 +38,12 @@ PointerBatch 带 screen summary 和每屏像素坐标，router 只把一屏数�
 
 Basic Interaction：先用 Bridge Simulation，再用真实雷达/IPC，验证 Button、Toggle、Slider、Scroll、2D/3D targets 和完整 Pointer 生命周期。右侧日志与 `Player.log` 提供 Bridge/SDK/IPC、sequence、latency、dropped count、ID、phase 和命中对象。
 
-Multi-Screen Camera Routing：先用 **LOCAL** 无 Bridge 模拟逐屏指针，检查 Display/`pixelRect`/RenderTexture 与 world particles；再用 **BRIDGE IPC** 连接 1.2.0 Bridge，按 LEFT/FRONT/RIGHT 和 L1/F1/F2/R1 逐路验证。FRONT 重叠区必须只有一个稳定 Pointer，不能重复 Click。
+Multi-Screen Camera Routing：先用 **LOCAL** 无 Bridge 模拟逐屏指针，检查 Display/`pixelRect`/RenderTexture 与 world particles；再用 **BRIDGE IPC** 连接 1.2.1 Bridge，按 LEFT/FRONT/RIGHT 和 L1/F1/F2/R1 逐路验证。FRONT 重叠区必须只有一个稳定 Pointer，不能重复 Click。
 
 ## 日志和 Player Build
 
 Bridge 日志以 `[SCREEN/SENSOR]` 和 `[GLOBAL/IPC]` 标记。对齐 `Player.log` 的 SDK/Bridge/IPC、screenId、batch/frame sequence、pointer count、dropped count、timestamp/latency 和 EventSystem target。
 
-Windows Build 后处理器只从当前 Package Manager Resolved Path 取 Bridge，删除旧 Player `RadarBridge/` 后复制完整 self-contained payload，校验 package/SDK/marker 均为 `1.2.0` 和 EXE SHA-256。构建后记录 Player-side marker/SHA；不一致时清理陈旧包缓存并重新 Build，不要手工换 EXE。
+Windows Build 后处理器只从当前 Package Manager Resolved Path 取 Bridge，删除旧 Player `RadarBridge/` 后复制完整 self-contained payload，校验 package/SDK/marker 均为 `1.2.1` 和 EXE SHA-256。构建后记录 Player-side marker/SHA；不一致时清理陈旧包缓存并重新 Build，不要手工换 EXE。
 
-IPC v1/v2 不兼容。protocol mismatch 时关闭旧 Bridge/Player，移除旧 1.1.x URL/cache，确认双方 `1.2.0`/IPC 2 后重连。现场还要完成 [三投影四雷达 8 小时清单](../INSTALL.md#10-现场-8-小时验收三投影四雷达)。
+IPC v1/v2 不兼容。protocol mismatch 时关闭旧 Bridge/Player，移除旧 URL/cache，确认双方 `1.2.1`/IPC 2 后重连。现场还要完成 [三投影四雷达 8 小时清单](../INSTALL.md#10-现场-8-小时验收三投影四雷达)。

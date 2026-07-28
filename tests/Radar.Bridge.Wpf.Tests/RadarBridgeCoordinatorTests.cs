@@ -22,6 +22,28 @@ public sealed class RadarBridgeCoordinatorTests
     }
 
     [Fact]
+    public async Task Coordinator_UnityHandshakeAutomaticallyStartsEveryEnabledSensorPipeline()
+    {
+        var configuration = ThreeScreenFourSensorConfiguration();
+        var factory = new FakePipelineFactory();
+        await using var coordinator = CreateCoordinator(configuration, factory);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await coordinator.StartInfrastructureAsync(cancellation.Token);
+
+        await using var client = await ConnectAsync(configuration.Ipc.PipeName, cancellation.Token);
+        var created = factory.Created.ToArray();
+        Assert.Equal(4, created.Length);
+        await Task.WhenAll(created.Select(pipeline => pipeline.StartEntered.Task))
+            .WaitAsync(TimeSpan.FromSeconds(1), cancellation.Token);
+
+        Assert.All(created, pipeline =>
+        {
+            Assert.Equal(1, pipeline.StartCallCount);
+            Assert.Equal(RadarSensorRuntimeState.Running, pipeline.State);
+        });
+    }
+
+    [Fact]
     public async Task Coordinator_PublishesAllEnabledScreensAndMergesFrontOverlap()
     {
         var factory = new FakePipelineFactory();
@@ -672,7 +694,7 @@ public sealed class RadarBridgeCoordinatorTests
         var acknowledgement = await IpcStream.ReadAsync(client, cancellationToken);
         Assert.Equal(IpcMessageType.HelloAck, acknowledgement.MessageType);
         var ack = acknowledgement.DeserializePayload<HelloAckPayload>();
-        Assert.Equal("1.2.0", BridgeVersion.Value);
+        Assert.Equal("1.2.1", BridgeVersion.Value);
         Assert.Equal(BridgeVersion.Value, ack.BridgeVersion);
         Assert.Equal(["left", "front", "right"], ack.Screens.Select(screen => screen.ScreenId));
         return client;
