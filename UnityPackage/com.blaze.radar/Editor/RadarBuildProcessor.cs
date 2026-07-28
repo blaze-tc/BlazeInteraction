@@ -11,8 +11,6 @@ namespace Blaze.Radar.Editor
 {
     public sealed class RadarBuildProcessor : IPreprocessBuildWithReport, IPostprocessBuildWithReport
     {
-        private const string BridgeVersionFileName = "bridge-version.txt";
-
         public int callbackOrder => 1000;
 
         public void OnPreprocessBuild(BuildReport report)
@@ -30,7 +28,7 @@ namespace Blaze.Radar.Editor
         public void OnPostprocessBuild(BuildReport report)
         {
             var sourceDirectory = ResolveCurrentPackageBridgeDirectory();
-            ValidateBridgeVersion(sourceDirectory, "package source");
+            ValidateBridgePayload(sourceDirectory, "package source");
 
             var sourceExecutable = Path.Combine(sourceDirectory, BridgePathResolver.ExecutableName);
             var playerDirectory = Path.GetDirectoryName(report.summary.outputPath)
@@ -43,7 +41,7 @@ namespace Blaze.Radar.Editor
             }
 
             CopyDirectory(sourceDirectory, destinationDirectory);
-            ValidateBridgeVersion(destinationDirectory, "player destination");
+            ValidateBridgePayload(destinationDirectory, "player destination");
 
             var destinationExecutable = Path.Combine(destinationDirectory, BridgePathResolver.ExecutableName);
             var sourceHash = ComputeSha256(sourceExecutable);
@@ -87,28 +85,11 @@ namespace Blaze.Radar.Editor
             return embeddedDirectory;
         }
 
-        private static void ValidateBridgeVersion(string directory, string location)
+        private static void ValidateBridgePayload(string directory, string location)
         {
-            var executable = Path.Combine(directory, BridgePathResolver.ExecutableName);
-            if (!File.Exists(executable))
-            {
-                throw new BuildFailedException($"RadarBridge.exe is missing from the {location}: {executable}");
-            }
-
-            var versionFile = Path.Combine(directory, BridgeVersionFileName);
-            if (!File.Exists(versionFile))
-            {
-                throw new BuildFailedException(
-                    $"RadarBridge version marker is missing from the {location}: {versionFile}");
-            }
-
-            var bridgeVersion = File.ReadAllText(versionFile).Trim();
-            if (!string.Equals(bridgeVersion, UnitySdkVersion.Value, StringComparison.Ordinal))
-            {
-                throw new BuildFailedException(
-                    $"RadarBridge version mismatch in the {location}. Expected {UnitySdkVersion.Value}, " +
-                    $"found '{bridgeVersion}' at {versionFile}.");
-            }
+            var validationError = BridgePayloadValidator.Validate(directory, UnitySdkVersion.Value);
+            if (validationError != null)
+                throw new BuildFailedException($"RadarBridge payload validation failed in the {location}: {validationError}");
         }
 
         private static string ComputeSha256(string path)

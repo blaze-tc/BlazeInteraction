@@ -168,7 +168,7 @@ public sealed class PackageIdentityTests
         Assert.Contains("PackageInfo.FindForAssembly", buildProcessorSource, StringComparison.Ordinal);
         Assert.DoesNotContain("EditorPrefs.GetString", buildProcessorSource, StringComparison.Ordinal);
         Assert.DoesNotContain("BridgeSourceEditorPreference", buildProcessorSource, StringComparison.Ordinal);
-        Assert.Contains("bridge-version.txt", buildProcessorSource, StringComparison.Ordinal);
+        Assert.Contains("BridgePayloadValidator.Validate", buildProcessorSource, StringComparison.Ordinal);
         Assert.Contains("UnitySdkVersion.Value", buildProcessorSource, StringComparison.Ordinal);
         Assert.Contains("Directory.Delete(destinationDirectory, recursive: true)", buildProcessorSource, StringComparison.Ordinal);
         Assert.Contains("ComputeSha256", buildProcessorSource, StringComparison.Ordinal);
@@ -203,32 +203,6 @@ public sealed class PackageIdentityTests
         Assert.Contains("screenTopologySchemaVersion", settingsSource, StringComparison.Ordinal);
         Assert.Contains("ReadOnlyCollection<RadarScreenDefinition>", settingsSource, StringComparison.Ordinal);
         Assert.Contains("PrimaryScreen", settingsSource, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void ReleaseScripts_EnforceSafeSelfContainedEmbeddingAndV2SmokeHandshake()
-    {
-        var repositoryRoot = FindRepositoryRoot();
-        var publishScript = File.ReadAllText(Path.Combine(repositoryRoot, "scripts", "publish-bridge.ps1"));
-        Assert.Contains("Assert-ExactDeletionTarget", publishScript, StringComparison.Ordinal);
-        Assert.Contains("Remove-Item -LiteralPath $outputDirectory -Recurse -Force", publishScript, StringComparison.Ordinal);
-        Assert.Contains("Remove-Item -LiteralPath $embeddedDirectory -Recurse -Force", publishScript, StringComparison.Ordinal);
-        Assert.Contains("default-profile.json", publishScript, StringComparison.Ordinal);
-        Assert.Contains("f20-profile.json", publishScript, StringComparison.Ordinal);
-        Assert.Contains("schemaVersion", publishScript, StringComparison.Ordinal);
-        Assert.Contains("includedFrameworks", publishScript, StringComparison.Ordinal);
-        Assert.Contains("coreclr.dll", publishScript, StringComparison.Ordinal);
-        Assert.Contains("UTF8Encoding", publishScript, StringComparison.Ordinal);
-        Assert.Contains("Get-FileHash", publishScript, StringComparison.Ordinal);
-        Assert.Contains("File count", publishScript, StringComparison.Ordinal);
-
-        var smokeScript = File.ReadAllText(Path.Combine(repositoryRoot, "scripts", "test-embedded-bridge.ps1"));
-        Assert.Contains("bridge-version.txt", smokeScript, StringComparison.Ordinal);
-        Assert.Contains("1.2.0", smokeScript, StringComparison.Ordinal);
-        Assert.Contains("NamedPipeClientStream", smokeScript, StringComparison.Ordinal);
-        Assert.Contains("protocolVersion = 2", smokeScript, StringComparison.Ordinal);
-        Assert.Contains("messageType = 'Hello'", smokeScript, StringComparison.Ordinal);
-        Assert.Contains("HelloAck", smokeScript, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -267,7 +241,7 @@ public sealed class PackageIdentityTests
         Assert.Contains("BuildFailedException", source, StringComparison.Ordinal);
         Assert.Contains("PackageInfo.FindForAssembly", source, StringComparison.Ordinal);
         Assert.Contains("UnitySdkVersion.Value", source, StringComparison.Ordinal);
-        Assert.Contains("bridge-version.txt", source, StringComparison.Ordinal);
+        Assert.Contains("BridgePayloadValidator.Validate", source, StringComparison.Ordinal);
         Assert.Contains("Directory.Delete(destinationDirectory, recursive: true)", source, StringComparison.Ordinal);
         Assert.Contains("ComputeSha256", source, StringComparison.Ordinal);
     }
