@@ -107,6 +107,91 @@ public sealed class RuntimeLoggingTests
         Assert.Equal(2, logs.Count(value => value == "[front/f1] error: simulated disconnect"));
     }
 
+    [Fact]
+    public async Task HotConfiguration_EmitsTransitionUpLogOnceWhileWireStillPublishesUpThenZero()
+    {
+        var configuration = Configuration("unused");
+        var factory = new LoggingPipelineFactory();
+        await using var coordinator = new RadarBridgeCoordinator(
+            configuration,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<RadarBridgeCoordinator>.Instance,
+            factory);
+        var logs = new ConcurrentQueue<string>();
+        coordinator.LogReceived += logs.Enqueue;
+        await coordinator.ApplyUnityTopologyAsync(new HelloPayload(
+            Environment.ProcessId,
+            "2021.3.45f1",
+            [new RadarScreenDefinitionPayload("front", "Front", 1920, 1080, true, 0)]));
+
+        var start = DateTimeOffset.UnixEpoch.AddSeconds(10);
+        factory.Pipeline.PublishDetection(Detection(start, 400, 300));
+        Assert.Equal(RadarPointerPhase.Down, Assert.Single(coordinator.TickForTest(start).Screens.Single().Pointers).Phase);
+        factory.Pipeline.PublishDetection(Detection(start.AddMilliseconds(34), 410, 300));
+        Assert.Equal(RadarPointerPhase.Move, Assert.Single(coordinator.TickForTest(start.AddMilliseconds(34)).Screens.Single().Pointers).Phase);
+        Assert.Equal(1, PointerMoveLogStateCount(coordinator));
+
+        configuration.Screens.Single().WidthPixels = 1600;
+        await coordinator.ApplyConfigurationAsync();
+        var upBatch = coordinator.TickForTest(start.AddSeconds(1));
+        var zeroBatch = coordinator.TickForTest(start.AddSeconds(2));
+
+        Assert.Equal(RadarPointerPhase.Up, Assert.Single(upBatch.Screens.Single().Pointers).Phase);
+        Assert.Empty(zeroBatch.Screens.Single().Pointers);
+        Assert.Equal(1, logs.Count(value => value.StartsWith("[front/P1] Up ", StringComparison.Ordinal)));
+        Assert.Equal(0, PointerMoveLogStateCount(coordinator));
+    }
+
+    [Fact]
+    public async Task RepeatedUniqueScreenRetirements_ClearMoveLogStateAndLogEveryUp()
+    {
+        const int retirementCount = 12;
+        var configuration = new RadarAppConfiguration
+        {
+            Ipc = new RadarIpcConfiguration { PipeName = "unused" },
+            Screens = Enumerable.Range(0, retirementCount + 1)
+                .Select(index => ScreenConfiguration($"screen-{index}", "sensor"))
+                .ToList()
+        };
+        var factory = new LoggingPipelineFactory();
+        await using var coordinator = new RadarBridgeCoordinator(
+            configuration,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<RadarBridgeCoordinator>.Instance,
+            factory);
+        var logs = new ConcurrentQueue<string>();
+        coordinator.LogReceived += logs.Enqueue;
+
+        await coordinator.ApplyUnityTopologyAsync(new HelloPayload(
+            Environment.ProcessId,
+            "2021.3.45f1",
+            [new RadarScreenDefinitionPayload("screen-0", "Screen 0", 1920, 1080, true, 0)]));
+
+        for (var index = 0; index < retirementCount; index++)
+        {
+            var screenId = $"screen-{index}";
+            var start = DateTimeOffset.UnixEpoch.AddMinutes(index + 1);
+            factory.Pipeline.PublishDetection(Detection("sensor", start, 400, 300));
+            Assert.Equal(RadarPointerPhase.Down, Assert.Single(coordinator.TickForTest(start).Screens.Single().Pointers).Phase);
+            factory.Pipeline.PublishDetection(Detection("sensor", start.AddMilliseconds(34), 410, 300));
+            Assert.Equal(RadarPointerPhase.Move, Assert.Single(coordinator.TickForTest(start.AddMilliseconds(34)).Screens.Single().Pointers).Phase);
+            Assert.Equal(1, PointerMoveLogStateCount(coordinator));
+
+            var nextScreenId = $"screen-{index + 1}";
+            await coordinator.ApplyUnityTopologyAsync(new HelloPayload(
+                Environment.ProcessId,
+                "2021.3.45f1",
+                [new RadarScreenDefinitionPayload(nextScreenId, $"Screen {index + 1}", 1920, 1080, true, 0)]));
+
+            Assert.Equal(0, PointerMoveLogStateCount(coordinator));
+            Assert.Equal(1, logs.Count(value => value.StartsWith($"[{screenId}/P1] Up ", StringComparison.Ordinal)));
+            Assert.Equal(RadarPointerPhase.Up, Assert.Single(coordinator.TickForTest(start.AddSeconds(1)).Screens.Single(frame => frame.Screen.ScreenId == screenId).Pointers).Phase);
+            Assert.Empty(coordinator.TickForTest(start.AddSeconds(2)).Screens.Single(frame => frame.Screen.ScreenId == screenId).Pointers);
+            coordinator.TickForTest(start.AddSeconds(3));
+        }
+
+        Assert.Equal(retirementCount, logs.Count(value => value.Contains("] Up ", StringComparison.Ordinal)));
+        Assert.Equal(0, PointerMoveLogStateCount(coordinator));
+    }
+
     private static async Task<NamedPipeClientStream> ConnectAsync(string pipeName)
     {
         using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(3));
@@ -148,32 +233,38 @@ public sealed class RuntimeLoggingTests
     private static RadarAppConfiguration Configuration(string pipeName) => new()
     {
         Ipc = new RadarIpcConfiguration { PipeName = pipeName },
-        Screens =
+        Screens = [ScreenConfiguration("front", "f1")]
+    };
+
+    private static RadarScreenConfiguration ScreenConfiguration(string screenId, string sensorId) => new()
+    {
+        ScreenId = screenId,
+        UnityDisplayName = screenId,
+        IsPrimary = true,
+        ResolutionMode = RadarResolutionMode.Override,
+        WidthPixels = 1920,
+        HeightPixels = 1080,
+        Fusion = new RadarFusionConfiguration { OutputRateHz = 30, SensorDataMaxAgeMilliseconds = 250, FusionDistancePixels = 80 },
+        Tracking = new RadarScreenTrackingConfiguration { ConfirmFrames = 1, LostFrames = 1 },
+        Interaction = new RadarInteractionConfiguration { MinimumPressMilliseconds = 0 },
+        Sensors =
         [
-            new RadarScreenConfiguration
+            new RadarSensorConfiguration
             {
-                ScreenId = "front",
-                UnityDisplayName = "Front",
-                IsPrimary = true,
-                ResolutionMode = RadarResolutionMode.Override,
-                WidthPixels = 1920,
-                HeightPixels = 1080,
-                Fusion = new RadarFusionConfiguration { OutputRateHz = 30, SensorDataMaxAgeMilliseconds = 250, FusionDistancePixels = 80 },
-                Tracking = new RadarScreenTrackingConfiguration { ConfirmFrames = 1, LostFrames = 1 },
-                Interaction = new RadarInteractionConfiguration { MinimumPressMilliseconds = 0 },
-                Sensors =
-                [
-                    new RadarSensorConfiguration
-                    {
-                        SensorId = "f1",
-                        Enabled = true,
-                        SourceMode = RadarSensorSourceMode.Simulation,
-                        OutputRectPixels = new Yuexin.Radar.Configuration.RadarPixelRect(0, 0, 1920, 1080)
-                    }
-                ]
+                SensorId = sensorId,
+                Enabled = true,
+                SourceMode = RadarSensorSourceMode.Simulation,
+                OutputRectPixels = new Yuexin.Radar.Configuration.RadarPixelRect(0, 0, 1920, 1080)
             }
         ]
     };
+
+    private static int PointerMoveLogStateCount(RadarBridgeCoordinator coordinator)
+    {
+        var field = typeof(RadarBridgeCoordinator).GetField("_lastPointerMoveLogAt", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        return Assert.IsAssignableFrom<System.Collections.IDictionary>(field.GetValue(coordinator)).Count;
+    }
 
     private sealed class LoggingPipelineFactory : IRadarSensorPipelineFactory
     {
@@ -209,5 +300,8 @@ public sealed class RuntimeLoggingTests
     }
 
     private static SensorDetectionFrame Detection(DateTimeOffset timestamp, float x, float y) =>
-        new("f1", timestamp, [new SensorDetection(1, x, y, 1)]);
+        Detection("f1", timestamp, x, y);
+
+    private static SensorDetectionFrame Detection(string sensorId, DateTimeOffset timestamp, float x, float y) =>
+        new(sensorId, timestamp, [new SensorDetection(1, x, y, 1)]);
 }

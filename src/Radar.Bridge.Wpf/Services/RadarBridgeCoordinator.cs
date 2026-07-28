@@ -653,12 +653,17 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         PublishLog($"[{runtime.Info.ScreenId}/FUSION] groups={result.Targets.Count} pointers={result.Pointers.Count}");
         foreach (var pointer in result.Pointers)
         {
-            if (!ShouldPublishPointerLog(runtime.Info.ScreenId, pointer, timestamp)) continue;
-            PublishLog($"[{runtime.Info.ScreenId}/P{pointer.PointerId}] {pointer.Phase} normalized=({pointer.NormalizedX:0.####},{pointer.NormalizedY:0.####}) pixel=({pointer.PixelX:0.##},{pointer.PixelY:0.##})");
+            PublishPointerLog(runtime.Info.ScreenId, pointer, timestamp);
         }
         InvokeSafely(ScreenSnapshotUpdated, new RadarScreenRuntimeSnapshot(runtime.Info,
             runtime.Pipelines.Values.Select(binding => binding.LastSnapshot).Where(snapshot => snapshot is not null).Cast<RadarSensorRuntimeSnapshot>().ToArray(),
             result.Targets, result.Pointers, sequence, timestamp));
+    }
+
+    private void PublishPointerLog(string screenId, RadarScreenPointer pointer, DateTimeOffset timestamp)
+    {
+        if (!ShouldPublishPointerLog(screenId, pointer, timestamp)) return;
+        PublishLog($"[{screenId}/P{pointer.PointerId}] {pointer.Phase} normalized=({pointer.NormalizedX:0.####},{pointer.NormalizedY:0.####}) pixel=({pointer.PixelX:0.##},{pointer.PixelY:0.##})");
     }
 
     private bool ShouldPublishPointerLog(string screenId, RadarScreenPointer pointer, DateTimeOffset timestamp)
@@ -707,11 +712,23 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     {
         IReadOnlyList<RadarScreenPointer> ups;
         lock (runtime.Gate) ups = runtime.Fusion.SnapshotPressedPointers(timestamp);
+        foreach (var pointer in ups) PublishPointerLog(runtime.Info.ScreenId, pointer, timestamp);
+        ClearPointerMoveLogState(runtime.Info.ScreenId);
         _transitionFrames.Enqueue(new TransitionFrame(runtime.Info, ups));
         _transitionFrames.Enqueue(new TransitionFrame(runtime.Info, [], () => CompleteRetirementAsync(runtime, timestamp)));
         runtime.RemoveOnRetirement = remove;
         runtime.PendingReplacement = replaceWith;
         runtime.LastTargets = [];
+    }
+
+    private void ClearPointerMoveLogState(string screenId)
+    {
+        foreach (var key in _lastPointerMoveLogAt.Keys
+                     .Where(key => string.Equals(key.ScreenId, screenId, StringComparison.OrdinalIgnoreCase))
+                     .ToArray())
+        {
+            _lastPointerMoveLogAt.Remove(key);
+        }
     }
 
     private async Task CompleteRetirementAsync(ScreenRuntime runtime, DateTimeOffset timestamp)
