@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0 - 2026-07-28
+
+- Add arbitrary Unity logical screens with stable IDs, logical resolutions, ordering and exactly one enabled primary screen.
+- Add multiple independently configured F10/F20 sensors per screen, per-sensor output rectangles and per-screen fusion/tracking/interaction parameters.
+- Fuse overlapping sensors within a screen and publish screen-addressed pointer batches over IPC protocol 2 with stable per-screen pointer IDs.
+- Add independent Display, Camera `pixelRect` and RenderTexture routing plus the Multi-Screen Camera Routing LOCAL/BRIDGE sample.
+- Tag Bridge diagnostics by screen/sensor and expand Unity logs with screen, sequence, count, drop and latency fields.
+- Harden Windows player packaging with complete self-contained payload validation, version markers, SHA-256 identity and safe release publishing.
+- Document 1.1.x upgrade/cache recovery, IPC v1/v2 incompatibility, projector display checks and the three-projector/four-radar 8-hour acceptance procedure.
+
 ## 1.1.5 - 2026-07-21
 
 - Force WPF software rendering before window creation to prevent projector/GPU dirty-region corruption that could hide or blur controls.

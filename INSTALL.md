@@ -1,184 +1,119 @@
-# RadarControl 安装与首次使用
+# RadarControl 1.2.0 安装、升级与现场验收
 
-本文用于把 Blaze Radar SDK 安装到现有 Unity 项目，并验证包内自带的 `RadarBridge.exe` 可以正常启动。推荐使用固定版本 `v1.1.5`，便于团队成员和构建机获得完全相同的内容。
+本文面向 Unity 开发者和现场操作员。Blaze Radar SDK 1.2.0 使用 IPC 2，包内提供 Windows x64 的完整 self-contained Bridge，不需要另装 .NET Runtime。
 
-## 1. 环境要求
+## 1. 环境
 
-- Windows 10/11 x64。
-- Unity 2021.3 LTS 或更高版本。
-- 电脑已经安装 Git，并且在命令行执行 `git --version` 能正常返回版本号。
-- 至少预留 500 MB 磁盘空间。UPM 包约 161 MB，Unity 还会在项目缓存中保存一份副本。
-- 使用真实 FaseLase F10/F20 时，需要一块可设置静态 IPv4 的有线网卡。
+- Windows 10/11 x64；Unity 2021.3 LTS 或更高；Git 可从命令行使用。
+- 每组真实 F10/F20 使用可配置静态 IPv4 的有线网卡。常见雷达端点为 `192.168.0.100:8487`，电脑可用 `192.168.0.10/24`，两者不能相同。
+- 发布或移动 Player 时保留整个 `RadarBridge/` 目录。只复制 `RadarBridge.exe` 会丢失 .NET/WPF 运行时和 Profiles。
 
-包内已经包含完整的 .NET 8 self-contained `RadarBridge.exe` 运行目录，测试电脑不需要另外安装 .NET Runtime。当前 Bridge 只支持 Windows x64。
+## 2. 从 1.1.x 升级并确认解析来源
 
-### 从 1.0.1 旧包迁移
-
-`v1.1.0` 已把包名从 `com.yuexin.radar` 改为 `com.blaze.radar`，C# 公共命名空间改为 `Blaze.Radar`。如果项目导入过旧版 Sample，Unity 不会在移除旧包时自动删除复制到 `Assets` 的 Sample；它会继续编译并产生旧命名空间错误。升级前请：
-
-1. 在 Package Manager 中移除 `com.yuexin.radar`，或从 `Packages/manifest.json` 删除旧条目。
-2. 删除旧的 `Assets/Samples/Yuexin Radar SDK/1.0.1` 目录。
-3. 安装下文的 `com.blaze.radar#v1.1.5`。
-4. 从 **Blaze Radar SDK** 重新导入 **Basic Interaction** Sample。
-
-Named Pipe 名称 `Yuexin.RadarBridge` 是 Bridge 与 Unity 的通信协议标识，为兼容现有 Bridge 保持不变；不要把它改为包名。
-
-## 2. 推荐安装：Unity Package Manager Git URL
-
-1. 打开目标 Unity 项目。
-2. 选择 **Window > Package Manager**。
-3. 点击左上角 **+**，选择 **Add package from git URL** 或 **Install package from git URL**。
-4. 粘贴以下固定版本地址：
+1. 退出 Play Mode，关闭由当前项目启动的 RadarBridge。
+2. 在 Package Manager 移除旧 Blaze Radar SDK；从 `Packages/manifest.json` 删除所有指向 `#v1.1.x` 的 RadarControl Git URL。不要同时保留旧 URL、本地包和新 URL。
+3. 若 1.1.x Sample 已复制到 `Assets/Samples/Blaze Radar SDK/`，先备份自定义内容，再删除旧 Sample；UPM 移包不会删除已导入到 Assets 的副本。
+4. Package Manager 选择 **Add package from git URL**，粘贴：
 
    ```text
-   https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.1.5
+   https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.0
    ```
 
-5. 点击 **Add**，等待约 161 MB 的 SDK 和 Bridge 下载、解析与导入完成。
-6. 在 Package Manager 中确认出现 **Blaze Radar SDK 1.1.5**。
+5. 选择 Blaze Radar SDK，确认 Version 为 `1.2.0`。查看详情中的 Resolved Path：Git 包应来自本项目新解析的 `Library/PackageCache/com.blaze.radar@...`，不能指向旧缓存或意外的本地克隆。`Packages/packages-lock.json` 中也应只有 `com.blaze.radar` 的当前 Git dependency/revision。
+6. 若仍解析旧内容，关闭 Unity，只删除该项目 `Library/PackageCache` 下对应的 `com.blaze.radar@...` 缓存和 `packages-lock.json` 中该包条目，再重开 Unity 让 Package Manager 从上述标签重新解析。不要删除共享仓库或整个用户目录。
+7. 重新导入 **Basic Interaction** 与 **Multi-Screen Camera Routing** Samples。
 
-如需始终跟随最新开发版本，可以使用下面的地址，但正式项目不建议锁定到会变化的 `main`：
+也可在 `Packages/manifest.json` 的 `dependencies` 中使用同一 URL。离线开发可克隆仓库并 checkout `v1.2.0`，然后 **Add package from disk** 选择 `UnityPackage/com.blaze.radar/package.json`；此时 Resolved Path 应明确指向该克隆目录。
 
-```text
-https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#main
-```
+## 3. 配置任意逻辑屏幕
 
-## 3. 通过 manifest.json 安装
+1. 打开 **Tools > Blaze Radar > Create or Select Settings**，再进入 **Project Settings > Blaze Radar**。
+2. 为每块逻辑墙新增一个 Screen。启用的每屏必须有稳定、唯一且上线后不随意更改的 Screen ID，例如 `LEFT`、`FRONT`、`RIGHT`。
+3. 设置 Unity Display Name、Order 和逻辑分辨率。逻辑分辨率是雷达坐标与 Camera 路由的共同像素空间，不要求每屏宽高或比例相同。
+4. 所有启用屏幕中必须恰好一个 Primary。禁用屏幕不参与握手、融合或 PointerBatch。
+5. 保存后先看拓扑校验；重复/空 Screen ID、非法分辨率、Order 冲突或非唯一 Primary 必须在运行/构建前修复。
 
-也可以关闭 Unity，在项目的 `Packages/manifest.json` 中将以下条目加入 `dependencies`：
+建议 VRCave 示例：
 
-```json
-{
-  "dependencies": {
-    "com.blaze.radar": "https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.1.5"
-  }
-}
-```
+| Screen ID | 投影 | 雷达 | 说明 |
+| --- | --- | --- | --- |
+| `LEFT` | 左墙 | `L1` | 一个雷达覆盖左墙 |
+| `FRONT` | 正墙，Primary | `F1`、`F2` | 两个 OutputRect 保留物理交叠区，同屏融合去重 |
+| `RIGHT` | 右墙 | `R1` | 一个雷达覆盖右墙 |
 
-保留项目原有的其他依赖项，不要用上面的示例覆盖整个文件。保存后重新打开 Unity，Package Manager 会自动下载安装。
+不要把 F1/F2 拆成两个 Unity 屏幕；它们属于同一个 `FRONT`，融合和 Pointer ID 稳定性以屏幕为边界。1.2.0 不提供跨屏人员身份延续。
 
-## 4. 从本地仓库安装
+## 4. Bridge 操作员配置
 
-本地开发或无法通过 Unity 直接下载时，可以先克隆仓库：
+1. 运行 Play Mode 或 `RadarBridge.exe --profile <schema2.json>`，完成 IPC 2 Hello/HelloAck 后，Bridge 左侧“Unity 屏幕”列出当前启用屏幕。
+2. 先选择屏幕，再用 `＋` 新增雷达或“删除雷达”移除所选雷达。Sensor ID 在投入使用后保持稳定，日志和回放记录都依赖它。
+3. 每个传感器分别设置：Enabled、F10/F20、Real/Simulation/Replay、雷达 IP/端口、本机网卡 IP、自动重连；旋转/翻转/偏移、量程/角度、有效区/屏蔽区、四点标定和 `OutputRectPixels`。
+4. F1/F2 的 OutputRect 应各自对应 FRONT 的逻辑像素区域，并在真实覆盖交叠处有合理重叠。错误的矩形或四角会产生跳点、空区或重复目标。
+5. 每屏设置输出频率、数据最大年龄和跨雷达融合距离；再设置确认帧、丢失帧、最大关联距离、平滑系数、Touch/Dwell 交互参数。这些参数只影响所选屏幕。
+6. 分别连接所选雷达、整屏或全部；断开/重连一个传感器时，其他屏幕应继续输出。只有操作员预期 Pointer Up/reset 时才改分辨率、OutputRect 或拓扑。
+
+## 5. 场景和 Camera 绑定
+
+执行 **GameObject > Blaze Radar > Create Runtime**。场景中只保留一个启用的 EventSystem 输入模块；Canvas 配 `GraphicRaycaster`，3D/2D Camera 分别配 `PhysicsRaycaster`/`Physics2DRaycaster`。
+
+每个 Screen ID 可绑定一种独立输出目标：
+
+- **Display**：每个 Camera 使用不同 `targetDisplay`，Player 启动时激活对应 Display；确认 Windows 显示排列与投影布线一致。
+- **pixelRect**：多屏共享一个 Display 时，为每屏指定不重叠或刻意布局的 Camera 像素矩形，并与该屏逻辑分辨率/输出区域一致。
+- **RenderTexture**：把 Camera 输出绑定到独立 RenderTexture，再由场景材质/投影映射使用；确认纹理尺寸和纵横比匹配逻辑屏幕。
+
+不要让两个启用 Camera 同时消费同一 Screen ID，除非确实希望镜像。修改路由后检查 UI、2D/3D 射线和 per-camera world particles 都只出现在目标墙。
+
+## 6. 两条 Sample 测试路径
+
+### Basic Interaction
+
+1. 导入并打开 Sample。先用 Bridge Simulation 验证 IPC、Button、Toggle、Slider、ScrollRect、2D/3D 目标和 Pointer Down/Move/Up/Click/Drag。
+2. 再连接一台真实雷达重复操作。调试鼠标时临时用 `RadarAndMouseDebug`，正式部署改回 `RadarOnly`。
+3. 保存右侧事件日志与同时间段 `Player.log`。`IPC CONNECTED` 且 `POINTERS 0` 表示链路活着但当前无有效目标，不等于卡死。
+
+### Multi-Screen Camera Routing
+
+1. 先选 **LOCAL**：无需 Bridge，逐屏注入本地指针，检查 LEFT/FRONT/RIGHT 的 Display、Camera `pixelRect`、RenderTexture、UI 和 world particles。
+2. 再选 **BRIDGE IPC**：启动 1.2.0 Bridge，让 Project Settings 拓扑完成 Hello/HelloAck，逐屏/逐雷达模拟或真机输入，确认 screenId、逻辑/像素坐标和 Camera 命中一致。
+3. FRONT 同时运行 F1/F2，反复走过交叠区；只能看到一个稳定 Pointer，不能产生双击。
+
+## 7. 日志对时
+
+Bridge 日志位于 `%LOCALAPPDATA%/RadarControl/logs/`，消息包含 `[SCREEN/SENSOR]`（如 `[FRONT/F1]`）或 `[GLOBAL/IPC]` 标签。Unity `Player.log`/Editor Log 应记录 SDK version、Bridge version、IPC protocol、screenId、batch/frame sequence、pointer count、dropped count、timestamp/latency 和 EventSystem target。
+
+排障时先记本机时间和操作，再按 screenId、sensorId、sequence 与 timestamp 对齐两侧日志。不要只提交截图；同时归档 Schema 2 Profile、Bridge 日志和 `Player.log`。
+
+## 8. Windows Player 与 Bridge 身份验证
+
+构建处理器从 Package Manager 当前 Resolved Path 读取 `Bridge~/win-x64`，删除 Player 旁旧 `RadarBridge/`，复制完整目录，并检查 package `1.2.0`、SDK `1.2.0`、`bridge-version.txt`、必需文件和 EXE SHA-256。任一不一致应使 Build 失败。
+
+构建后在发布机记录：
 
 ```powershell
-git clone https://github.com/blaze-tc/RadarControl.git
-cd RadarControl
-git checkout v1.1.5
+Get-Content .\RadarBridge\bridge-version.txt
+Get-FileHash .\RadarBridge\RadarBridge.exe -Algorithm SHA256
+Get-ChildItem .\RadarBridge -File -Recurse | Measure-Object
 ```
 
-然后在 Unity Package Manager 中选择 **+ > Add package from disk**，打开：
+版本必须是 `1.2.0`，SHA 必须等于已审核包内 `Bridge~/win-x64/RadarBridge.exe`。若不一致，先确认 Package Manager Resolved Path，再按第 2 节清理该项目的陈旧包缓存并重新 Build；不要手工用另一台机器的 EXE 覆盖。
 
-```text
-RadarControl/UnityPackage/com.blaze.radar/package.json
-```
+## 9. IPC v1/v2 不兼容与投影显示检查
 
-本地安装会直接引用该目录。移动或删除克隆目录后，Unity 项目将无法继续解析这个包。
+IPC 1 客户端不能消费 IPC 2 PointerBatch，IPC 2 客户端也拒绝旧 PointerFrame。看到 protocol mismatch、旧 Bridge version 或 HelloAck 失败时：退出 Play Mode，关闭旧 Bridge，移除 1.1.x URL/缓存，重新安装 `v1.2.0`，确认 package/SDK/Bridge 都是 `1.2.0` 且日志显示 IPC 2，再启动。不要通过修改 Pipe 名或忽略 Error 绕过主版本检查。
 
-## 5. 安装后的场景配置
+RadarBridge 在窗口创建前强制 WPF 软件渲染，不依赖现场 GPU 驱动的脏区刷新。投影电脑仍必须实际检查：逐个点击/拖动控件、滚动参数、调整窗口大小、最小化/恢复、跨不同 DPI 显示器移动并切换投影焦点。文字/点云应清晰，任何控件都不能点击后消失或变糊；若出现问题，记录 Windows 缩放、投影分辨率、GPU/驱动、窗口操作和日志时间点。
 
-1. 在 Package Manager 中选择 **Blaze Radar SDK**，展开 **Samples**，导入 **Basic Interaction**。首次接入建议先用 Sample 验证，再集成业务场景。
-2. 执行 **Tools > Blaze Radar > Create or Select Settings**。Unity 会创建 `Assets/Resources/RadarRuntimeSettings.asset`。
-3. 建议首次测试使用以下设置：
+## 10. 现场 8 小时验收（三投影、四雷达）
 
-   - `Auto Start`：开启。
-   - `Exit Bridge With Unity`：开启。
-   - `Pipe Name`：保持 `Yuexin.RadarBridge`。
-   - `Editor Bridge Executable`：留空，自动使用包内 Bridge。
-   - `Profile Path`：留空，使用 Bridge 的默认用户配置。
+- [ ] 固定最终 Schema 2 配置：LEFT/L1、FRONT/F1+F2 overlap、RIGHT/R1；记录每屏逻辑分辨率、每雷达端点/OutputRect 和每屏融合/跟踪参数。
+- [ ] 用最终 Windows Player 和包内 Bridge 连续运行 8 小时；每小时记录 CPU、内存、画面、IPC 状态、序号/丢帧和四雷达连接状态。
+- [ ] 反复穿越 FRONT F1/F2 重叠区，确认只有一个 Pointer、ID 在 FRONT 内稳定且无重复 Down/Click。
+- [ ] 逐台断开/重连 L1、F1、F2、R1，再逐个禁用/恢复对应 NIC；无关屏幕持续更新，恢复后该屏不遗留粘住指针。
+- [ ] 只在明确预期 reset 时修改逻辑分辨率/OutputRect；确认 Unity 收到新像素，旧 Pointer 先 Up/取消。
+- [ ] 在三墙逐一操作 Button、Toggle、Slider、Scroll、2D/3D target 和 per-camera world particles；确认 Camera 路由无串屏。
+- [ ] 点击、拖动、滚动、resize、minimize/restore、投影 focus change 后 Bridge 控件不消失、不模糊。
+- [ ] 制造并恢复一次 IPC 断线；确认 v2 HelloAck、版本和 screen summaries 正常，旧 v1 客户端被明确拒绝。
+- [ ] 归档最终 Profile、Bridge tagged logs、`Player.log`、Package Manager Resolved Path、Player/包内 RadarBridge.exe SHA-256、文件数和现场记录。
 
-4. 打开要接入的场景，执行 **GameObject > Blaze Radar > Create Runtime**。该命令会创建运行对象和 `RadarInputModule`，并禁用已有的 `StandaloneInputModule`。
-5. 检查交互对象：
-
-   - Screen Space Canvas 必须有 `GraphicRaycaster`。
-   - 3D 交互相机添加 `PhysicsRaycaster`。
-   - 2D 交互相机添加 `Physics2DRaycaster`。
-   - 一个场景只保留一个启用的 EventSystem 输入模块，避免重复点击。
-
-6. 需要先用鼠标验证 UI 时，在 EventSystem 的 `RadarInputModule` 上把 `Input Mode` 设为 `RadarAndMouseDebug`；真实部署时改回 `RadarOnly`。
-
-## 6. 首次运行与验证
-
-1. 进入 Unity Play Mode。
-2. Unity 会从包缓存的 `Bridge~/win-x64/RadarBridge.exe` 自动启动 Bridge。不要只复制或单独运行包内的 EXE；它需要同目录的 DLL 和运行时文件。
-3. Unity 左上角调试面板应从 `IPC: DISCONNECTED` 变为 `IPC: CONNECTED`。
-4. 没有实体雷达时，在 Bridge 中点击 **启动模拟**，然后观察 Sample 中的指针和交互控件。
-   Bridge 中“区域 1”只显示未经处理的雷达原始点；“区域 2”显示变换、过滤后的有效点和由其生成的 Unity 目标。翻转、旋转、偏移、距离、角度、有效区域与屏蔽区设置只会改变区域 2 和 Unity 输出，不会改写区域 1。“显示范围（仅缩放，不过滤）”只调整两张图的观察比例，数值越小点云显示越大，不影响实际数据。没有单独执行四点标定时，绿色四角有效区域会自动映射到 Unity 全屏。
-5. 使用实体雷达时：
-
-   - 将电脑有线网卡设置为静态 IPv4，例如 `192.168.0.10`、掩码 `255.255.255.0`。
-   - 不要把电脑地址设置为雷达地址 `192.168.0.100`。
-   - 在 Bridge 中选择该本机 IPv4。
-   - 雷达默认地址保持 `192.168.0.100:8487`，选择实际 F10/F20 型号后点击连接。
-
-6. Basic Interaction 右侧 **Radar Event Log** 应显示：
-
-   - `IPC CONNECTED`，并记录 Bridge 版本和 F10/F20 型号。
-   - 递增的 `IPC SEQ`、帧时间/延迟、当前指针数和 `DROPPED` 计数。
-   - 每个指针的 ID、Hover/Down/Move/Up、归一化坐标、屏幕像素、置信度和采样时间。
-   - 实际命中的 UGUI/2D/3D 对象，以及 PointerDown、PointerUp、PointerClick、Drag、Scroll 等 EventSystem 回调。
-
-   复现现场问题前可点击 **CLEAR LOG**。历史上限为 160 条，高频移动会节流记录，但顶部实时帧区仍逐帧更新。
-
-退出 Play Mode 或关闭 Unity 时，由 Unity 启动的 Bridge 会自动退出。
-
-## 7. Windows Player 构建
-
-正常执行 Windows x64 Build 即可。包内的构建处理器会把完整 Bridge 发布目录复制到游戏 EXE 同级：
-
-```text
-Game.exe
-Game_Data/
-RadarBridge/
-  RadarBridge.exe
-  RadarBridge.dll
-  *.dll
-  profiles/
-    default-profile.json
-    f20-profile.json
-```
-
-发布或复制游戏时必须保留整个 `RadarBridge` 目录。只复制 `RadarBridge.exe` 会导致程序无法启动。构建处理器只使用当前 Package Manager 已解析的 `com.blaze.radar` 包内 Bridge，并在复制前清理旧目录；如果版本标记不一致、文件缺失或复制后的 EXE SHA-256 不一致，Unity Build 会直接失败，避免升级包后仍发布旧版 Bridge。
-
-## 8. 更新与卸载
-
-更新时，在 Package Manager 中移除旧版本后重新添加新的版本标签，或直接修改 `Packages/manifest.json` URL 末尾的标签。使用固定标签时，不要期待 Unity 自动获得 `main` 上的新提交。
-
-卸载时：
-
-1. 退出 Play Mode，确认 `RadarBridge.exe` 已关闭。
-2. 在 Package Manager 中选择 **Blaze Radar SDK > Remove**。
-3. 如不再需要，可手动删除 `Assets/Resources/RadarRuntimeSettings.asset` 和导入到 `Assets/Samples/` 下的 Basic Interaction Sample。
-
-## 9. 常见安装问题
-
-### Unity 提示无法克隆 Git 仓库
-
-- 在 PowerShell 中执行 `git --version`，确认 Git 可用。
-- 确认能访问 `https://github.com/blaze-tc/RadarControl`。
-- URL 中必须同时保留 `?path=/UnityPackage/com.blaze.radar` 和 `#v1.1.5`。
-- 安装失败后可重启 Unity，再从 Package Manager 重新添加。
-
-### Bridge 没有自动启动
-
-- 确认 Settings 中 `Auto Start` 已开启。
-- 确认 `Editor Bridge Executable` 留空；错误的覆盖路径会优先于包内 Bridge。
-- 查看 Unity Console 中的 `RadarBridge.exe not found` 路径提示。
-- Bridge 日志位于 `%LOCALAPPDATA%/RadarControl/logs/`。
-
-### Bridge 启动但 Unity 一直显示 IPC: DISCONNECTED
-
-- 确认 Unity Settings 和 Bridge 使用相同的 `Pipe Name`，默认值都是 `Yuexin.RadarBridge`。
-- 关闭其他正在运行的旧版 Bridge，再重新进入 Play Mode。
-- 检查场景中是否存在 `RadarFrameDispatcher` 和 `RadarBridgeLauncher`。
-
-### Bridge 能运行但无法连接雷达
-
-这通常是网卡配置问题，与 UPM 安装无关。按本文第 6 节设置静态 IPv4，并参考 [故障排查与网络配置](docs/troubleshooting.md)。
-
-## 10. 相关链接
-
-- [GitHub 标签 v1.1.5](https://github.com/blaze-tc/RadarControl/tree/v1.1.5)
-- [Unity 集成说明](docs/unity-integration.md)
-- [故障排查与网络配置](docs/troubleshooting.md)
-- [测试报告](docs/test-report.md)
+自动化完成不等于现场通过；只有以上每项有记录并由现场负责人签字后才完成 release acceptance。

@@ -1,25 +1,29 @@
 # 版本与已知限制
 
-## 1.1.5
+## 1.2.0 身份
 
-- Bridge：`BridgeVersion.Value = 1.1.5`
-- Unity SDK：`UnitySdkVersion.Value = 1.1.5`，与 `package.json` 一致
-- Unity 包名：`com.blaze.radar`；公共 C# 命名空间：`Blaze.Radar`
-- IPC：`IpcProtocolVersion.Current = 1`
-- Basic Interaction：包含有界真机日志、帧序号/时间/丢帧统计、逐指针数据及 UGUI/2D/3D EventSystem 回调。
-- Bridge 可视化：区域 1 固定显示原始雷达点；区域 2 显示变换/过滤后的有效点、目标和可编辑输出区域，点云短时余辉只影响显示。
-- Windows 显示：显式使用 Per-Monitor V2 DPI、ClearType 与像素对齐，适配投影电脑和不同缩放比例的多显示器。
-- 投影兼容：Bridge 强制使用 WPF 软件渲染，避免部分 NVIDIA/投影组合在点击控件后出现脏区、模糊或控件消失。
-- Unity 映射：未保存四点标定时，当前绿色四角有效区域自动映射到 Unity 全屏；零目标时仍发送诊断帧。
+- Bridge：`BridgeVersion.Value = 1.2.0`，WPF footer 为 `Bridge 1.2.0 · IPC 2 · Windows x64`。
+- Unity SDK：`UnitySdkVersion.Value = 1.2.0`；`package.json` 与 `bridge-version.txt` 同为 `1.2.0`。
+- Unity 包：`com.blaze.radar`，公共命名空间 `Blaze.Radar`，最低 Unity `2021.3`。
+- IPC：`IpcProtocolVersion.Current = 2`。业务帧只发送 screen-addressed `PointerBatch`，v1 `PointerFrame` 不可混用。
+- 安装 URL：`https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.0`。
 
-IPC 主版本不一致时握手会返回明确 Error，客户端不得继续消费业务帧。Bridge 与 Unity SDK 可独立修订，但修改帧结构或语义时必须同时升级 IPC 版本和兼容测试。
+## 1.2.0 能力
 
-## 已知限制
+- 任意数量启用逻辑屏幕，每屏稳定 ID、独立分辨率/比例、Order，且全局恰好一个 Primary。
+- 每屏任意多个 F10/F20 Sensor；独立连接、物理变换、过滤/标定和 OutputRect；同屏融合、跟踪、交互参数。
+- LEFT/L1、FRONT/F1+F2 overlap、RIGHT/R1 等拓扑可映射到独立 Display、Camera `pixelRect` 或 RenderTexture。
+- Basic Interaction 与 Multi-Screen Camera Routing 支持 local/IPC 分层验证；Bridge/Player 日志可按 screen/sensor/sequence 对时。
+- WPF 软件渲染、Per-Monitor V2 DPI、ClearType/像素对齐用于降低投影电脑上 GPU dirty-region 导致的控件消失或模糊。
 
-- 第一版只读厂家点数据；没有厂家文档支持的设备写协议，因此不设置雷达 IP、网关、掩码、扫描频率、输出角度或马达状态。
-- 仅支持 Windows x64，进程间通信使用 Windows Named Pipe。
-- UPM Git 下载包含约 161 MB 的 self-contained Windows Bridge；这是免安装 .NET Runtime 的代价。
-- 当前验证使用模拟数据、loopback TCP 和共享源码兼容测试；没有实体 F10/F20 的 8 小时稳定性证据。
-- UPM 包以 Unity 2021.3 为最低声明版本；Runtime、Editor 与 Basic Interaction Sample 已在 Unity 2021.3.45f1 中真实导入并编译。包内 PlayMode 测试和 Windows Player 构建仍需在集成项目执行。
-- 标定与屏蔽区依赖实际安装几何；仓库无法预置某个场地的角点。
-- `.radarrec` 保存原始 TCP 块和连接状态，不等同于设备厂商原始文件格式。
+## 限制
+
+- 仅 Windows x64；UPM 含完整 self-contained .NET/WPF payload，体积明显大于纯 C# 包。
+- 1.2.0 不自动完成联合标定；每个雷达仍由物理四角与 OutputRect 对齐。标定和屏蔽区依赖现场几何。
+- Fusion 只在同屏去重；Pointer ID 只在同屏稳定，不提供跨屏人员身份连续跟踪。
+- 不提供多雷达同步录制容器；`.radarrec` 仍是单传感器原始 TCP 块/连接状态，不等于厂商文件格式。
+- 只读厂家点数据，不发送文档未定义的写命令，不修改设备 IP/网关/扫描频率/马达状态。
+- IPC v1/v2 主版本不兼容；必须用 Hello/HelloAck 明确拒绝后升级双方，不能尝试降级解析。
+- 自动测试不能替代真实三投影、四雷达、8 小时稳定性、NIC/雷达重连、投影 focus/DPI 和最终 Windows Player 验收。
+
+版本或 SHA 不一致时，从 Package Manager 的 Resolved Path 和 Player `RadarBridge/` 开始排查，清除项目内陈旧 1.1.x package cache 后重建。现场验收必须归档最终 Schema 2 配置、tagged logs、`Player.log` 与 EXE/package SHA。

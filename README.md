@@ -1,49 +1,54 @@
-# RadarControl
+# RadarControl 1.2.0
 
-FaseLase F10/F20 雷达桥接程序与 Unity 多指针交互 SDK。默认型号为 F10；WPF `RadarBridge.exe` 独占雷达 TCP 连接，Unity 只通过 Named Pipe 消费标准化指针帧。
+FaseLase F10/F20 雷达桥接程序与 Unity 多屏、多雷达、多指针交互 SDK。Windows x64 的 `RadarBridge.exe` 独占雷达 TCP 连接，Unity 只通过 IPC 2 Named Pipe 接收按屏幕分组的指针批次。
 
-首次安装请直接阅读：[安装说明与首次使用](INSTALL.md)。推荐的 Unity Git URL 为：
+正式项目请固定到已审核标签：
 
 ```text
-https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.1.5
+https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.0
 ```
 
-## 快速开始
+从 1.1.x 升级时，先从 `Packages/manifest.json` 删除旧的 `#v1.1.x` Git URL，再安装上述 URL；安装后在 Package Manager 中选择 Blaze Radar SDK，确认版本为 `1.2.0`，Resolved Path 指向本次解析的 `Library/PackageCache/com.blaze.radar@...`，而不是旧缓存或本地覆盖目录。完整步骤见 [安装、升级与现场验收](INSTALL.md)。
 
-环境：Windows 10/11 x64、.NET 8 SDK；Unity 包最低版本为 Unity 2021.3 LTS。
+## 快速验证
+
+环境：Windows 10/11 x64、.NET 8 SDK、Unity 2021.3 LTS。
 
 ```powershell
-.\scripts\build.ps1
-.\scripts\test.ps1 -NoBuild
-.\scripts\publish-bridge.ps1
-.\scripts\test-embedded-bridge.ps1
+dotnet clean RadarControl.sln -c Release
+powershell -ExecutionPolicy Bypass -File scripts/test.ps1 -Configuration Release
+powershell -ExecutionPolicy Bypass -File scripts/test-unity-package.ps1 -TestPlatform All -IncludeSamples
+powershell -ExecutionPolicy Bypass -File scripts/publish-bridge.ps1 -Runtime win-x64
+powershell -ExecutionPolicy Bypass -File scripts/test-embedded-bridge.ps1 -StartupTimeoutSeconds 20
 ```
 
-发布结果位于 `artifacts/publish/RadarBridge/win-x64/`，并同步嵌入 UPM 包的 `Bridge~/win-x64/`。首次连接前，将电脑有线网卡设置为与雷达同网段的静态 IPv4（例如 `192.168.0.10/24`），在 Bridge 中选择该本机地址；雷达默认端点为 `192.168.0.100:8487`。
+发布脚本生成完整 self-contained 输出到 `artifacts/publish/RadarBridge/win-x64/`，再原样嵌入 `UnityPackage/com.blaze.radar/Bridge~/win-x64/`。两个目录必须保留全部 DLL、runtimeconfig、`profiles/` 和 `bridge-version.txt`；只复制 EXE 无法运行。
 
-Unity 可通过 Package Manager 的 Git URL 或本地包方式导入 `UnityPackage/com.blaze.radar`，再导入 **Basic Interaction** Sample。Sample 内置真机联调日志，显示 IPC/设备状态、帧序号与延迟、丢帧数、每个指针的 ID/阶段/坐标/置信度，以及实际触发的 UGUI、2D、3D EventSystem 事件。Bridge 的中心区域分为“雷达原始数据”和“Unity 输出数据”：前者只观察未处理回波，后者显示经过翻转、旋转、偏移、距离/角度和区域过滤后的有效点及跟踪目标。包内已经包含完整的 self-contained `RadarBridge.exe` 发布目录，无需另外安装 .NET Runtime 或手工复制 Bridge。完整步骤见 [Unity 集成](docs/unity-integration.md)。
+## 1.2.0 工作流
+
+- 在 **Project Settings > Blaze Radar** 定义任意数量逻辑屏幕，给每屏设置稳定且唯一的 Screen ID、逻辑分辨率和顺序；所有启用屏幕中必须恰好一个 Primary。
+- Unity Hello 后，Bridge 的“Unity 屏幕”列表选择对应屏幕；每屏可新增/删除多个传感器，分别配置 F10/F20、雷达/本机 IP、输出矩形、变换、过滤与标定，再配置该屏幕的融合、跟踪和交互参数。
+- 推荐现场拓扑：`LEFT/L1`、`FRONT/F1+F2`（输出矩形保留重叠区用于融合）、`RIGHT/R1`。Pointer ID 只保证同屏稳定，不跨屏延续。
+- **Basic Interaction** 用于单屏 UGUI/2D/3D 事件检查；**Multi-Screen Camera Routing** 可切换 LOCAL 模拟或 BRIDGE IPC，验证独立 Display、Camera `pixelRect` 和 RenderTexture 路由。
+- Bridge 日志带 `[SCREEN/SENSOR]` 标签；与 `Player.log` 中 SDK/Bridge/IPC 版本、screenId、batch/frame sequence、pointer count、dropped count 和 latency 对时排障。
 
 ## 仓库内容
 
 - `src/`：Contracts、设备连接、配置、协议、处理、IPC 与 WPF Bridge。
-- `tests/`：112 项 .NET 自动化测试，以及 Unity 共享源码和内嵌 Bridge 完整性测试。
-- `UnityPackage/com.blaze.radar/`：可直接导入的 UPM 包、Editor 工具、PlayMode 测试和 Sample。
-- `config/default-profile.json` / `f20-profile.json`：F10 默认配置与 F20 切换模板。
-- `scripts/`：构建、测试和 win-x64 发布脚本。
+- `tests/`：.NET、协议、WPF、Unity 共享源码、E2E 和发布契约测试。
+- `UnityPackage/com.blaze.radar/`：UPM 包、Editor 工具、Runtime、Samples、测试与完整 Bridge。
+- `config/default-profile.json` / `config/f20-profile.json`：Schema 2 F10/F20 配置模板。
+- `docs/`：架构、协议、Unity 路由、故障排查、限制与现场门禁。
 
 ## 文档
 
-- [安装说明与首次使用](INSTALL.md)
+- [安装、升级与现场验收](INSTALL.md)
+- [Unity 多屏集成](docs/unity-integration.md)
+- [故障排查](docs/troubleshooting.md)
 - [架构与线程模型](docs/architecture.md)
-- [雷达及 IPC 协议](docs/protocol.md)
+- [雷达及 IPC 2 协议](docs/protocol.md)
+- [版本与限制](docs/version-and-limitations.md)
 - [区域与四点标定](docs/calibration.md)
-- [Unity 集成](docs/unity-integration.md)
-- [故障排查与网络配置](docs/troubleshooting.md)
-- [版本与已知限制](docs/version-and-limitations.md)
-- [测试报告与现场门禁](docs/test-report.md)
-- [原始执行说明书](RadarControl_Codex_Execution_Spec.md)
-- `F10、F20说明书V9.1.1.pdf`
+- [测试报告](docs/test-report.md)
 
-## 当前验证边界
-
-Release 全解决方案已达到 0 警告、116/116 自动测试通过。内嵌 `RadarBridge.exe` 已通过真实窗口启动、软件渲染投影兼容和 Unity 父进程退出烟雾测试；UPM Runtime、Editor 和 Basic Interaction Sample 已在 Unity 2021.3.45f1 中完成真实编译与 Play Mode IPC 联调。8 小时真机稳定性、真实场地标定、Unity Test Runner 与 Windows Player 构建验收仍需现场执行；仓库已包含对应测试与检查清单。
+软件自动化不能代替现场验收。正式交付前必须在三台投影机和四台真实雷达上完成 [8 小时检查表](INSTALL.md#10-现场-8-小时验收三投影四雷达)，归档配置、Bridge 日志、`Player.log` 和 EXE/package SHA-256。

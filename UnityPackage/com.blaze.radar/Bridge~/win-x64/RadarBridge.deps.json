@@ -7,7 +7,7 @@
   "targets": {
     ".NETCoreApp,Version=v8.0": {},
     ".NETCoreApp,Version=v8.0/win-x64": {
-      "RadarBridge/1.0.0": {
+      "RadarBridge/1.2.0": {
         "dependencies": {
           "Microsoft.Extensions.DependencyInjection": "8.0.1",
           "Microsoft.Extensions.Logging.Console": "8.0.1",
@@ -1183,7 +1183,7 @@
     }
   },
   "libraries": {
-    "RadarBridge/1.0.0": {
+    "RadarBridge/1.2.0": {
       "type": "project",
       "serviceable": false,
       "sha512": ""

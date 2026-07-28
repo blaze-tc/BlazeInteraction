@@ -12,20 +12,27 @@ public sealed class PackageIdentityTests
 
         using var packageJson = JsonDocument.Parse(File.ReadAllText(Path.Combine(packageRoot, "package.json")));
         Assert.Equal("com.blaze.radar", packageJson.RootElement.GetProperty("name").GetString());
-        const string expectedPackageVersion = "1.1.5";
-        const string expectedBridgeVersion = "1.2.0";
-        Assert.Equal(expectedPackageVersion, packageJson.RootElement.GetProperty("version").GetString());
+        const string expectedReleaseVersion = "1.2.0";
+        Assert.Equal(expectedReleaseVersion, packageJson.RootElement.GetProperty("version").GetString());
         Assert.Equal("Blaze Radar SDK", packageJson.RootElement.GetProperty("displayName").GetString());
 
         var unityVersionSource = File.ReadAllText(Path.Combine(packageRoot, "Runtime", "UnitySdkVersion.cs"));
-        Assert.Contains($"Value = \"{expectedPackageVersion}\"", unityVersionSource, StringComparison.Ordinal);
+        Assert.Contains($"Value = \"{expectedReleaseVersion}\"", unityVersionSource, StringComparison.Ordinal);
 
         var repositoryRoot = FindRepositoryRoot();
         var bridgeCoordinatorSource = File.ReadAllText(Path.Combine(
             repositoryRoot, "src", "Radar.Bridge.Wpf", "BridgeVersion.cs"));
-        Assert.Contains($"Value = \"{expectedBridgeVersion}\"", bridgeCoordinatorSource, StringComparison.Ordinal);
+        Assert.Contains($"Value = \"{expectedReleaseVersion}\"", bridgeCoordinatorSource, StringComparison.Ordinal);
         var mainWindow = File.ReadAllText(Path.Combine(repositoryRoot, "src", "Radar.Bridge.Wpf", "MainWindow.xaml"));
-        Assert.Contains($"Bridge {expectedPackageVersion}", mainWindow, StringComparison.Ordinal);
+        Assert.Contains("Bridge 1.2.0 · IPC 2 · Windows x64", mainWindow, StringComparison.Ordinal);
+
+        var bridgeProject = File.ReadAllText(Path.Combine(
+            repositoryRoot, "src", "Radar.Bridge.Wpf", "Radar.Bridge.Wpf.csproj"));
+        Assert.Contains("<Version>1.2.0</Version>", bridgeProject, StringComparison.Ordinal);
+
+        var embeddedVersion = File.ReadAllText(Path.Combine(
+            packageRoot, "Bridge~", "win-x64", "bridge-version.txt")).Trim();
+        Assert.Equal(expectedReleaseVersion, embeddedVersion);
 
         using var runtimeAssembly = JsonDocument.Parse(File.ReadAllText(
             Path.Combine(packageRoot, "Runtime", "Blaze.Radar.Runtime.asmdef")));
@@ -174,7 +181,7 @@ public sealed class PackageIdentityTests
         var packageRoot = Path.Combine(repositoryRoot, "UnityPackage", "com.blaze.radar");
         using var packageJson = JsonDocument.Parse(File.ReadAllText(Path.Combine(packageRoot, "package.json")));
         Assert.Equal("com.blaze.radar", packageJson.RootElement.GetProperty("name").GetString());
-        Assert.Equal("1.1.5", packageJson.RootElement.GetProperty("version").GetString());
+        Assert.Equal("1.2.0", packageJson.RootElement.GetProperty("version").GetString());
         Assert.Equal("2021.3", packageJson.RootElement.GetProperty("unity").GetString());
 
         var definitionSource = File.ReadAllText(Path.Combine(packageRoot, "Runtime", "RadarScreenDefinition.cs"));
@@ -196,6 +203,55 @@ public sealed class PackageIdentityTests
         Assert.Contains("screenTopologySchemaVersion", settingsSource, StringComparison.Ordinal);
         Assert.Contains("ReadOnlyCollection<RadarScreenDefinition>", settingsSource, StringComparison.Ordinal);
         Assert.Contains("PrimaryScreen", settingsSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReleaseScripts_EnforceSafeSelfContainedEmbeddingAndV2SmokeHandshake()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var publishScript = File.ReadAllText(Path.Combine(repositoryRoot, "scripts", "publish-bridge.ps1"));
+        Assert.Contains("Assert-ExactDeletionTarget", publishScript, StringComparison.Ordinal);
+        Assert.Contains("Remove-Item -LiteralPath $outputDirectory -Recurse -Force", publishScript, StringComparison.Ordinal);
+        Assert.Contains("Remove-Item -LiteralPath $embeddedDirectory -Recurse -Force", publishScript, StringComparison.Ordinal);
+        Assert.Contains("default-profile.json", publishScript, StringComparison.Ordinal);
+        Assert.Contains("f20-profile.json", publishScript, StringComparison.Ordinal);
+        Assert.Contains("schemaVersion", publishScript, StringComparison.Ordinal);
+        Assert.Contains("includedFrameworks", publishScript, StringComparison.Ordinal);
+        Assert.Contains("coreclr.dll", publishScript, StringComparison.Ordinal);
+        Assert.Contains("UTF8Encoding", publishScript, StringComparison.Ordinal);
+        Assert.Contains("Get-FileHash", publishScript, StringComparison.Ordinal);
+        Assert.Contains("File count", publishScript, StringComparison.Ordinal);
+
+        var smokeScript = File.ReadAllText(Path.Combine(repositoryRoot, "scripts", "test-embedded-bridge.ps1"));
+        Assert.Contains("bridge-version.txt", smokeScript, StringComparison.Ordinal);
+        Assert.Contains("1.2.0", smokeScript, StringComparison.Ordinal);
+        Assert.Contains("NamedPipeClientStream", smokeScript, StringComparison.Ordinal);
+        Assert.Contains("protocolVersion = 2", smokeScript, StringComparison.Ordinal);
+        Assert.Contains("messageType = 'Hello'", smokeScript, StringComparison.Ordinal);
+        Assert.Contains("HelloAck", smokeScript, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReleaseDocumentation_UsesTheTagged120PackageUrlWithoutLegacy11xUrls()
+    {
+        const string taggedUrl =
+            "https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.0";
+        var repositoryRoot = FindRepositoryRoot();
+        var documentationPaths = new[]
+        {
+            "README.md",
+            "INSTALL.md",
+            Path.Combine("docs", "unity-integration.md"),
+            Path.Combine("UnityPackage", "com.blaze.radar", "README.md"),
+            Path.Combine("UnityPackage", "com.blaze.radar", "Documentation~", "index.md")
+        };
+
+        foreach (var relativePath in documentationPaths)
+        {
+            var source = File.ReadAllText(Path.Combine(repositoryRoot, relativePath));
+            Assert.Contains(taggedUrl, source, StringComparison.Ordinal);
+            Assert.DoesNotMatch(@"RadarControl\.git\?path=/UnityPackage/com\.blaze\.radar#v1\.1\.\d+", source);
+        }
     }
 
     [Fact]

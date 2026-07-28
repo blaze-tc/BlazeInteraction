@@ -1,47 +1,49 @@
-# Unity 集成
+# Unity 1.2.0 多屏集成
 
-面向首次使用者的完整安装、场景配置和验收步骤见 [安装说明与首次使用](../INSTALL.md)。
-
-## 安装
-
-如果项目曾安装 `com.yuexin.radar`，请先移除旧包并删除旧的 `Assets/Samples/Yuexin Radar SDK/1.0.1`；该目录是 Unity 复制到 `Assets` 的 Sample，不会随旧包自动移除。
-
-1. Unity Package Manager 选择 **Install package from git URL**，推荐使用固定版本地址 `https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.1.5`；也可以选择 **Add package from disk** 并打开 `UnityPackage/com.blaze.radar/package.json`。
-2. 等待约 161 MB 的 self-contained Bridge 与 SDK 下载、导入完成。
-3. 导入 **Basic Interaction** Sample。
-4. 通过 **Tools > Blaze Radar > Create or Select Settings** 创建 Settings；`Editor Bridge Executable` 留空时自动使用包内 Bridge，需要调试其他版本时才设置覆盖路径。
-5. 在场景中执行 **GameObject > Blaze Radar > Create Runtime**。
-
-## EventSystem 约束
-
-- 每个 Screen Space Canvas 需要 `GraphicRaycaster`。
-- 3D/2D 交互相机分别添加 `PhysicsRaycaster`/`Physics2DRaycaster`。
-- 禁用 `StandaloneInputModule`，避免同一 EventSystem 重复派发。
-- `RadarInputModule` 支持多 TrackId 独立 Pointer 状态。调试时可选 `RadarAndMouseDebug`，发布时建议 `RadarOnly`。
-
-## Basic Interaction 真机日志
-
-导入 Sample 后，右侧 **Radar Event Log** 用于现场联调：顶部实时区逐帧显示接收计数、IPC 序号、活动指针数、被最新值缓存替换的帧数、帧时间/延迟，以及每个指针的 ID、阶段、归一化/像素坐标、置信度和采样时间。下方历史区记录 IPC 连接/错误和实际进入 UGUI、Physics、Physics2D 的标准 EventSystem 回调。Bridge 会持续发送空指针帧，因此 `IPC CONNECTED` 后若显示 `POINTERS 0`，说明链路正常但区域 2 当前没有有效目标；`Player.log` 同时会周期记录帧序号、指针数和丢帧数。
-
-Bridge 的绿色四角有效区域既用于过滤，也在没有单独四点标定时作为 Unity 0–1 坐标映射区域。右侧“显示范围（仅缩放，不过滤）”只控制两张雷达图的缩放比例，不会改变过滤结果或 Unity 坐标。
-
-历史最多保留 160 条；Move/Drag/Scroll 会节流，Down/Up、连接变化和错误立即记录。因此长时间真机测试不会无限增长界面文本，同时顶部仍保留逐帧数据。复现问题前点击 **CLEAR LOG**，再保存日志时间点、Bridge 日志与 Unity 画面进行对照。
-
-## Bridge 启动与构建
-
-Launcher 先复用已有 Bridge；否则在 Editor 中从包缓存的 `Bridge~/win-x64/RadarBridge.exe` 启动，在 Player 中从玩家旁的 `RadarBridge/RadarBridge.exe` 启动，并传入 Unity PID。构建后处理器自动把包内完整发布目录复制到：
+安装固定标签：
 
 ```text
-Game.exe
-RadarBridge/
-  RadarBridge.exe
-  profiles/default-profile.json
-  profiles/f20-profile.json
-Game_Data/
+https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.0
 ```
 
-构建处理器只从当前 Package Manager 已解析的 `com.blaze.radar` 包读取 Bridge，不再使用机器全局的旧发布路径。复制前会清理玩家旁已有的 `RadarBridge` 目录，并校验包版本、`bridge-version.txt` 和复制前后 EXE 的 SHA-256；任何不一致都会让 Unity Build 明确失败。包开发者可运行 `.\scripts\publish-bridge.ps1` 重新生成并同步内嵌目录。
+升级时先移除 `#v1.1.x` URL 和旧 Sample。Package Manager 必须显示 Blaze Radar SDK `1.2.0`，Resolved Path 必须是这次解析的 `Library/PackageCache/com.blaze.radar@...`（本地包则应是预期克隆路径）。发现旧路径时关闭 Unity，只清理本项目该包缓存/lock 条目，再解析标签；详见 [INSTALL.md](../INSTALL.md)。
 
-## 验收
+## Project Settings 拓扑
 
-包内有 `Tests/Runtime` PlayMode 测试，覆盖 Button 点击、双指针独立状态、射线结果查询与模块停用取消。Basic Interaction 是已编排的 UGUI 场景：标准 Button、Toggle、Slider、ScrollRect 直接使用持久化 UnityEvent，3D/2D 目标直接实现标准 Pointer/Drag 接口；场景同时配置 `GraphicRaycaster`、`PhysicsRaycaster` 和 `Physics2DRaycaster`，无需运行时创建 UI。包的 Runtime、Editor 与 Sample 已在 Unity 2021.3.45f1 中完成真实导入编译和 Play Mode IPC 联调；Windows Player 构建仍应在目标项目内验收。
+在 **Project Settings > Blaze Radar** 添加任意数量的 Screen：
+
+- Screen ID 必须非空、唯一并长期稳定；逻辑宽高各自独立，可适配不同比例/分辨率。
+- 启用屏幕的 Order 必须唯一，并且恰好一个 `Is Primary`。禁用屏幕不会出现在 IPC topology。
+- `Auto Start`、`Exit Bridge With Unity` 与 Pipe Name 保留原有语义；默认 Pipe 仍是 `Yuexin.RadarBridge`。
+
+示例为 LEFT/L1、FRONT/F1+F2、RIGHT/R1。F1/F2 属于同一个 FRONT，Bridge 内两个 OutputRect 在物理交叠处保留重叠，由 FRONT 的融合/跟踪参数去重并维持同屏 Pointer ID。
+
+## Bridge 配置边界
+
+Unity 的 Hello topology 决定可选屏幕和逻辑分辨率。操作员在 Bridge 先选屏幕，再新增/删除传感器；每个 Sensor 分别设置 Real/Simulation/Replay、F10/F20、雷达 IP/端口、本机网卡、transform/filter/calibration 和 OutputRect。Fusion output rate/data age/distance、tracking confirm/lost/association/smoothing 以及 Touch/Dwell 参数属于 Screen。
+
+## Runtime 与 Camera 路由
+
+执行 **GameObject > Blaze Radar > Create Runtime**。一个场景只保留一个启用 EventSystem 输入模块；Canvas 使用 `GraphicRaycaster`，3D/2D Camera 使用相应 Raycaster。
+
+为每个 Screen ID 选择独立绑定：
+
+- 不同物理输出使用 Camera `targetDisplay`；Player 启用并核对每个 Display。
+- 同一 Display 拼接时使用 Camera `pixelRect`，矩形像素布局必须匹配逻辑屏幕。
+- 投影映射管线使用独立 RenderTexture，纹理尺寸/比例匹配逻辑屏幕。
+
+PointerBatch 带 screen summary 和每屏像素坐标，router 只把一屏数据送到其绑定 Camera。per-camera world particles、UGUI、2D、3D 命中都应留在对应墙；不要无意让多个启用 Camera 消费相同 Screen ID。
+
+## Basic Interaction 与 Multi-Screen Camera Routing
+
+Basic Interaction：先用 Bridge Simulation，再用真实雷达/IPC，验证 Button、Toggle、Slider、Scroll、2D/3D targets 和完整 Pointer 生命周期。右侧日志与 `Player.log` 提供 Bridge/SDK/IPC、sequence、latency、dropped count、ID、phase 和命中对象。
+
+Multi-Screen Camera Routing：先用 **LOCAL** 无 Bridge 模拟逐屏指针，检查 Display/`pixelRect`/RenderTexture 与 world particles；再用 **BRIDGE IPC** 连接 1.2.0 Bridge，按 LEFT/FRONT/RIGHT 和 L1/F1/F2/R1 逐路验证。FRONT 重叠区必须只有一个稳定 Pointer，不能重复 Click。
+
+## 日志和 Player Build
+
+Bridge 日志以 `[SCREEN/SENSOR]` 和 `[GLOBAL/IPC]` 标记。对齐 `Player.log` 的 SDK/Bridge/IPC、screenId、batch/frame sequence、pointer count、dropped count、timestamp/latency 和 EventSystem target。
+
+Windows Build 后处理器只从当前 Package Manager Resolved Path 取 Bridge，删除旧 Player `RadarBridge/` 后复制完整 self-contained payload，校验 package/SDK/marker 均为 `1.2.0` 和 EXE SHA-256。构建后记录 Player-side marker/SHA；不一致时清理陈旧包缓存并重新 Build，不要手工换 EXE。
+
+IPC v1/v2 不兼容。protocol mismatch 时关闭旧 Bridge/Player，移除旧 1.1.x URL/cache，确认双方 `1.2.0`/IPC 2 后重连。现场还要完成 [三投影四雷达 8 小时清单](../INSTALL.md#10-现场-8-小时验收三投影四雷达)。

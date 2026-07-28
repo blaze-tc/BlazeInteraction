@@ -1,29 +1,37 @@
-# 故障排查与网络配置
+# 1.2.0 故障排查与现场证据
 
-## Bridge 无法连接雷达
+## 包版本或 Bridge 不是 1.2.0
 
-1. 给有线网卡设置静态 IPv4，例如 `192.168.0.10`、掩码 `255.255.255.0`；不要把本机地址设为雷达的 `192.168.0.100`。
-2. 在 Bridge 的“本机网卡”选择该 IPv4，设备地址保持 `192.168.0.100:8487`。
-3. 暂时禁用会抢占同网段路由的其他网卡，确认网线与供电。
-4. 查看 `%LOCALAPPDATA%/RadarControl/logs/RadarBridge-YYYYMMDD.log` 中的绑定地址、重连和超时记录。
+Package Manager 应解析：
 
-## 有连接但没有有效点
+```text
+https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.0
+```
 
-- 确认型号为 F10/F20 中的实际型号，量程没有设得过小。
-- 检查有效角度、有效多边形、四边死区和屏蔽区；可逐层开启 Raw/Valid/Cluster/Target 视图定位在哪一步被过滤。
-- CRC 错误持续增长通常说明收到的不是本说明书对应协议、链路数据损坏或存在额外前导数据。
+移除旧 `#v1.1.x` URL、本地覆盖和已导入的旧 Sample。确认 Version `1.2.0` 和 Resolved Path 指向本项目新 `Library/PackageCache/com.blaze.radar@...`。仍陈旧时关闭 Unity，只清除该包缓存与 lock 条目后重开。Player 构建后比较 `RadarBridge/bridge-version.txt` 和包内/已审核 EXE SHA-256；不要用单个旧 EXE 覆盖完整目录。
 
-## Unity 无输入
+## IPC protocol mismatch 或一直 DISCONNECTED
 
-- 先确认 Bridge 的 Unity 状态已握手，并且 PipeName 两侧一致。
-- 确认场景只有一个有效输入模块，Canvas/Camera 上有对应 Raycaster。
-- 确认 Homography 有效且目标归一化坐标在 `[0,1]`。
-- Player 包必须把完整 `RadarBridge` 目录放在 exe 同级；只复制 exe 不够。
+IPC v1 PointerFrame 与 IPC v2 PointerBatch 不兼容。关闭所有旧 RadarBridge/Player，确认 package、SDK、Bridge 都为 `1.2.0`，日志显示 IPC 2，Pipe Name 两侧一致，再重连。HelloAck 必须包含 protocol 2、Bridge 1.2.0 和当前 screen summaries；不能忽略 Error 强行继续。
 
-## 配置与日志位置
+## 某屏无输入、串屏或重叠区双点
 
-- 默认配置：`%LOCALAPPDATA%/Yuexin/RadarBridge/config.json`
-- 日志：`%LOCALAPPDATA%/RadarControl/logs/`
-- 可用 `RadarBridge.exe --profile <path>` 指定独立配置。
+- Project Settings 中 Screen ID/Order 唯一，所有启用屏幕恰好一个 Primary，逻辑分辨率有效。
+- Bridge 选择正确屏幕；检查每个 Sensor 的 enabled/source、连接、本机 NIC、transform/calibration 和 OutputRect。
+- FRONT F1/F2 必须属于同一 FRONT；输出矩形覆盖真实交叠区，并调节 FRONT 的 data max age、fusion distance、association distance/confirm/lost。
+- Camera 的 Display、`pixelRect` 或 RenderTexture 绑定必须对应 screenId；检查对应 Graphic/Physics/Physics2D Raycaster。
+- 改拓扑、分辨率或 OutputRect 会触发 Pointer Up/reset，只在操作员预期时更改。
 
-删除或移走损坏配置后会回到 F10 默认值。保留问题现场时请同时提供配置、当日日志和 `.radarrec`，不要只提供截图。
+## 雷达连接失败
+
+电脑可设 `192.168.0.10/24`，雷达常用 `192.168.0.100:8487`；两者不能相同。Bridge 每个 Sensor 选择实际 F10/F20 与正确本机 NIC。逐个断开/恢复雷达和 NIC，其他屏幕应持续；检查 `[SCREEN/SENSOR]` tagged reconnect/timeout 日志。
+
+## WPF 控件消失或变模糊
+
+Bridge 在窗口创建前强制 WPF 软件渲染，路径不依赖 GPU。仍需记录 Windows 缩放、投影分辨率、GPU/驱动和精确操作；测试 click、drag、scroll、resize、minimize/restore、跨 DPI 屏移动和 projector focus change。若能复现，保存同一时间段日志与截图，确认运行的是包内 1.2.0 完整 payload，而非缓存旧版。
+
+## 日志关联
+
+Bridge 日志：`%LOCALAPPDATA%/RadarControl/logs/RadarBridge-YYYYMMDD.log`；配置默认在 `%LOCALAPPDATA%/Yuexin/RadarBridge/config.json`，也可 `--profile` 指定。用 `[SCREEN/SENSOR]`、sequence 和 timestamp 对齐 `Player.log` 的 SDK/Bridge/IPC、screenId、batch/frame sequence、pointer/dropped count、latency 和 EventSystem target。
+
+现场问题至少提供：最终 Schema 2 配置、Bridge tagged logs、`Player.log`、Package Manager Resolved Path、Player/包内 EXE SHA、拓扑/Camera 绑定与操作时间线。8 小时门禁见 [INSTALL.md](../INSTALL.md#10-现场-8-小时验收三投影四雷达)。

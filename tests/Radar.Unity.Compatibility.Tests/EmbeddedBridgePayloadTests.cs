@@ -32,6 +32,15 @@ public sealed class EmbeddedBridgePayloadTests
         var embeddedVersion = File.ReadAllText(Path.Combine(publishDirectory, "bridge-version.txt")).Trim();
 
         Assert.Equal(expectedVersion, embeddedVersion);
+
+        foreach (var profileName in new[] { "default-profile.json", "f20-profile.json" })
+        {
+            using var profile = JsonDocument.Parse(File.ReadAllText(Path.Combine(
+                publishDirectory,
+                "profiles",
+                profileName)));
+            Assert.Equal(2, profile.RootElement.GetProperty("schemaVersion").GetInt32());
+        }
     }
 
     private static void AssertFileExists(params string[] pathParts)
