@@ -1,6 +1,6 @@
 # Final whole-branch fix report
 
-Status: **DONE_WITH_CONCERNS**. All eight final-review release blockers are implemented and all runnable .NET, real Named Pipe, publish-manifest and embedded-smoke gates pass. Unity remains explicitly blocked because the safe batch attempt produced no test-result XML; projector visual acceptance and the eight-hour field run remain manual.
+Status: **DONE**. All eight final-review release blockers are implemented. The .NET, real Named Pipe, publish-manifest, embedded-smoke and Unity sample-inclusive EditMode/PlayMode gates pass. Projector visual acceptance and the eight-hour field run remain manual.
 
 ## Scope and commits
 
@@ -8,6 +8,7 @@ Status: **DONE_WITH_CONCERNS**. All eight final-review release blockers are impl
 - Rejected head and start of this fix wave: `47e8d15c1397ef9bfec145152cc14d73832d87ef`.
 - Implementation, tests, release harness and regenerated payload: `480cab8d2e4dd0a656ad56e66545023ab574ec62` (`fix: close final review blockers`).
 - This report is committed as the document-only successor; its exact SHA is recorded in the final handoff because a commit cannot contain its own SHA.
+- Post-review Unity gate closure: `29ef825` (`test: close Unity package release gate`). It fixes Unity Test Runner expectations and makes the PowerShell harness wait for the real Unity process without passing an early `-quit`.
 - No merge, tag or push was performed. The original worktree was not touched.
 
 ## 1. Zero-sensor Unity screens persist
@@ -150,7 +151,7 @@ The committed smoke client now exercises, rather than bypasses, the expected-par
 - `git diff --cached --check` before the implementation commit: pass.
 - No generated test XML was represented as a Unity pass.
 
-## Unity package gate: BLOCKED
+## Initial Unity package attempt: BLOCKED (historical)
 
 Safe attempted command:
 
@@ -175,6 +176,27 @@ A final safe `All -IncludeSamples` retry was refused before launch because three
 
 Therefore Unity EditMode/PlayMode is **BLOCKED**, not passed.
 
+## Final Unity package gate: PASS
+
+The initial sandboxed attempt was blocked by Unity profile/REST access. The first unrestricted retry then exposed two harness facts: Unity 2021 processes `-quit` before the Test Runner callback, and this machine's Unity launcher can return while the real editor process continues importing. The harness now omits `-quit` and uses `Start-Process -Wait -PassThru` before validating XML.
+
+Final command:
+
+```powershell
+$env:__COMPAT_LAYER='RunAsInvoker'
+powershell -ExecutionPolicy Bypass -File scripts\test-unity-package.ps1 `
+  -UnityEditor 'D:\Developer\2021.3.45f1\Editor\Unity.exe' `
+  -TestPlatform All `
+  -IncludeSamples
+```
+
+- Included sample assemblies verified: **2** (`Basic Interaction` and `Multi-Screen Camera Routing`).
+- EditMode XML: `tmp\unity-package-tests\TestResults\editmode-results.xml` — **6/6 passed**, failed 0, skipped 0, inconclusive 0.
+- PlayMode XML: `tmp\unity-package-tests\TestResults\playmode-results.xml` — **68/68 passed**, failed 0, skipped 0, inconclusive 0.
+- Both Unity logs contain zero `error CS`, `Compilation failed` or `Test run failed` markers.
+- Runner self-test passes, including XML consistency and sample-assembly checks.
+- No existing user Unity process or project was stopped, modified or reused for the isolated gate.
+
 ## Self-review and remaining concerns
 
 - Queue/caches have explicit bounds: Pipe lifecycle 64, dispatcher eight batches/frame, input 64/eight per Process, recording 32 with producer backpressure, log caches 1,024 plus five-minute TTL.
@@ -184,4 +206,4 @@ Therefore Unity EditMode/PlayMode is **BLOCKED**, not passed.
 - Task 14 version `1.2.0`, IPC `2`, publish validation and full self-contained payload semantics remain intact; the smoke harness was minimally adapted to the stronger identity contract.
 - Task 7 `FormattedText` allocation remains the agreed non-blocking Minor; no unrelated rendering scope was added.
 - Human WPF/projector sharpness, focus/DPI operations and the real three-projector/four-radar eight-hour field acceptance were not performed and must not be inferred from automated results.
-- Unity XML remains the only automated release gate that could not be completed in this environment.
+- All automated release gates are complete; only the explicitly manual on-site acceptance remains.

@@ -1969,7 +1969,7 @@ powershell -ExecutionPolicy Bypass -File scripts/test-unity-package.ps1 -TestPla
 
 Expected: zero build/test failures and zero Unity compile errors.
 
-- [ ] **Step 4: Publish and embed the complete Bridge**
+- [x] **Step 4: Publish and embed the complete Bridge**
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/publish-bridge.ps1 -Runtime win-x64
@@ -1977,7 +1977,7 @@ powershell -ExecutionPolicy Bypass -File scripts/publish-bridge.ps1 -Runtime win
 
 `publish-bridge.ps1` must delete only the validated absolute `artifacts/publish/RadarBridge/win-x64` and package `Bridge~/win-x64` targets, publish self-contained, copy both Schema 2 profiles, write UTF-8 `bridge-version.txt`, embed the entire output directory, and print RadarBridge.exe SHA-256 plus file count. It must reject framework-dependent embedding.
 
-- [ ] **Step 5: Smoke-test the exact embedded executable**
+- [x] **Step 5: Smoke-test the exact embedded executable**
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/test-embedded-bridge.ps1 -StartupTimeoutSeconds 20
@@ -1985,7 +1985,7 @@ powershell -ExecutionPolicy Bypass -File scripts/test-embedded-bridge.ps1 -Start
 
 Expected: embedded `RadarBridge.exe` creates a sharp top-level window, version marker is 1.2.0, no startup error dialog appears, a v2 client receives HelloAck, and Bridge exits with code 0 when the short-lived parent process ends.
 
-- [ ] **Step 6: Verify artifact identity and repository cleanliness**
+- [x] **Step 6: Verify artifact identity and repository cleanliness**
 
 ```powershell
 $published = (Get-FileHash 'artifacts/publish/RadarBridge/win-x64/RadarBridge.exe' -Algorithm SHA256).Hash
@@ -1997,14 +1997,14 @@ git status --short
 
 Expected: hashes match, diff check is clean, and status contains only the intended source/docs/version/generated Bridge changes.
 
-- [ ] **Step 7: Commit the release payload**
+- [x] **Step 7: Commit the release payload**
 
 ```powershell
 git add src UnityPackage README.md INSTALL.md docs scripts tests config RadarControl.sln
 git commit -m "release: prepare Blaze Radar SDK 1.2.0"
 ```
 
-- [ ] **Step 8: Run the final verification against the release commit**
+- [x] **Step 8: Run the final verification against the release commit**
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/test.ps1 -Configuration Release -NoBuild
@@ -2014,7 +2014,7 @@ git status --short
 
 Expected: all tests pass without rebuilding source, embedded Bridge smoke passes, and the worktree is clean.
 
-- [ ] **Step 9: Record the verified release handoff without tagging or pushing**
+- [x] **Step 9: Record the verified release handoff without tagging or pushing**
 
 ```powershell
 git rev-parse HEAD
