@@ -128,9 +128,18 @@ public sealed class ThemeContrastTests
             (string?)element.Attribute(xaml + "Name") == "TabHeaderBorder");
         var headerContent = template.Descendants(presentation + "ContentPresenter").Single(element =>
             (string?)element.Attribute(xaml + "Name") == "TabHeaderContent");
+        var styleSetters = style.Elements(presentation + "Setter").ToArray();
 
         Assert.Equal("{TemplateBinding Background}", (string?)headerBorder.Attribute("Background"));
         Assert.Equal("{TemplateBinding Foreground}", (string?)headerContent.Attribute("TextElement.Foreground"));
+        Assert.Equal("Center", (string?)headerContent.Attribute("HorizontalAlignment"));
+        Assert.Equal("Center", (string?)headerContent.Attribute("VerticalAlignment"));
+        Assert.Contains(styleSetters, setter =>
+            (string?)setter.Attribute("Property") == "HorizontalContentAlignment" &&
+            (string?)setter.Attribute("Value") == "Stretch");
+        Assert.Contains(styleSetters, setter =>
+            (string?)setter.Attribute("Property") == "VerticalContentAlignment" &&
+            (string?)setter.Attribute("Value") == "Stretch");
 
         Assert.Contains(template.Descendants(presentation + "Trigger"), trigger =>
             (string?)trigger.Attribute("Property") == "IsSelected" &&

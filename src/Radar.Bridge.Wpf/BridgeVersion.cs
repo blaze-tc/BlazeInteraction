@@ -2,5 +2,5 @@ namespace Yuexin.Radar.Bridge.Wpf;
 
 public static class BridgeVersion
 {
-    public const string Value = "1.2.3";
+    public const string Value = "1.2.4";
 }

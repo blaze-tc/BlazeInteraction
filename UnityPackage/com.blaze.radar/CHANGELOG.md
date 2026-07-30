@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.4 - 2026-07-30
+
+- Keep tab headers centered while stretching selected parameter content to the full panel, eliminating the narrow centered form and misplaced scrollbar introduced in 1.2.3.
+
 ## 1.2.3 - 2026-07-30
 
 - Replace the Windows default TabItem visuals with an explicit dark-theme template so selected, hovered, focused and disabled parameter tabs remain readable on every machine.
