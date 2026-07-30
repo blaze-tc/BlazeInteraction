@@ -115,6 +115,44 @@ public sealed class ThemeContrastTests
             (string?)trigger.Attribute("Value") == "False");
     }
 
+    [Fact]
+    public void ApplicationTheme_TabItemOwnsEveryVisualStateAndKeepsHeaderForegroundReadable()
+    {
+        var document = XDocument.Load(Path.Combine(FindRepositoryRoot(), "src", "Radar.Bridge.Wpf", "App.xaml"));
+        var presentation = XNamespace.Get("http://schemas.microsoft.com/winfx/2006/xaml/presentation");
+        var xaml = XNamespace.Get("http://schemas.microsoft.com/winfx/2006/xaml");
+        var style = document.Descendants(presentation + "Style").Single(element =>
+            (string?)element.Attribute("TargetType") == "TabItem" && element.Attribute(xaml + "Key") is null);
+        var template = style.Descendants(presentation + "ControlTemplate").Single();
+        var headerBorder = template.Descendants(presentation + "Border").Single(element =>
+            (string?)element.Attribute(xaml + "Name") == "TabHeaderBorder");
+        var headerContent = template.Descendants(presentation + "ContentPresenter").Single(element =>
+            (string?)element.Attribute(xaml + "Name") == "TabHeaderContent");
+
+        Assert.Equal("{TemplateBinding Background}", (string?)headerBorder.Attribute("Background"));
+        Assert.Equal("{TemplateBinding Foreground}", (string?)headerContent.Attribute("TextElement.Foreground"));
+
+        Assert.Contains(template.Descendants(presentation + "Trigger"), trigger =>
+            (string?)trigger.Attribute("Property") == "IsSelected" &&
+            (string?)trigger.Attribute("Value") == "True" &&
+            trigger.Descendants(presentation + "Setter").Any(setter =>
+                (string?)setter.Attribute("TargetName") == "TabHeaderBorder" &&
+                (string?)setter.Attribute("Property") == "Background" &&
+                (string?)setter.Attribute("Value") == "#173047") &&
+            trigger.Descendants(presentation + "Setter").Any(setter =>
+                (string?)setter.Attribute("Property") == "Foreground" &&
+                (string?)setter.Attribute("Value") == "{StaticResource PrimaryBrush}"));
+        Assert.Contains(template.Descendants(presentation + "Trigger"), trigger =>
+            (string?)trigger.Attribute("Property") == "IsMouseOver" &&
+            (string?)trigger.Attribute("Value") == "True");
+        Assert.Contains(template.Descendants(presentation + "Trigger"), trigger =>
+            (string?)trigger.Attribute("Property") == "IsKeyboardFocusWithin" &&
+            (string?)trigger.Attribute("Value") == "True");
+        Assert.Contains(template.Descendants(presentation + "Trigger"), trigger =>
+            (string?)trigger.Attribute("Property") == "IsEnabled" &&
+            (string?)trigger.Attribute("Value") == "False");
+    }
+
     private static Color ReadColor(XDocument document, XNamespace presentation, XNamespace xaml, string key)
     {
         var text = document.Descendants(presentation + "Color")

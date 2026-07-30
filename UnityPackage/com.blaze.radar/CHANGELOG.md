@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.3 - 2026-07-30
+
+- Replace the Windows default TabItem visuals with an explicit dark-theme template so selected, hovered, focused and disabled parameter tabs remain readable on every machine.
+
 ## 1.2.2 - 2026-07-30
 
 - Split each selected radar's diagnostics into an unmodified raw scan view and a separate transformed, box-filtered view used by screen fusion and Unity output.

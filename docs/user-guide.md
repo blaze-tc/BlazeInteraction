@@ -1,6 +1,6 @@
 # RadarControl 图文使用说明
 
-本文说明 Blaze Radar SDK 与 `RadarBridge.exe` 的安装、连接、界面按钮、参数含义，以及 Unity Sample 的验证方法。适用版本：`1.2.2`，IPC 协议：`2`。
+本文说明 Blaze Radar SDK 与 `RadarBridge.exe` 的安装、连接、界面按钮、参数含义，以及 Unity Sample 的验证方法。适用版本：`1.2.3`，IPC 协议：`2`。
 
 ## 1. 安装到 Unity
 
@@ -9,10 +9,10 @@
 3. 输入：
 
    ```text
-   https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.2
+   https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.3
    ```
 
-4. 选中 **Blaze Radar SDK**，确认版本为 `1.2.2`。
+4. 选中 **Blaze Radar SDK**，确认版本为 `1.2.3`。
 5. 在 **Samples** 中导入 **Basic Interaction**；多屏项目再导入 **Multi-Screen Camera Routing**。
 6. 打开 **Tools > Blaze Radar > Create or Select Settings**，再到 **Project Settings > Blaze Radar** 配置 Unity 逻辑屏幕。
 
@@ -22,7 +22,7 @@
 
 ![RadarBridge 主界面](images/radarbridge-overview.png)
 
-> 图中是现场操作布局截图。`1.2.2` 保持左右栏位置不变，并把中间“区域 1”拆为 `1A 原始点观察` 与 `1B 拉框过滤结果`；两块数据不再叠加显示。
+> 图中是现场操作布局截图。`1.2.3` 保持左右栏位置不变，并把中间“区域 1”拆为 `1A 原始点观察` 与 `1B 拉框过滤结果`；两块数据不再叠加显示。
 
 界面从左到右分为五个工作区：Unity 屏幕、当前屏幕雷达、单雷达数据、屏幕融合输出、参数。底部日志用于把 Bridge 状态与 Unity `Player.log` 按时间对齐。
 
