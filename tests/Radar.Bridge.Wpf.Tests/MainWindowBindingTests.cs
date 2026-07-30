@@ -154,6 +154,28 @@ public sealed class MainWindowBindingTests
         });
     }
 
+    [Fact]
+    public void Show_OffersMatchingStartAndStopSimulationActions()
+    {
+        WpfTestHost.Instance.Invoke(() =>
+        {
+            var runtime = new TestRuntime();
+            using var viewModel = new MainViewModel(RadarAppConfiguration.CreateDefault(), runtime);
+            var window = new MainWindow(viewModel, runtime);
+            window.Show();
+            window.UpdateLayout();
+
+            var labels = FindVisualChildren<Button>(window)
+                .Select(button => button.Content as string)
+                .Where(label => label is not null)
+                .ToArray();
+            Assert.Contains("一键模拟", labels);
+            Assert.Contains("停止模拟", labels);
+
+            window.Close();
+        });
+    }
+
     private static IEnumerable<T> FindVisualChildren<T>(DependencyObject root) where T : DependencyObject
     {
         for (var index = 0; index < System.Windows.Media.VisualTreeHelper.GetChildrenCount(root); index++)

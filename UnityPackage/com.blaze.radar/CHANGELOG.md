@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.6 - 2026-07-30
+
+- Add a matching **Stop Simulation** action that stops Simulation pipelines across all Unity-associated screens while preserving their Simulation configuration for quick restart.
+- Stop pending replacement Simulation pipelines as well, so an immediate stop after **One-click Simulation** cannot leave hidden generators running.
+
 ## 1.2.5 - 2026-07-30
 
 - Keep all region and calibration actions visible by wrapping them into equal-width rows on narrow parameter panels.

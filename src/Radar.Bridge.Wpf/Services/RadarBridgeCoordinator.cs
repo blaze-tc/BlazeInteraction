@@ -335,6 +335,47 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         PublishLog($"[GLOBAL/SIMULATION] One-click simulation started for {convertedSensorCount} enabled radar sensor(s).");
     }
 
+    public async Task StopAllSimulationAsync()
+    {
+        ThrowIfDisposed();
+        await _topologyLock.WaitAsync().ConfigureAwait(false);
+        var stoppedSensorCount = 0;
+        try
+        {
+            var runtimes = _screens.Values
+                .Select(runtime => runtime.IsRetiring ? runtime.PendingReplacement : runtime)
+                .Where(runtime => runtime is not null && !runtime.IsRetiring)
+                .Cast<ScreenRuntime>()
+                .Distinct()
+                .OrderBy(runtime => runtime.Info.ScreenId, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            foreach (var runtime in runtimes)
+            {
+                PipelineRuntime[] simulationPipelines;
+                lock (runtime.Gate)
+                {
+                    simulationPipelines = runtime.Pipelines.Values
+                        .Where(pipeline => pipeline.Configuration.SourceMode == RadarSensorSourceMode.Simulation)
+                        .OrderBy(pipeline => pipeline.Configuration.SensorId, StringComparer.OrdinalIgnoreCase)
+                        .ToArray();
+                }
+
+                foreach (var pipeline in simulationPipelines)
+                {
+                    await StopIsolatedAsync(runtime.Info.ScreenId, pipeline).ConfigureAwait(false);
+                    stoppedSensorCount++;
+                }
+            }
+        }
+        finally
+        {
+            _topologyLock.Release();
+        }
+
+        PublishLog($"[GLOBAL/SIMULATION] Stopped {stoppedSensorCount} simulation radar sensor(s).");
+    }
+
     public Task StartRecordingAsync(string screenId, string sensorId, string path, CancellationToken cancellationToken = default) =>
         UsePipelineAsync(screenId, sensorId, (pipeline, token) => pipeline.StartRecordingAsync(path, token), cancellationToken);
 

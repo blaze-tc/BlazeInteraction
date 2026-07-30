@@ -663,6 +663,31 @@ public sealed class RadarBridgeCoordinatorTests
     }
 
     [Fact]
+    public async Task Coordinator_StopAllSimulationStopsPendingReplacementPipelinesWithoutChangingSourceMode()
+    {
+        var configuration = new RadarAppConfiguration
+        {
+            Screens = [ScreenConfiguration("front", "f1", 1920, 1080)]
+        };
+        configuration.Screens[0].Sensors[0].SourceMode = RadarSensorSourceMode.Real;
+        var factory = new FakePipelineFactory();
+        await using var coordinator = CreateCoordinator(configuration, factory);
+        await coordinator.ApplyUnityTopologyAsync(Hello(Screen("front", "Front", true, 1920, 1080, 0)));
+        var original = factory["front", "f1"];
+        await coordinator.StartAllSimulationAsync();
+        var replacement = factory["front", "f1"];
+
+        var stopMethod = typeof(RadarBridgeCoordinator).GetMethod("StopAllSimulationAsync", Type.EmptyTypes);
+        Assert.NotNull(stopMethod);
+        await Assert.IsAssignableFrom<Task>(stopMethod.Invoke(coordinator, null));
+
+        Assert.NotSame(original, replacement);
+        Assert.Equal(RadarSensorSourceMode.Simulation, configuration.Screens[0].Sensors[0].SourceMode);
+        Assert.Equal(1, replacement.StopCallCount);
+        Assert.Equal(RadarSensorRuntimeState.Stopped, replacement.State);
+    }
+
+    [Fact]
     public async Task Coordinator_ConnectScreenKeepsLaterSensorInTheSameLeaseBatchDuringRetirement()
     {
         var configuration = new RadarAppConfiguration
@@ -744,7 +769,7 @@ public sealed class RadarBridgeCoordinatorTests
         var acknowledgement = await IpcStream.ReadAsync(client, cancellationToken);
         Assert.Equal(IpcMessageType.HelloAck, acknowledgement.MessageType);
         var ack = acknowledgement.DeserializePayload<HelloAckPayload>();
-        Assert.Equal("1.2.5", BridgeVersion.Value);
+        Assert.Equal("1.2.6", BridgeVersion.Value);
         Assert.Equal(BridgeVersion.Value, ack.BridgeVersion);
         Assert.Equal(["left", "front", "right"], ack.Screens.Select(screen => screen.ScreenId));
         return client;

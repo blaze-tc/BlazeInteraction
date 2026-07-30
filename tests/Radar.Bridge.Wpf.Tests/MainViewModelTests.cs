@@ -47,6 +47,20 @@ public sealed class MainViewModelTests
     }
 
     [Fact]
+    public async Task StopAllSimulationCommand_RoutesToRuntime()
+    {
+        var runtime = new TestRuntime();
+        using var viewModel = new MainViewModel(ThreeScreenFourSensorConfiguration(), runtime);
+        var commandProperty = typeof(MainViewModel).GetProperty("StopAllSimulationCommand");
+        Assert.NotNull(commandProperty);
+        var command = Assert.IsAssignableFrom<ICommand>(commandProperty.GetValue(viewModel));
+
+        await ExecuteAsync(command);
+
+        Assert.Equal(1, runtime.StopAllSimulationCallCount);
+    }
+
+    [Fact]
     public void SelectingScreen_SelectsItsFirstSensor()
     {
         using var viewModel = new MainViewModel(ThreeScreenFourSensorConfiguration(), new TestRuntime());
@@ -439,6 +453,7 @@ public sealed class MainViewModelTests
         public (string Path, double Speed, bool Loop)? LastReplay { get; private set; }
         public int StartRecordingCallCount { get; private set; }
         public int ApplyConfigurationCallCount { get; private set; }
+        public int StopAllSimulationCallCount { get; private set; }
         public Exception? ConnectSensorException { get; init; }
         public TaskCompletionSource? ConnectGate { get; init; }
         public TaskCompletionSource? DisconnectGate { get; init; }
@@ -463,6 +478,7 @@ public sealed class MainViewModelTests
         public Task ConnectAllAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task DisconnectAllAsync() => Task.CompletedTask;
         public Task StartAllSimulationAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task StopAllSimulationAsync() { StopAllSimulationCallCount++; return Task.CompletedTask; }
         public Task StartRecordingAsync(string screenId, string sensorId, string path, CancellationToken cancellationToken = default) { StartRecordingCallCount++; return Task.CompletedTask; }
         public Task StopRecordingAsync(string screenId, string sensorId) => Task.CompletedTask;
         public Task ReplaySensorAsync(string screenId, string sensorId, string path, double speed, bool loop, CancellationToken cancellationToken = default) { ReplayCallCount++; LastReplay = (path, speed, loop); return Task.CompletedTask; }

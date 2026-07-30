@@ -1,6 +1,6 @@
 # RadarControl 图文使用说明
 
-本文说明 Blaze Radar SDK 与 `RadarBridge.exe` 的安装、连接、界面按钮、参数含义，以及 Unity Sample 的验证方法。适用版本：`1.2.5`，IPC 协议：`2`。
+本文说明 Blaze Radar SDK 与 `RadarBridge.exe` 的安装、连接、界面按钮、参数含义，以及 Unity Sample 的验证方法。适用版本：`1.2.6`，IPC 协议：`2`。
 
 ## 1. 安装到 Unity
 
@@ -9,10 +9,10 @@
 3. 输入：
 
    ```text
-   https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.5
+   https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.6
    ```
 
-4. 选中 **Blaze Radar SDK**，确认版本为 `1.2.5`。
+4. 选中 **Blaze Radar SDK**，确认版本为 `1.2.6`。
 5. 在 **Samples** 中导入 **Basic Interaction**；多屏项目再导入 **Multi-Screen Camera Routing**。
 6. 打开 **Tools > Blaze Radar > Create or Select Settings**，再到 **Project Settings > Blaze Radar** 配置 Unity 逻辑屏幕。
 
@@ -20,11 +20,11 @@
 
 ## 2. Bridge 主界面
 
-![RadarBridge 1.2.5 主界面，屏幕参数页展开](images/radarbridge-overview.png)
+![RadarBridge 1.2.6 主界面，屏幕参数页展开](images/radarbridge-overview.png)
 
-> 图 1：`RadarBridge 1.2.5` 默认窗口，右侧已展开“屏幕参数”。截图中的 `Unity 连接: False` 和 `Stopped` 表示截图时没有连接 Unity 或真实雷达，仅用于说明界面布局；现场运行时应以右上角连接状态、左侧雷达状态和底部日志为准。
+> 图 1：`RadarBridge 1.2.6` 默认窗口，右侧已展开“屏幕参数”。截图中的 `Unity 连接: False` 和 `Stopped` 表示截图时没有连接 Unity 或真实雷达，仅用于说明界面布局；现场运行时应以右上角连接状态、左侧雷达状态和底部日志为准。
 
-界面从左到右分为五个功能区。`1.2.5` 将单雷达视图明确拆为 `1A 原始点观察` 与 `1B 拉框过滤结果`，并让右侧参数正文铺满面板；页签标题保持居中，滚动条固定在参数面板最右侧。
+界面从左到右分为五个功能区。`1.2.6` 将单雷达视图明确拆为 `1A 原始点观察` 与 `1B 拉框过滤结果`，并让右侧参数正文铺满面板；页签标题保持居中，滚动条固定在参数面板最右侧。
 
 | 位置 | 功能 | 观察重点 |
 | --- | --- | --- |
@@ -55,6 +55,7 @@
 | `＋` | 为当前屏幕新建一个雷达配置 |
 | 连接所选 / 断开所选 | 只控制当前雷达 |
 | 一键模拟 | 将所有 Unity 已关联屏幕中的已启用雷达切换为 Simulation，保存配置并立即启动，适合无真机验收 |
+| 停止模拟 | 停止所有 Unity 已关联屏幕中正在运行或正在切换的 Simulation 雷达；保留 Simulation 配置，之后可再次一键启动 |
 | 删除雷达 | 删除当前雷达配置；现场已使用的 Sensor ID 不应随意重建 |
 
 ### 2.3 区域 1：单雷达数据
@@ -78,7 +79,7 @@
 
 先在左上选择 Unity 屏幕，再点击右侧 **屏幕参数**。该页只修改当前屏幕的逻辑分辨率、融合、跟踪和交互配置，不修改任何单雷达的 IP、安装方向或物理过滤范围。
 
-参数正文应横向铺满右侧面板：宽度/高度各占一列，其余单值输入框占满可用宽度；内容超出可见高度时，使用面板最右侧的垂直滚动条继续查看。若正文缩在中间、滚动条不在最右侧或页签出现白底浅字，说明运行的不是 `1.2.5` 完整包，应检查 Package Manager Version、Resolved Path 和 `bridge-version.txt`。
+参数正文应横向铺满右侧面板：宽度/高度各占一列，其余单值输入框占满可用宽度；内容超出可见高度时，使用面板最右侧的垂直滚动条继续查看。若正文缩在中间、滚动条不在最右侧或页签出现白底浅字，说明运行的不是 `1.2.6` 完整包，应检查 Package Manager Version、Resolved Path 和 `bridge-version.txt`。
 
 | 参数 | 含义与建议 |
 | --- | --- |

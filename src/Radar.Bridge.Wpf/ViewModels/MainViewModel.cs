@@ -47,6 +47,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ConnectAllCommand = CreateCommand(token => _runtime.ConnectAllAsync(token));
         DisconnectAllCommand = CreateCommand(_ => _runtime.DisconnectAllAsync());
         StartAllSimulationCommand = CreateCommand(token => _runtime.StartAllSimulationAsync(token));
+        StopAllSimulationCommand = CreateCommand(_ => _runtime.StopAllSimulationAsync());
         StartReplayCommand = CreateCommand(token => WithSelectedReplaySensorAsync((screen, sensor) => _runtime.ReplaySensorAsync(screen.ScreenId, sensor.SensorId, sensor.ReplayFilePath, sensor.ReplaySpeed, sensor.ReplayLoop, token)));
         PauseReplayCommand = new RelayCommand(() => WithSelectedReplaySensor((screen, sensor) => _runtime.PauseReplay(screen.ScreenId, sensor.SensorId)), HasSelectedReplaySensor);
         ResumeReplayCommand = new RelayCommand(() => WithSelectedReplaySensor((screen, sensor) => _runtime.ResumeReplay(screen.ScreenId, sensor.SensorId)), HasSelectedReplaySensor);
@@ -131,6 +132,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ICommand ConnectAllCommand { get; }
     public ICommand DisconnectAllCommand { get; }
     public ICommand StartAllSimulationCommand { get; }
+    public ICommand StopAllSimulationCommand { get; }
     public ICommand StartReplayCommand { get; }
     public ICommand PauseReplayCommand { get; }
     public ICommand ResumeReplayCommand { get; }

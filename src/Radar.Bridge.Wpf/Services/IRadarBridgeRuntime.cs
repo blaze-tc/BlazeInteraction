@@ -52,6 +52,7 @@ public interface IRadarBridgeRuntime : IAsyncDisposable
     Task ConnectAllAsync(CancellationToken cancellationToken = default) => Task.FromException(new NotSupportedException());
     Task DisconnectAllAsync() => Task.FromException(new NotSupportedException());
     Task StartAllSimulationAsync(CancellationToken cancellationToken = default) => Task.FromException(new NotSupportedException());
+    Task StopAllSimulationAsync() => Task.FromException(new NotSupportedException());
     Task StartRecordingAsync(string screenId, string sensorId, string path, CancellationToken cancellationToken = default) => Task.FromException(new NotSupportedException());
     Task StopRecordingAsync(string screenId, string sensorId) => Task.FromException(new NotSupportedException());
     Task ReplaySensorAsync(string screenId, string sensorId, string path, double speed, bool loop, CancellationToken cancellationToken = default) => Task.FromException(new NotSupportedException());

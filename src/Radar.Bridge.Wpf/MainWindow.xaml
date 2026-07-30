@@ -20,7 +20,7 @@
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel VerticalAlignment="Center">
                     <TextBlock Text="RADARBRIDGE" FontSize="18" FontWeight="Bold"/>
-                    <TextBlock Text="Bridge 1.2.5 · IPC 2 · Windows x64" Style="{StaticResource CaptionStyle}" Margin="0,1,0,0"/>
+                    <TextBlock Text="Bridge 1.2.6 · IPC 2 · Windows x64" Style="{StaticResource CaptionStyle}" Margin="0,1,0,0"/>
                     <TextBlock Text="多屏幕 · 多雷达 · 融合诊断" Style="{StaticResource CaptionStyle}" Margin="0,2,0,0"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
@@ -94,8 +94,10 @@
                             <Grid Margin="0,6,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
                                 <Button Content="一键模拟" Command="{Binding StartAllSimulationCommand}" Margin="0,0,4,0"
                                         ToolTip="将所有已启用雷达切换为模拟模式、保存配置并立即启动"/>
-                                <Button Grid.Column="1" Content="删除雷达" Command="{Binding DeleteSensorCommand}" Margin="4,0,0,0"/>
+                                <Button Grid.Column="1" Content="停止模拟" Command="{Binding StopAllSimulationCommand}" Margin="4,0,0,0"
+                                        ToolTip="停止所有已关联屏幕中正在运行的模拟雷达，保留模拟配置"/>
                             </Grid>
+                            <Button Content="删除雷达" Command="{Binding DeleteSensorCommand}" Margin="0,6,0,0"/>
                         </StackPanel>
                     </Border>
                 </StackPanel>
