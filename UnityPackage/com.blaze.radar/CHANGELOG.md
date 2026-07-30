@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.5 - 2026-07-30
+
+- Keep all region and calibration actions visible by wrapping them into equal-width rows on narrow parameter panels.
+- Make **One-click Simulation** convert every enabled radar on Unity-associated screens to Simulation, persist the configuration, and start the replacement pipelines immediately.
+
 ## 1.2.4 - 2026-07-30
 
 - Keep tab headers centered while stretching selected parameter content to the full panel, eliminating the narrow centered form and misplaced scrollbar introduced in 1.2.3.

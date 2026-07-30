@@ -270,7 +270,69 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
 
     public async Task StartAllSimulationAsync(CancellationToken cancellationToken = default)
     {
-        await UseRuntimePipelinesAsync(AssociatedRuntimes(), simulationOnly: true, (pipeline, token) => pipeline.StartAsync(token), cancellationToken).ConfigureAwait(false);
+        ThrowIfDisposed();
+        EnsureConfigurationWritable();
+        await _topologyLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var convertedSensorCount = 0;
+        try
+        {
+            var active = AssociatedRuntimes();
+            if (active.Length == 0)
+            {
+                PublishLog("[GLOBAL/SIMULATION] No Unity-associated radar screen is available.");
+                return;
+            }
+
+            var now = DateTimeOffset.UtcNow;
+            var candidate = CloneConfiguration(_configuration);
+            var staged = new Dictionary<string, ScreenRuntime>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                foreach (var runtime in active)
+                {
+                    var screen = candidate.Screens.Single(value =>
+                        string.Equals(value.ScreenId, runtime.Info.ScreenId, StringComparison.OrdinalIgnoreCase));
+                    foreach (var sensor in screen.Sensors.Where(value => value.Enabled))
+                    {
+                        sensor.SourceMode = RadarSensorSourceMode.Simulation;
+                        convertedSensorCount++;
+                    }
+
+                    staged.Add(runtime.Info.ScreenId, CreateRuntime(screen, ToScreenInfo(screen)));
+                }
+
+                foreach (var runtime in staged.Values.OrderBy(value => value.Info.ScreenId, StringComparer.OrdinalIgnoreCase))
+                {
+                    foreach (var pipeline in runtime.Pipelines.Values.OrderBy(value => value.Configuration.SensorId, StringComparer.OrdinalIgnoreCase))
+                    {
+                        await pipeline.Pipeline.StartAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                }
+
+                await PersistConfigurationAsync(candidate, cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                foreach (var runtime in staged.Values) await DisposeRuntimeAsync(runtime).ConfigureAwait(false);
+                throw;
+            }
+
+            _configuration.SchemaVersion = candidate.SchemaVersion;
+            _configuration.Ipc = candidate.Ipc;
+            _configuration.Screens = candidate.Screens;
+            foreach (var runtime in active)
+            {
+                RetireRuntime(runtime, now, remove: false, staged[runtime.Info.ScreenId]);
+            }
+            RefreshAssociatedSnapshot();
+        }
+        finally
+        {
+            _topologyLock.Release();
+        }
+
+        InvokeSafely(ConfigurationChanged);
+        PublishLog($"[GLOBAL/SIMULATION] One-click simulation started for {convertedSensorCount} enabled radar sensor(s).");
     }
 
     public Task StartRecordingAsync(string screenId, string sensorId, string path, CancellationToken cancellationToken = default) =>

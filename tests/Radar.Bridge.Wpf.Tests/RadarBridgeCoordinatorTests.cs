@@ -613,6 +613,56 @@ public sealed class RadarBridgeCoordinatorTests
     }
 
     [Fact]
+    public async Task Coordinator_StartAllSimulationConvertsPersistsAndStartsEveryAssociatedSensor()
+    {
+        var configuration = new RadarAppConfiguration
+        {
+            Screens =
+            [
+                ScreenConfiguration("left", "l1", 1920, 1440),
+                new RadarScreenConfiguration
+                {
+                    ScreenId = "front",
+                    UnityDisplayName = "Front",
+                    Sensors = [Sensor("f1"), Sensor("f2")]
+                }
+            ]
+        };
+        configuration.Screens[0].Sensors[0].SourceMode = RadarSensorSourceMode.Real;
+        configuration.Screens[1].Sensors[0].SourceMode = RadarSensorSourceMode.Real;
+        configuration.Screens[1].Sensors[1].SourceMode = RadarSensorSourceMode.Replay;
+        RadarAppConfiguration? persisted = null;
+        var factory = new FakePipelineFactory();
+        await using var coordinator = CreateCoordinator(configuration, factory, (candidate, _) =>
+        {
+            persisted = System.Text.Json.JsonSerializer.Deserialize<RadarAppConfiguration>(
+                System.Text.Json.JsonSerializer.Serialize(candidate));
+            return Task.CompletedTask;
+        });
+        await coordinator.ApplyUnityTopologyAsync(Hello(
+            Screen("left", "Left", false, 1920, 1440, 0),
+            Screen("front", "Front", true, 4096, 1536, 1)));
+        var originalPipelines = factory.Created.ToArray();
+        persisted = null;
+
+        await coordinator.StartAllSimulationAsync();
+
+        Assert.All(configuration.Screens.SelectMany(screen => screen.Sensors),
+            sensor => Assert.Equal(RadarSensorSourceMode.Simulation, sensor.SourceMode));
+        Assert.NotNull(persisted);
+        Assert.All(persisted.Screens.SelectMany(screen => screen.Sensors),
+            sensor => Assert.Equal(RadarSensorSourceMode.Simulation, sensor.SourceMode));
+        var replacements = factory.Created.Except(originalPipelines).ToArray();
+        Assert.Equal(3, replacements.Length);
+        Assert.All(replacements, pipeline =>
+        {
+            Assert.Equal(RadarSensorSourceMode.Simulation, pipeline.SourceMode);
+            Assert.Equal(1, pipeline.StartCallCount);
+            Assert.Equal(RadarSensorRuntimeState.Running, pipeline.State);
+        });
+    }
+
+    [Fact]
     public async Task Coordinator_ConnectScreenKeepsLaterSensorInTheSameLeaseBatchDuringRetirement()
     {
         var configuration = new RadarAppConfiguration
@@ -694,7 +744,7 @@ public sealed class RadarBridgeCoordinatorTests
         var acknowledgement = await IpcStream.ReadAsync(client, cancellationToken);
         Assert.Equal(IpcMessageType.HelloAck, acknowledgement.MessageType);
         var ack = acknowledgement.DeserializePayload<HelloAckPayload>();
-        Assert.Equal("1.2.4", BridgeVersion.Value);
+        Assert.Equal("1.2.5", BridgeVersion.Value);
         Assert.Equal(BridgeVersion.Value, ack.BridgeVersion);
         Assert.Equal(["left", "front", "right"], ack.Screens.Select(screen => screen.ScreenId));
         return client;
@@ -779,7 +829,7 @@ public sealed class RadarBridgeCoordinatorTests
         {
             if (ThrowOnCreate || ++_createCalls == ThrowOnCreateNumber) throw new InvalidOperationException("factory failure");
             CreateObserved?.Invoke(sensor.SensorId);
-            var pipeline = new FakePipeline(screen.ScreenId, sensor.SensorId, value => StartOrder.Add(value));
+            var pipeline = new FakePipeline(screen.ScreenId, sensor.SensorId, sensor.SourceMode, value => StartOrder.Add(value));
             _pipelines[(screen.ScreenId, sensor.SensorId)] = pipeline;
             _instances.Add(pipeline);
             return pipeline;
@@ -839,10 +889,11 @@ public sealed class RadarBridgeCoordinatorTests
         }
     }
 
-    private sealed class FakePipeline(string screenId, string sensorId, Action<string>? startObserved = null) : IRadarSensorPipeline
+    private sealed class FakePipeline(string screenId, string sensorId, RadarSensorSourceMode sourceMode, Action<string>? startObserved = null) : IRadarSensorPipeline
     {
         public string ScreenId { get; } = screenId;
         public string SensorId { get; } = sensorId;
+        public RadarSensorSourceMode SourceMode { get; } = sourceMode;
         public RadarSensorRuntimeState State { get; private set; } = RadarSensorRuntimeState.Stopped;
         public long DroppedInputFrameCount => 0;
         public int StopCallCount { get; private set; }

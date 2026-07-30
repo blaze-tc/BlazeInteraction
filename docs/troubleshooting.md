@@ -1,18 +1,18 @@
-# 1.2.4 故障排查与现场证据
+# 1.2.5 故障排查与现场证据
 
-## 包版本或 Bridge 不是 1.2.4
+## 包版本或 Bridge 不是 1.2.5
 
 Package Manager 应解析：
 
 ```text
-https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.4
+https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.5
 ```
 
-移除旧 URL、本地覆盖和已导入的旧 Sample。确认 Version `1.2.4` 和 Resolved Path 指向本项目新 `Library/PackageCache/com.blaze.radar@...`。仍陈旧时关闭 Unity，只清除该包缓存与 lock 条目后重开。Player 构建后比较 `RadarBridge/bridge-version.txt` 和包内/已审核 EXE SHA-256；不要用单个旧 EXE 覆盖完整目录。
+移除旧 URL、本地覆盖和已导入的旧 Sample。确认 Version `1.2.5` 和 Resolved Path 指向本项目新 `Library/PackageCache/com.blaze.radar@...`。仍陈旧时关闭 Unity，只清除该包缓存与 lock 条目后重开。Player 构建后比较 `RadarBridge/bridge-version.txt` 和包内/已审核 EXE SHA-256；不要用单个旧 EXE 覆盖完整目录。
 
 ## IPC protocol mismatch 或一直 DISCONNECTED
 
-IPC v1 PointerFrame 与 IPC v2 PointerBatch 不兼容。关闭所有旧 RadarBridge/Player，确认 package、SDK、Bridge 都为 `1.2.4`，日志显示 IPC 2，Pipe Name 两侧一致，再重连。HelloAck 必须包含 protocol 2、Bridge 1.2.4 和当前 screen summaries；不能忽略 Error 强行继续。
+IPC v1 PointerFrame 与 IPC v2 PointerBatch 不兼容。关闭所有旧 RadarBridge/Player，确认 package、SDK、Bridge 都为 `1.2.5`，日志显示 IPC 2，Pipe Name 两侧一致，再重连。HelloAck 必须包含 protocol 2、Bridge 1.2.5 和当前 screen summaries；不能忽略 Error 强行继续。
 
 ## 某屏无输入、串屏或重叠区双点
 
@@ -28,7 +28,7 @@ IPC v1 PointerFrame 与 IPC v2 PointerBatch 不兼容。关闭所有旧 RadarBri
 
 ## WPF 控件消失或变模糊
 
-Bridge 在窗口创建前强制 WPF 软件渲染，路径不依赖 GPU。仍需记录 Windows 缩放、投影分辨率、GPU/驱动和精确操作；测试 click、drag、scroll、resize、minimize/restore、跨 DPI 屏移动和 projector focus change。若能复现，保存同一时间段日志与截图，确认运行的是包内 1.2.4 完整 payload，而非缓存旧版。
+Bridge 在窗口创建前强制 WPF 软件渲染，路径不依赖 GPU。仍需记录 Windows 缩放、投影分辨率、GPU/驱动和精确操作；测试 click、drag、scroll、resize、minimize/restore、跨 DPI 屏移动和 projector focus change。若能复现，保存同一时间段日志与截图，确认运行的是包内 1.2.5 完整 payload，而非缓存旧版。
 
 ## 日志关联
 

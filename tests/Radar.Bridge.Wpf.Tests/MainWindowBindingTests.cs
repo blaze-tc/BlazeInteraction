@@ -119,6 +119,51 @@ public sealed class MainWindowBindingTests
         });
     }
 
+    [Fact]
+    public void NarrowSensorParameters_KeepsEveryCalibrationActionInsideViewport()
+    {
+        WpfTestHost.Instance.Invoke(() =>
+        {
+            var runtime = new TestRuntime();
+            using var viewModel = new MainViewModel(RadarAppConfiguration.CreateDefault(), runtime);
+            var window = new MainWindow(viewModel, runtime);
+            window.Show();
+            window.Width = window.MinWidth;
+            window.Height = window.MinHeight;
+            var sensorTab = FindVisualChildren<TabItem>(window)
+                .Single(item => string.Equals(item.Header as string, "雷达参数", StringComparison.Ordinal));
+            sensorTab.IsSelected = true;
+            window.UpdateLayout();
+
+            var scroll = Assert.IsType<ScrollViewer>(window.FindName("SensorParameterScroll"));
+            var expected = new[] { "重置区域", "添加屏蔽", "删除屏蔽", "开始标定", "采集点", "撤销", "保存", "清除" };
+            var buttons = FindVisualChildren<Button>(scroll)
+                .Where(button => button.Content is string text && expected.Contains(text, StringComparer.Ordinal))
+                .ToArray();
+
+            Assert.Equal(expected.Length, buttons.Length);
+            var visibleRight = scroll.ActualWidth - SystemParameters.VerticalScrollBarWidth;
+            foreach (var button in buttons)
+            {
+                var rightEdge = button.TransformToAncestor(scroll).Transform(new Point(button.ActualWidth, 0d)).X;
+                Assert.True(rightEdge <= visibleRight + 0.5d,
+                    $"'{button.Content}' extends to {rightEdge:0.0}px beyond the {visibleRight:0.0}px viewport.");
+            }
+
+            window.Close();
+        });
+    }
+
+    private static IEnumerable<T> FindVisualChildren<T>(DependencyObject root) where T : DependencyObject
+    {
+        for (var index = 0; index < System.Windows.Media.VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(root, index);
+            if (child is T match) yield return match;
+            foreach (var descendant in FindVisualChildren<T>(child)) yield return descendant;
+        }
+    }
+
     private sealed class WpfTestHost
     {
         private Dispatcher _dispatcher = null!;
@@ -133,6 +178,7 @@ public sealed class MainWindowBindingTests
                 {
                     var application = new App();
                     application.InitializeComponent();
+                    application.ShutdownMode = ShutdownMode.OnExplicitShutdown;
                     _dispatcher = Dispatcher.CurrentDispatcher;
                 }
                 catch (Exception exception)

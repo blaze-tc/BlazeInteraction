@@ -368,7 +368,7 @@ Bridge 继续使用启动前软件渲染、像素对齐和有界日志，避免�
 - 每个雷达配置 `SourceMode`：Real、Simulation 或 Replay。
 - Real 雷达可以单独连接/断开，也可以按屏幕或全局连接。
 - Simulation 雷达生成可区分的轨迹，允许配置多个模拟雷达输出矩形和重叠区。
-- “启动全部模拟”只启动 SourceMode 为 Simulation 的雷达。
+- “一键模拟”将所有 Unity 已关联屏幕中的已启用雷达切换为 Simulation，持久化配置并立即启动替换管线。
 - 录制和回放作用于当前选中雷达，继续使用现有 `.radarrec` 文件格式。
 - 同一屏幕可以同时运行 Real 与 Simulation 雷达，但 UI 和日志必须明确标记，避免现场误把模拟数据当作真实数据。
 

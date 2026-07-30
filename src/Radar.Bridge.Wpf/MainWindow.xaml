@@ -20,7 +20,7 @@
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel VerticalAlignment="Center">
                     <TextBlock Text="RADARBRIDGE" FontSize="18" FontWeight="Bold"/>
-                    <TextBlock Text="Bridge 1.2.4 · IPC 2 · Windows x64" Style="{StaticResource CaptionStyle}" Margin="0,1,0,0"/>
+                    <TextBlock Text="Bridge 1.2.5 · IPC 2 · Windows x64" Style="{StaticResource CaptionStyle}" Margin="0,1,0,0"/>
                     <TextBlock Text="多屏幕 · 多雷达 · 融合诊断" Style="{StaticResource CaptionStyle}" Margin="0,2,0,0"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
@@ -92,7 +92,8 @@
                                 <Button Grid.Column="1" Content="断开所选" Command="{Binding DisconnectSensorCommand}" Margin="4,0,0,0"/>
                             </Grid>
                             <Grid Margin="0,6,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-                                <Button Content="启动全部模拟" Command="{Binding StartAllSimulationCommand}" Margin="0,0,4,0"/>
+                                <Button Content="一键模拟" Command="{Binding StartAllSimulationCommand}" Margin="0,0,4,0"
+                                        ToolTip="将所有已启用雷达切换为模拟模式、保存配置并立即启动"/>
                                 <Button Grid.Column="1" Content="删除雷达" Command="{Binding DeleteSensorCommand}" Margin="4,0,0,0"/>
                             </Grid>
                         </StackPanel>
@@ -236,8 +237,18 @@
                                 </Grid>
                                 <Separator/>
                                 <TextBlock Text="区域 / 校准" Style="{StaticResource SectionTitleStyle}"/>
-                                <StackPanel Orientation="Horizontal"><Button Content="重置区域" Command="{Binding ResetRegionCommand}" Margin="0,0,5,0"/><Button Content="添加屏蔽" Command="{Binding AddMaskedRegionCommand}" Margin="0,0,5,0"/><Button Content="删除屏蔽" Command="{Binding DeleteMaskedRegionCommand}"/></StackPanel>
-                                <StackPanel Orientation="Horizontal" Margin="0,6,0,0"><Button Content="开始标定" Command="{Binding BeginCalibrationCommand}" Margin="0,0,5,0"/><Button Content="采集点" Command="{Binding CaptureCalibrationPointCommand}" Margin="0,0,5,0"/><Button Content="撤销" Command="{Binding UndoCalibrationPointCommand}" Margin="0,0,5,0"/><Button Content="保存" Command="{Binding SaveCalibrationCommand}" Margin="0,0,5,0"/><Button Content="清除" Command="{Binding ClearCalibrationCommand}"/></StackPanel>
+                                <UniformGrid Columns="3">
+                                    <Button Content="重置区域" Command="{Binding ResetRegionCommand}" Margin="0,0,4,0"/>
+                                    <Button Content="添加屏蔽" Command="{Binding AddMaskedRegionCommand}" Margin="2,0"/>
+                                    <Button Content="删除屏蔽" Command="{Binding DeleteMaskedRegionCommand}" Margin="4,0,0,0"/>
+                                </UniformGrid>
+                                <UniformGrid Columns="3" Margin="0,6,0,0">
+                                    <Button Content="开始标定" Command="{Binding BeginCalibrationCommand}" Margin="0,0,4,4"/>
+                                    <Button Content="采集点" Command="{Binding CaptureCalibrationPointCommand}" Margin="2,0,2,4"/>
+                                    <Button Content="撤销" Command="{Binding UndoCalibrationPointCommand}" Margin="4,0,0,4"/>
+                                    <Button Content="保存" Command="{Binding SaveCalibrationCommand}" Margin="0,2,4,0"/>
+                                    <Button Content="清除" Command="{Binding ClearCalibrationCommand}" Margin="2,2,2,0"/>
+                                </UniformGrid>
                                 <TextBlock Text="{Binding SelectedSensor.CalibrationStatus}" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/>
                                 <Separator/>
                                 <TextBlock Text="录制 / 回放" Style="{StaticResource SectionTitleStyle}"/>
