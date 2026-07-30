@@ -13,7 +13,10 @@ public sealed class RadarVisualizationLayoutTests
 
         var lists = document.Descendants(presentation + "ListBox").ToArray();
         var tabs = document.Descendants(presentation + "TabItem").ToArray();
-        var raw = document.Descendants(controls + "RadarPointCloudView").Single();
+        var pointViews = document.Descendants(controls + "RadarPointCloudView").ToArray();
+        var xaml = XNamespace.Get("http://schemas.microsoft.com/winfx/2006/xaml");
+        var raw = pointViews.Single(element => (string?)element.Attribute(xaml + "Name") == "RawRadarView");
+        var filtered = pointViews.Single(element => (string?)element.Attribute(xaml + "Name") == "FilteredRadarView");
         var fusion = document.Descendants(controls + "RadarScreenFusionView").Single();
 
         Assert.Contains(lists, element => (string?)element.Attribute("ItemsSource") == "{Binding Screens}");
@@ -21,13 +24,25 @@ public sealed class RadarVisualizationLayoutTests
         Assert.Contains(tabs, element => (string?)element.Attribute("Header") == "屏幕参数");
         Assert.Contains(tabs, element => (string?)element.Attribute("Header") == "雷达参数");
         Assert.Equal("{Binding SelectedSensor.Snapshot}", (string?)raw.Attribute("Snapshot"));
+        Assert.Equal("{Binding SelectedSensor.Snapshot}", (string?)filtered.Attribute("Snapshot"));
         Assert.Equal("{Binding SelectedScreen.LatestSnapshot}", (string?)fusion.Attribute("Snapshot"));
         Assert.Equal("{Binding SelectedScreen.Sensors}", (string?)fusion.Attribute("Sensors"));
         Assert.Equal("{Binding SelectedSensor.SensorId}", (string?)fusion.Attribute("SelectedSensorId"));
-        Assert.Equal("{Binding SelectedSensor.RegionVertices}", (string?)raw.Attribute("RegionVertices"));
-        Assert.Equal("{Binding SelectedSensor.MaskedPolygons}", (string?)raw.Attribute("MaskedRegions"));
-        Assert.Equal("True", (string?)raw.Attribute("IsRegionEditable"));
-        Assert.Equal("OnRegionVertexMoved", (string?)raw.Attribute("RegionVertexMoved"));
+        Assert.Equal("True", (string?)raw.Attribute("ShowRawPoints"));
+        Assert.Equal("False", (string?)raw.Attribute("ShowValidPoints"));
+        Assert.Equal("False", (string?)raw.Attribute("ShowFilterOverlay"));
+        Assert.Equal("False", (string?)raw.Attribute("IsRegionEditable"));
+        Assert.Equal("False", (string?)filtered.Attribute("ShowRawPoints"));
+        Assert.Equal("True", (string?)filtered.Attribute("ShowValidPoints"));
+        Assert.Equal("True", (string?)filtered.Attribute("ShowFilterOverlay"));
+        Assert.Equal("{Binding SelectedSensor.RegionVertices}", (string?)filtered.Attribute("RegionVertices"));
+        Assert.Equal("{Binding SelectedSensor.MaskedPolygons}", (string?)filtered.Attribute("MaskedRegions"));
+        Assert.Equal("True", (string?)filtered.Attribute("IsRegionEditable"));
+        Assert.Equal("OnRegionVertexMoved", (string?)filtered.Attribute("RegionVertexMoved"));
+        Assert.Contains(document.Descendants(presentation + "TextBlock"), element =>
+            ((string?)element.Attribute("Text"))?.Contains("原始点观察", StringComparison.Ordinal) == true);
+        Assert.Contains(document.Descendants(presentation + "TextBlock"), element =>
+            ((string?)element.Attribute("Text"))?.Contains("拉框过滤结果", StringComparison.Ordinal) == true);
     }
 
     [Fact]

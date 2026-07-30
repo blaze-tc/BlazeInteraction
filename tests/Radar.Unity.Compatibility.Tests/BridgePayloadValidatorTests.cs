@@ -10,7 +10,7 @@ public sealed class BridgePayloadValidatorTests
     {
         var payload = Path.Combine(FindRepositoryRoot(), "UnityPackage", "com.blaze.radar", "Bridge~", "win-x64");
         Assert.Equal(491, Directory.GetFiles(payload, "*", SearchOption.AllDirectories).Length);
-        Assert.Null(Validate(payload, "1.2.1"));
+        Assert.Null(Validate(payload, "1.2.2"));
     }
 
     [Fact]

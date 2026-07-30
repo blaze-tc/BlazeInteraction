@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.2 - 2026-07-30
+
+- Split each selected radar's diagnostics into an unmodified raw scan view and a separate transformed, box-filtered view used by screen fusion and Unity output.
+- Add a high-contrast dark-theme CheckBox template with explicit checked, hover, keyboard-focus and disabled states.
+- Add a Basic Interaction point-delegate binder that converts logical screen pixels through the selected Camera and emits a reusable world-space particle effect.
+- Add a Chinese illustrated operator guide covering installation, upgrade, every Bridge work area, buttons, parameters, Sample verification and troubleshooting.
+
 ## 1.2.1 - 2026-07-28
 
 - Recover rejected, malformed or unsupported Bridge configuration at startup after preserving the original bytes in a timestamped backup.

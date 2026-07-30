@@ -2310,6 +2310,7 @@ GameObject:
   m_Component:
   - component: {fileID: 1006807670}
   - component: {fileID: 1006807669}
+  - component: {fileID: 1006807667}
   m_Layer: 0
   m_Name: Basic Interaction Presenter
   m_TagString: Untagged
@@ -2332,6 +2333,28 @@ MonoBehaviour:
   demoLogger: {fileID: 1224097324}
   interactionToggle: {fileID: 1820101884}
   strengthSlider: {fileID: 1860894593}
+--- !u!114 &1006807667
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1006807668}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: e2d3e1f473664f4aa3edd44acd4de6c1, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  radarDispatcher: {fileID: 595746031}
+  screenId: main
+  targetCamera: {fileID: 1408683053}
+  distanceFromCamera: 8
+  particlePrefab: {fileID: 2761451299712556695, guid: c90e9efdb9a74a32a56a1d178b0dff5f, type: 3}
+  hoverParticleCount: 1
+  downParticleCount: 8
+  upParticleCount: 4
+  moveEmissionIntervalSeconds: 0.04
+  demoLogger: {fileID: 1224097324}
 --- !u!4 &1006807670
 Transform:
   m_ObjectHideFlags: 0

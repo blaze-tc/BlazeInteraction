@@ -154,7 +154,7 @@ public sealed class ReleaseScriptBehaviorTests
             "-StartupTimeoutSeconds", "20");
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Contains("IPC v2 Hello/HelloAck passed with Bridge version 1.2.1.", result.Output, StringComparison.Ordinal);
+        Assert.Contains("IPC v2 Hello/HelloAck passed with Bridge version 1.2.2.", result.Output, StringComparison.Ordinal);
         Assert.Contains("Parent-process shutdown passed with exit code 0.", result.Output, StringComparison.Ordinal);
     }
 
@@ -188,7 +188,7 @@ public sealed class ReleaseScriptBehaviorTests
             "-SetupDelaySeconds", "9");
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Contains("IPC v2 Hello/HelloAck passed with Bridge version 1.2.1.", result.Output, StringComparison.Ordinal);
+        Assert.Contains("IPC v2 Hello/HelloAck passed with Bridge version 1.2.2.", result.Output, StringComparison.Ordinal);
     }
 
     private static int ReadSchema(string path) =>

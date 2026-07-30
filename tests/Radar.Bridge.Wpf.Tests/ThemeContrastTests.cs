@@ -80,6 +80,41 @@ public sealed class ThemeContrastTests
             $"ComboBox contrast was {ContrastRatio(foreground, background):0.00}:1.");
     }
 
+    [Fact]
+    public void ApplicationTheme_CheckBoxHasVisibleDarkThemeStatesAndCheckedGlyph()
+    {
+        var document = XDocument.Load(Path.Combine(FindRepositoryRoot(), "src", "Radar.Bridge.Wpf", "App.xaml"));
+        var presentation = XNamespace.Get("http://schemas.microsoft.com/winfx/2006/xaml/presentation");
+        var xaml = XNamespace.Get("http://schemas.microsoft.com/winfx/2006/xaml");
+        var style = document.Descendants(presentation + "Style").Single(element =>
+            (string?)element.Attribute("TargetType") == "CheckBox" && element.Attribute(xaml + "Key") is null);
+        var template = style.Descendants(presentation + "ControlTemplate").Single();
+        var indicator = template.Descendants(presentation + "Border").Single(element =>
+            (string?)element.Attribute(xaml + "Name") == "CheckBoxIndicator");
+        var checkMark = template.Descendants(presentation + "Path").Single(element =>
+            (string?)element.Attribute(xaml + "Name") == "CheckMark");
+
+        Assert.Equal("{StaticResource InputBackgroundBrush}", (string?)indicator.Attribute("Background"));
+        Assert.Equal("Collapsed", (string?)checkMark.Attribute("Visibility"));
+        Assert.Contains(template.Descendants(presentation + "Trigger"), trigger =>
+            (string?)trigger.Attribute("Property") == "IsChecked" &&
+            (string?)trigger.Attribute("Value") == "True" &&
+            trigger.Descendants(presentation + "Setter").Any(setter =>
+                (string?)setter.Attribute("TargetName") == "CheckBoxIndicator" &&
+                (string?)setter.Attribute("Property") == "Background" &&
+                (string?)setter.Attribute("Value") == "{StaticResource PrimaryBrush}") &&
+            trigger.Descendants(presentation + "Setter").Any(setter =>
+                (string?)setter.Attribute("TargetName") == "CheckMark" &&
+                (string?)setter.Attribute("Property") == "Visibility" &&
+                (string?)setter.Attribute("Value") == "Visible"));
+        Assert.Contains(template.Descendants(presentation + "Trigger"), trigger =>
+            (string?)trigger.Attribute("Property") == "IsMouseOver" &&
+            (string?)trigger.Attribute("Value") == "True");
+        Assert.Contains(template.Descendants(presentation + "Trigger"), trigger =>
+            (string?)trigger.Attribute("Property") == "IsEnabled" &&
+            (string?)trigger.Attribute("Value") == "False");
+    }
+
     private static Color ReadColor(XDocument document, XNamespace presentation, XNamespace xaml, string key)
     {
         var text = document.Descendants(presentation + "Color")

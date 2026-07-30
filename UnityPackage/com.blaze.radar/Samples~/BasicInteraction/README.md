@@ -8,6 +8,8 @@ The right-side diagnostics deliberately separate two signals:
 - `PointerFrameReceived` remains visible as a compatibility-frame counter so an existing single-screen integration can be checked during the 1.2.x upgrade.
 - Frame history is capped at 200 lines; EventSystem/UGUI/error history is capped at 300 lines. `Down`, `Up`, and errors are immediate. Repeated `Move` entries are sampled at 10 Hz per pointer, while the live position always refreshes.
 
+`Radar Pointer Particles` demonstrates direct delegate use without replacing the EventSystem. Its `RadarPointerParticleBinder` subscribes to `RadarFrameDispatcher.ScreenPointerReceived`, selects screen `main`, converts the logical pixel through `Camera.ScreenToWorldPoint`, and emits a world-space particle burst at the resulting position. Use this script as the smallest copyable example when an application needs raw screen-and-point callbacks in addition to UGUI interaction.
+
 ## Path A — mouse debug
 
 1. Select `EventSystem > RadarInputModule` in the Hierarchy.

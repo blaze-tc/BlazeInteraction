@@ -1,4 +1,4 @@
-# Blaze Radar SDK 1.2.1
+# Blaze Radar SDK 1.2.2
 
 The package connects Unity to the self-contained Windows x64 `RadarBridge.exe` through IPC protocol 2 on a Named Pipe. Unity never opens the radar TCP socket.
 
@@ -7,10 +7,10 @@ The package connects Unity to the self-contained Windows x64 `RadarBridge.exe` t
 Use the reviewed tag:
 
 ```text
-https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.1
+https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.2
 ```
 
-Remove any old Git URL before adding this URL. Select Blaze Radar SDK in Package Manager and confirm version `1.2.1`; its Resolved Path must be the newly resolved `Library/PackageCache/com.blaze.radar@...`, not an old cache or local override. If Unity remains stale, close the Editor, remove only this package's cache entry and `Packages/packages-lock.json` entry, then reopen and resolve the tagged URL.
+Remove any old Git URL before adding this URL. Select Blaze Radar SDK in Package Manager and confirm version `1.2.2`; its Resolved Path must be the newly resolved `Library/PackageCache/com.blaze.radar@...`, not an old cache or local override. If Unity remains stale, close the Editor, remove only this package's cache entry and `Packages/packages-lock.json` entry, then reopen and resolve the tagged URL.
 
 ## Screen topology and Bridge setup
 
@@ -31,6 +31,6 @@ Every Canvas needs a `GraphicRaycaster`; add `PhysicsRaycaster` or `Physics2DRay
 
 `RadarBuildProcessor` copies the complete `Bridge~/win-x64` directory beside the Player as `RadarBridge/`. It removes stale output first and rejects mismatched package/SDK/`bridge-version.txt` identities, incomplete payloads, or an EXE SHA-256 mismatch. Record the Player-side `RadarBridge.exe` version marker and SHA-256 for the field build.
 
-Bridge logs use `[SCREEN/SENSOR]` tags. Match their timestamps with `Player.log` fields for SDK/Bridge/IPC versions, screenId, batch/frame sequence, pointer count, dropped count and latency. IPC v1 and v2 are incompatible: close all old Bridge processes, remove the old package URL/cache, reinstall the tag, verify both versions are 1.2.1/IPC 2, then reconnect.
+Bridge logs use `[SCREEN/SENSOR]` tags. Match their timestamps with `Player.log` fields for SDK/Bridge/IPC versions, screenId, batch/frame sequence, pointer count, dropped count and latency. IPC v1 and v2 are incompatible: close all old Bridge processes, remove the old package URL/cache, reinstall the tag, verify both versions are 1.2.2/IPC 2, then reconnect.
 
 RadarBridge forces GPU-independent WPF software rendering. On the projection computer still click, drag, resize, minimize/restore and change projector focus; no control may disappear or become blurry. Complete the repository `INSTALL.md` three-projector/four-radar 8-hour checklist before site acceptance.

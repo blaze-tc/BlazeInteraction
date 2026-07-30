@@ -12,7 +12,7 @@ public sealed class PackageIdentityTests
 
         using var packageJson = JsonDocument.Parse(File.ReadAllText(Path.Combine(packageRoot, "package.json")));
         Assert.Equal("com.blaze.radar", packageJson.RootElement.GetProperty("name").GetString());
-        const string expectedReleaseVersion = "1.2.1";
+        const string expectedReleaseVersion = "1.2.2";
         Assert.Equal(expectedReleaseVersion, packageJson.RootElement.GetProperty("version").GetString());
         Assert.Equal("Blaze Radar SDK", packageJson.RootElement.GetProperty("displayName").GetString());
 
@@ -24,11 +24,11 @@ public sealed class PackageIdentityTests
             repositoryRoot, "src", "Radar.Bridge.Wpf", "BridgeVersion.cs"));
         Assert.Contains($"Value = \"{expectedReleaseVersion}\"", bridgeCoordinatorSource, StringComparison.Ordinal);
         var mainWindow = File.ReadAllText(Path.Combine(repositoryRoot, "src", "Radar.Bridge.Wpf", "MainWindow.xaml"));
-        Assert.Contains("Bridge 1.2.1 · IPC 2 · Windows x64", mainWindow, StringComparison.Ordinal);
+        Assert.Contains("Bridge 1.2.2 · IPC 2 · Windows x64", mainWindow, StringComparison.Ordinal);
 
         var bridgeProject = File.ReadAllText(Path.Combine(
             repositoryRoot, "src", "Radar.Bridge.Wpf", "Radar.Bridge.Wpf.csproj"));
-        Assert.Contains("<Version>1.2.1</Version>", bridgeProject, StringComparison.Ordinal);
+        Assert.Contains("<Version>1.2.2</Version>", bridgeProject, StringComparison.Ordinal);
 
         var embeddedVersion = File.ReadAllText(Path.Combine(
             packageRoot, "Bridge~", "win-x64", "bridge-version.txt")).Trim();
@@ -99,6 +99,24 @@ public sealed class PackageIdentityTests
         Assert.Contains("m_Name: Live Frame Data", scene, StringComparison.Ordinal);
         Assert.Contains("m_Name: Detailed Event Log", scene, StringComparison.Ordinal);
 
+        var particleBinderPath = Path.Combine(sampleRoot, "RadarPointerParticleBinder.cs");
+        Assert.True(File.Exists(particleBinderPath));
+        var particleBinder = File.ReadAllText(particleBinderPath);
+        Assert.Contains("ScreenPointerReceived += OnScreenPointerReceived", particleBinder, StringComparison.Ordinal);
+        Assert.Contains("ScreenPointerReceived -= OnScreenPointerReceived", particleBinder, StringComparison.Ordinal);
+        Assert.Contains("targetCamera.ScreenToWorldPoint", particleBinder, StringComparison.Ordinal);
+        Assert.Contains("pointerParticleSystem.Emit", particleBinder, StringComparison.Ordinal);
+        Assert.Contains("screen.screenId", particleBinder, StringComparison.Ordinal);
+        Assert.DoesNotContain("new GameObject", particleBinder, StringComparison.Ordinal);
+        var particlePrefabPath = Path.Combine(sampleRoot, "RadarPointerParticles.prefab");
+        Assert.True(File.Exists(particlePrefabPath));
+        var particlePrefab = File.ReadAllText(particlePrefabPath);
+        Assert.Contains("m_Name: Radar Pointer Particles", particlePrefab, StringComparison.Ordinal);
+        Assert.Contains("ParticleSystem:", particlePrefab, StringComparison.Ordinal);
+        var particlePrefabGuid = File.ReadLines(particlePrefabPath + ".meta")
+            .Single(line => line.StartsWith("guid: ", StringComparison.Ordinal))["guid: ".Length..];
+        Assert.Contains($"guid: {particlePrefabGuid}", scene, StringComparison.Ordinal);
+
         var pointerProbe = File.ReadAllText(Path.Combine(sampleRoot, "RadarPointerEventProbe.cs"));
         var dragProbe = File.ReadAllText(Path.Combine(sampleRoot, "RadarDragEventProbe.cs"));
         Assert.DoesNotContain("IDragHandler", pointerProbe, StringComparison.Ordinal);
@@ -110,6 +128,7 @@ public sealed class PackageIdentityTests
                  {
                      "BasicInteractionPresenter.cs",
                      "RadarDemoLogger.cs",
+                     "RadarPointerParticleBinder.cs",
                      "RadarDragEventProbe.cs",
                      "RadarPointerEventProbe.cs",
                      "SamplePointerTarget.cs"
@@ -202,7 +221,7 @@ public sealed class PackageIdentityTests
         var packageRoot = Path.Combine(repositoryRoot, "UnityPackage", "com.blaze.radar");
         using var packageJson = JsonDocument.Parse(File.ReadAllText(Path.Combine(packageRoot, "package.json")));
         Assert.Equal("com.blaze.radar", packageJson.RootElement.GetProperty("name").GetString());
-        Assert.Equal("1.2.1", packageJson.RootElement.GetProperty("version").GetString());
+        Assert.Equal("1.2.2", packageJson.RootElement.GetProperty("version").GetString());
         Assert.Equal("2021.3", packageJson.RootElement.GetProperty("unity").GetString());
 
         var definitionSource = File.ReadAllText(Path.Combine(packageRoot, "Runtime", "RadarScreenDefinition.cs"));
@@ -227,10 +246,10 @@ public sealed class PackageIdentityTests
     }
 
     [Fact]
-    public void ReleaseDocumentation_UsesTheTagged121PackageUrlWithoutLegacy11xUrls()
+    public void ReleaseDocumentation_UsesTheTagged122PackageUrlAndIncludesTheIllustratedGuide()
     {
         const string taggedUrl =
-            "https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.1";
+            "https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.2";
         var repositoryRoot = FindRepositoryRoot();
         var documentationPaths = new[]
         {
@@ -247,6 +266,14 @@ public sealed class PackageIdentityTests
             Assert.Contains(taggedUrl, source, StringComparison.Ordinal);
             Assert.DoesNotMatch(@"RadarControl\.git\?path=/UnityPackage/com\.blaze\.radar#v1\.1\.\d+", source);
         }
+
+        var userGuidePath = Path.Combine(repositoryRoot, "docs", "user-guide.md");
+        var userGuide = File.ReadAllText(userGuidePath);
+        Assert.Contains(taggedUrl, userGuide, StringComparison.Ordinal);
+        Assert.Contains("1A 原始点观察", userGuide, StringComparison.Ordinal);
+        Assert.Contains("1B 拉框过滤结果", userGuide, StringComparison.Ordinal);
+        Assert.Contains("RadarPointerParticleBinder", userGuide, StringComparison.Ordinal);
+        Assert.True(File.Exists(Path.Combine(repositoryRoot, "docs", "images", "radarbridge-overview.png")));
     }
 
     [Fact]
