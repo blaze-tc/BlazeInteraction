@@ -272,6 +272,8 @@ public sealed class PackageIdentityTests
         Assert.Contains(taggedUrl, userGuide, StringComparison.Ordinal);
         Assert.Contains("1A 原始点观察", userGuide, StringComparison.Ordinal);
         Assert.Contains("1B 拉框过滤结果", userGuide, StringComparison.Ordinal);
+        Assert.Contains("参数正文铺满面板", userGuide, StringComparison.Ordinal);
+        Assert.Contains("滚动条固定在参数面板最右侧", userGuide, StringComparison.Ordinal);
         Assert.Contains("RadarPointerParticleBinder", userGuide, StringComparison.Ordinal);
         Assert.True(File.Exists(Path.Combine(repositoryRoot, "docs", "images", "radarbridge-overview.png")));
     }
