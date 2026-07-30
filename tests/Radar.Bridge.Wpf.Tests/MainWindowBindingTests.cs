@@ -176,6 +176,61 @@ public sealed class MainWindowBindingTests
         });
     }
 
+    [Fact]
+    public void RegionEditor_OpensAFittedLargePreviewAndZoomDoesNotChangeRadarRange()
+    {
+        WpfTestHost.Instance.Invoke(() =>
+        {
+            var configuration = RadarAppConfiguration.CreateDefault();
+            configuration.Screens[0].Sensors[0].Range.VisualizationRangeMeters = 2f;
+            var runtime = new TestRuntime();
+            using var viewModel = new MainViewModel(configuration, runtime);
+            var window = new MainWindow(viewModel, runtime);
+            window.Show();
+            window.UpdateLayout();
+
+            var openButton = FindVisualChildren<Button>(window)
+                .SingleOrDefault(button => string.Equals(button.Content as string, "放大编辑", StringComparison.Ordinal));
+            Assert.NotNull(openButton);
+            openButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+
+            var editor = Application.Current.Windows.Cast<Window>()
+                .SingleOrDefault(candidate => candidate.Owner == window && candidate != window);
+            Assert.NotNull(editor);
+            var rangeProperty = editor.GetType().GetProperty("EditorRangeMeters");
+            Assert.NotNull(rangeProperty);
+            var fittedRange = Assert.IsType<float>(rangeProperty.GetValue(editor));
+            Assert.Equal(2.75f, fittedRange, 3);
+            Assert.True(editor.ActualWidth >= 760d);
+            Assert.True(editor.ActualHeight >= 520d);
+
+            var editorView = Assert.Single(FindVisualChildren<RadarPointCloudView>(editor));
+            var panEnabledProperty = typeof(RadarPointCloudView).GetProperty("IsPanEnabled");
+            var panOffsetProperty = typeof(RadarPointCloudView).GetProperty("PanOffset");
+            Assert.NotNull(panEnabledProperty);
+            Assert.NotNull(panOffsetProperty);
+            Assert.True(Assert.IsType<bool>(panEnabledProperty.GetValue(editorView)));
+            panOffsetProperty.SetValue(editorView, new Vector(40d, -25d));
+
+            var center = FindVisualChildren<Button>(editor)
+                .Single(button => string.Equals(button.Content as string, "居中", StringComparison.Ordinal));
+            center.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Assert.Equal(new Vector(), Assert.IsType<Vector>(panOffsetProperty.GetValue(editorView)));
+
+            var zoomIn = FindVisualChildren<Button>(editor)
+                .Single(button => string.Equals(button.Content as string, "放大", StringComparison.Ordinal));
+            zoomIn.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            editor.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+
+            Assert.True(Assert.IsType<float>(rangeProperty.GetValue(editor)) < fittedRange);
+            Assert.Equal(2f, configuration.Screens[0].Sensors[0].Range.VisualizationRangeMeters);
+
+            editor.Close();
+            window.Close();
+        });
+    }
+
     private static IEnumerable<T> FindVisualChildren<T>(DependencyObject root) where T : DependencyObject
     {
         for (var index = 0; index < System.Windows.Media.VisualTreeHelper.GetChildrenCount(root); index++)

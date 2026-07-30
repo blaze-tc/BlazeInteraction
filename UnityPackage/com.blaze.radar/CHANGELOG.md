@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.7 - 2026-07-30
+
+- Add a large independent region editor with mouse-wheel and button zoom, fit-to-region, and restore-to-parameter-range controls.
+- Keep editor zoom separate from the radar visualization range and Unity coordinates, while overlaying raw and filtered points for precise region adjustment.
+
 ## 1.2.6 - 2026-07-30
 
 - Add a matching **Stop Simulation** action that stops Simulation pipelines across all Unity-associated screens while preserving their Simulation configuration for quick restart.

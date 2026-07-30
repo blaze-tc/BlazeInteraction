@@ -36,6 +36,9 @@ public sealed class RadarPointCloudView : FrameworkElement
     private readonly DispatcherTimer _persistenceTimer;
     private string? _snapshotSensorId;
     private int _draggedVertex = -1;
+    private bool _isPanning;
+    private Point _panStart;
+    private Vector _panOrigin;
 
     public static readonly DependencyProperty SnapshotProperty = DependencyProperty.Register(
         nameof(Snapshot), typeof(RadarSensorRuntimeSnapshot), typeof(RadarPointCloudView),
@@ -66,6 +69,11 @@ public sealed class RadarPointCloudView : FrameworkElement
         new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsRender));
     public static readonly DependencyProperty IsRegionEditableProperty = DependencyProperty.Register(
         nameof(IsRegionEditable), typeof(bool), typeof(RadarPointCloudView), new FrameworkPropertyMetadata(false));
+    public static readonly DependencyProperty IsPanEnabledProperty = DependencyProperty.Register(
+        nameof(IsPanEnabled), typeof(bool), typeof(RadarPointCloudView), new FrameworkPropertyMetadata(false));
+    public static readonly DependencyProperty PanOffsetProperty = DependencyProperty.Register(
+        nameof(PanOffset), typeof(Vector), typeof(RadarPointCloudView),
+        new FrameworkPropertyMetadata(new Vector(), FrameworkPropertyMetadataOptions.AffectsRender));
 
     public RadarPointCloudView()
     {
@@ -99,6 +107,8 @@ public sealed class RadarPointCloudView : FrameworkElement
     public bool ShowFilterOverlay { get => (bool)GetValue(ShowFilterOverlayProperty); set => SetValue(ShowFilterOverlayProperty, value); }
     public bool ShowBlindZone { get => (bool)GetValue(ShowBlindZoneProperty); set => SetValue(ShowBlindZoneProperty, value); }
     public bool IsRegionEditable { get => (bool)GetValue(IsRegionEditableProperty); set => SetValue(IsRegionEditableProperty, value); }
+    public bool IsPanEnabled { get => (bool)GetValue(IsPanEnabledProperty); set => SetValue(IsPanEnabledProperty, value); }
+    public Vector PanOffset { get => (Vector)GetValue(PanOffsetProperty); set => SetValue(PanOffsetProperty, value); }
     public event EventHandler<RegionVertexMovedEventArgs>? RegionVertexMoved;
 
     protected override void OnRender(DrawingContext context)
@@ -117,39 +127,71 @@ public sealed class RadarPointCloudView : FrameworkElement
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs args)
     {
         base.OnMouseLeftButtonDown(args);
-        if (!IsRegionEditable || RegionVertices is null) return;
+        if (!IsRegionEditable && !IsPanEnabled) return;
         Focus();
         var mouse = args.GetPosition(this);
-        for (var index = 0; index < RegionVertices.Count; index++)
+        if (IsRegionEditable && RegionVertices is not null)
         {
-            if ((ToScreen(RegionVertices[index]) - mouse).Length > 14d) continue;
-            _draggedVertex = index;
-            CaptureMouse();
-            args.Handled = true;
-            return;
+            for (var index = 0; index < RegionVertices.Count; index++)
+            {
+                if ((ToScreen(RegionVertices[index]) - mouse).Length > 14d) continue;
+                _draggedVertex = index;
+                CaptureMouse();
+                args.Handled = true;
+                return;
+            }
         }
+
+        if (!IsPanEnabled) return;
+        _isPanning = true;
+        _panStart = mouse;
+        _panOrigin = PanOffset;
+        Cursor = Cursors.SizeAll;
+        CaptureMouse();
+        args.Handled = true;
     }
     protected override void OnMouseMove(MouseEventArgs args)
     {
         base.OnMouseMove(args);
-        if (_draggedVertex < 0 || args.LeftButton != MouseButtonState.Pressed) return;
-        var world = RadarViewportTransform.ScreenToWorld(args.GetPosition(this), ActualWidth, ActualHeight, Math.Max(.1f, MaximumRangeMeters));
-        RegionVertexMoved?.Invoke(this, new RegionVertexMovedEventArgs(_draggedVertex, world));
-        InvalidateVisual();
+        if (args.LeftButton != MouseButtonState.Pressed)
+        {
+            if (_draggedVertex >= 0 || _isPanning) EndPointerInteraction();
+            return;
+        }
+
+        var mouse = args.GetPosition(this);
+        if (_draggedVertex >= 0)
+        {
+            var world = RadarViewportTransform.ScreenToWorld(mouse, ActualWidth, ActualHeight, Math.Max(.1f, MaximumRangeMeters), PanOffset);
+            RegionVertexMoved?.Invoke(this, new RegionVertexMovedEventArgs(_draggedVertex, world));
+            InvalidateVisual();
+            args.Handled = true;
+            return;
+        }
+
+        if (!_isPanning) return;
+        PanOffset = _panOrigin + (mouse - _panStart);
         args.Handled = true;
     }
     protected override void OnMouseLeftButtonUp(MouseButtonEventArgs args)
     {
         base.OnMouseLeftButtonUp(args);
-        if (_draggedVertex < 0) return;
-        _draggedVertex = -1;
-        ReleaseMouseCapture();
+        if (_draggedVertex < 0 && !_isPanning) return;
+        EndPointerInteraction();
         args.Handled = true;
+    }
+
+    protected override void OnLostMouseCapture(MouseEventArgs args)
+    {
+        base.OnLostMouseCapture(args);
+        _draggedVertex = -1;
+        _isPanning = false;
+        Cursor = null;
     }
 
     private void DrawGrid(DrawingContext context)
     {
-        var center = new Point(ActualWidth / 2d, ActualHeight / 2d);
+        var center = new Point(ActualWidth / 2d + PanOffset.X, ActualHeight / 2d + PanOffset.Y);
         var maximum = Math.Max(.1f, MaximumRangeMeters);
         var scale = RadarViewportTransform.CalculateScale(ActualWidth, ActualHeight, maximum);
         var pen = GridPen;
@@ -206,7 +248,14 @@ public sealed class RadarPointCloudView : FrameworkElement
             context.DrawGeometry(MaskBrush, pen, geometry);
         }
     }
-    private Point ToScreen(Point2 point) => RadarViewportTransform.WorldToScreen(point, ActualWidth, ActualHeight, Math.Max(.1f, MaximumRangeMeters));
+    private Point ToScreen(Point2 point) => RadarViewportTransform.WorldToScreen(point, ActualWidth, ActualHeight, Math.Max(.1f, MaximumRangeMeters), PanOffset);
+    private void EndPointerInteraction()
+    {
+        _draggedVertex = -1;
+        _isPanning = false;
+        Cursor = null;
+        if (IsMouseCaptured) ReleaseMouseCapture();
+    }
     private void DrawText(DrawingContext context, string text, Point origin, Brush brush, double size) =>
         context.DrawText(new FormattedText(text, System.Globalization.CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, new Typeface("Segoe UI"), size, brush, VisualTreeHelper.GetDpi(this).PixelsPerDip), origin);
     private static Brush Frozen(Color color) { var brush = new SolidColorBrush(color); brush.Freeze(); return brush; }

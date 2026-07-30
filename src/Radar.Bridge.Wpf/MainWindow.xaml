@@ -20,7 +20,7 @@
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel VerticalAlignment="Center">
                     <TextBlock Text="RADARBRIDGE" FontSize="18" FontWeight="Bold"/>
-                    <TextBlock Text="Bridge 1.2.6 · IPC 2 · Windows x64" Style="{StaticResource CaptionStyle}" Margin="0,1,0,0"/>
+                    <TextBlock Text="Bridge 1.2.7 · IPC 2 · Windows x64" Style="{StaticResource CaptionStyle}" Margin="0,1,0,0"/>
                     <TextBlock Text="多屏幕 · 多雷达 · 融合诊断" Style="{StaticResource CaptionStyle}" Margin="0,2,0,0"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
@@ -108,10 +108,16 @@
                 <Border Grid.Column="0" Style="{StaticResource CardStyle}" Margin="0">
                     <Grid>
                         <Grid.RowDefinitions><RowDefinition Height="48"/><RowDefinition Height="*"/><RowDefinition Height="28"/></Grid.RowDefinitions>
-                        <StackPanel>
-                            <TextBlock Text="区域 1 · 单雷达数据" Style="{StaticResource SectionTitleStyle}" Margin="0"/>
-                            <TextBlock Text="左侧只观察原始点；右侧显示变换及拉框过滤结果。" Style="{StaticResource CaptionStyle}" Margin="0,3,0,0"/>
-                        </StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="区域 1 · 单雷达数据" Style="{StaticResource SectionTitleStyle}" Margin="0"/>
+                                <TextBlock Text="左侧只观察原始点；右侧显示变换及拉框过滤结果。" Style="{StaticResource CaptionStyle}" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                            <Button Grid.Column="1" Content="放大编辑" Click="OnOpenRegionEditor" IsEnabled="{Binding HasSelectedSensor}"
+                                    Margin="8,0,0,0" Padding="10,3" VerticalAlignment="Top"
+                                    ToolTip="打开独立的大画布调整拉框；预览缩放不会修改雷达范围参数"/>
+                        </Grid>
                         <Grid Grid.Row="1">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                             <Grid Grid.Column="0">
