@@ -1,14 +1,14 @@
 # 版本与已知限制
 
-## 1.2.8 身份
+## 1.2.9 身份
 
-- Bridge：`BridgeVersion.Value = 1.2.8`，WPF footer 为 `Bridge 1.2.8 · IPC 2 · Windows x64`。
-- Unity SDK：`UnitySdkVersion.Value = 1.2.8`；`package.json` 与 `bridge-version.txt` 同为 `1.2.8`。
+- Bridge：`BridgeVersion.Value = 1.2.9`，WPF footer 为 `Bridge 1.2.9 · IPC 2 · Windows x64`。
+- Unity SDK：`UnitySdkVersion.Value = 1.2.9`；`package.json` 与 `bridge-version.txt` 同为 `1.2.9`。
 - Unity 包：`com.blaze.radar`，公共命名空间 `Blaze.Radar`，最低 Unity `2021.3`。
 - IPC：`IpcProtocolVersion.Current = 2`。业务帧只发送 screen-addressed `PointerBatch`，v1 `PointerFrame` 不可混用。
-- 安装 URL：`https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.8`。
+- 安装 URL：`https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.9`。
 
-## 1.2.8 能力
+## 1.2.9 能力
 
 - 左、右、上、下边线死区沿有效拉框的真实边向内过滤，支持旋转/梯形区域，并以橙色带在主视图和放大编辑器中预览。
 - 快速移动预设按屏幕分辨率调整关联距离，并降低确认与稀疏聚类门槛；预设需由操作员保存应用，且应在边线噪点过滤之后使用。
@@ -25,7 +25,7 @@
 ## 限制
 
 - 仅 Windows x64；UPM 含完整 self-contained .NET/WPF payload，体积明显大于纯 C# 包。
-- 1.2.8 不自动完成联合标定；每个雷达仍由物理四角与 OutputRect 对齐。标定和屏蔽区依赖现场几何。
+- 1.2.9 不自动完成联合标定；每个雷达仍由物理四角与 OutputRect 对齐。标定和屏蔽区依赖现场几何。
 - Fusion 只在同屏去重；Pointer ID 只在同屏稳定，不提供跨屏人员身份连续跟踪。
 - 不提供多雷达同步录制容器；`.radarrec` 仍是单传感器原始 TCP 块/连接状态，不等于厂商文件格式。
 - 只读厂家点数据，不发送文档未定义的写命令，不修改设备 IP/网关/扫描频率/马达状态。

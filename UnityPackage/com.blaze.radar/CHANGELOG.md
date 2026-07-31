@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.9 - 2026-07-31
+
+- Accept both dot and comma decimal separators in every floating-point field in the right parameter panel, independent of the Windows regional format.
+- Preserve an incomplete trailing decimal separator such as `0.` or `0,` while typing instead of immediately reverting the editor text.
+
 ## 1.2.8 - 2026-07-31
 
 - Filter wall/floor boundary noise by independent left, right, top and bottom inward bands that follow the actual active-polygon edges, including rotated or skewed quadrilaterals.

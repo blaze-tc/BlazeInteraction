@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Threading;
+using Yuexin.Radar.Bridge.Wpf.Converters;
 using Yuexin.Radar.Bridge.Wpf.Controls;
 using Yuexin.Radar.Bridge.Wpf.Services;
 using Yuexin.Radar.Bridge.Wpf.ViewModels;
@@ -177,6 +178,56 @@ public sealed class MainWindowBindingTests
     }
 
     [Fact]
+    public void FloatingPointEditor_AcceptsCommaDecimalAndKeepsTrailingSeparatorWhileTyping()
+    {
+        WpfTestHost.Instance.Invoke(() =>
+        {
+            var configuration = RadarAppConfiguration.CreateDefault();
+            var runtime = new TestRuntime();
+            using var viewModel = new MainViewModel(configuration, runtime);
+            var window = new MainWindow(viewModel, runtime);
+            window.Show();
+            var sensorTab = FindVisualChildren<TabItem>(window)
+                .Single(item => string.Equals(item.Header as string, "雷达参数", StringComparison.Ordinal));
+            sensorTab.IsSelected = true;
+            window.UpdateLayout();
+            var editor = FindVisualChildren<TextBox>(window).Single(textBox =>
+                string.Equals(BindingOperations.GetBinding(textBox, TextBox.TextProperty)?.Path?.Path,
+                    "SelectedSensor.LeftEdgeDeadZoneMeters", StringComparison.Ordinal));
+
+            editor.Text = "0,";
+            editor.GetBindingExpression(TextBox.TextProperty)!.UpdateSource();
+            window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+            Assert.Equal("0,", editor.Text);
+
+            editor.Text = "0,125";
+            editor.GetBindingExpression(TextBox.TextProperty)!.UpdateSource();
+            window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+
+            Assert.Equal(0.125f, configuration.Screens[0].Sensors[0].Range.EdgeDeadZones.LeftMeters);
+            window.Close();
+        });
+    }
+
+    [Fact]
+    public void EveryVisibleFloatingPointParameter_UsesTheFlexibleNumericConverter()
+    {
+        WpfTestHost.Instance.Invoke(() =>
+        {
+            var configuration = RadarAppConfiguration.CreateDefault();
+            var runtime = new TestRuntime();
+            using var viewModel = new MainViewModel(configuration, runtime);
+            var window = new MainWindow(viewModel, runtime);
+            window.Show();
+
+            AssertFloatingPointBindings(window, "屏幕参数", "SelectedScreen.", typeof(ScreenItemViewModel), 3);
+            AssertFloatingPointBindings(window, "雷达参数", "SelectedSensor.", typeof(SensorItemViewModel), 12);
+
+            window.Close();
+        });
+    }
+
+    [Fact]
     public void RegionEditor_OpensAFittedLargePreviewAndZoomDoesNotChangeRadarRange()
     {
         WpfTestHost.Instance.Invoke(() =>
@@ -239,6 +290,34 @@ public sealed class MainWindowBindingTests
             if (child is T match) yield return match;
             foreach (var descendant in FindVisualChildren<T>(child)) yield return descendant;
         }
+    }
+
+    private static void AssertFloatingPointBindings(
+        MainWindow window,
+        string tabHeader,
+        string bindingPrefix,
+        Type viewModelType,
+        int expectedCount)
+    {
+        var tab = FindVisualChildren<TabItem>(window)
+            .Single(item => string.Equals(item.Header as string, tabHeader, StringComparison.Ordinal));
+        tab.IsSelected = true;
+        window.UpdateLayout();
+
+        var bindings = FindVisualChildren<TextBox>(window)
+            .Select(textBox => BindingOperations.GetBinding(textBox, TextBox.TextProperty))
+            .Where(binding => binding?.Path?.Path?.StartsWith(bindingPrefix, StringComparison.Ordinal) == true)
+            .Where(binding =>
+            {
+                var propertyName = binding!.Path.Path[bindingPrefix.Length..];
+                var propertyType = Nullable.GetUnderlyingType(viewModelType.GetProperty(propertyName)!.PropertyType)
+                    ?? viewModelType.GetProperty(propertyName)!.PropertyType;
+                return propertyType == typeof(float) || propertyType == typeof(double) || propertyType == typeof(decimal);
+            })
+            .ToList();
+
+        Assert.Equal(expectedCount, bindings.Count);
+        Assert.All(bindings, binding => Assert.IsType<FlexibleNumericTextConverter>(binding!.Converter));
     }
 
     private sealed class WpfTestHost

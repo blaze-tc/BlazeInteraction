@@ -47,7 +47,7 @@ $bridgeProcess = $null
 if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw "Embedded RadarBridge executable was not found: $executable" }
 if (-not (Test-Path -LiteralPath $versionMarker -PathType Leaf)) { throw "Embedded RadarBridge version marker was not found: $versionMarker" }
 $embeddedVersion = (Get-Content -LiteralPath $versionMarker -Raw -Encoding UTF8).Trim()
-if ($embeddedVersion -ne '1.2.8') { throw "Embedded RadarBridge version marker must be 1.2.8; found '$embeddedVersion'." }
+if ($embeddedVersion -ne '1.2.9') { throw "Embedded RadarBridge version marker must be 1.2.9; found '$embeddedVersion'." }
 if ($SetupDelaySeconds -ge $StartupTimeoutSeconds) { throw 'SetupDelaySeconds must be less than StartupTimeoutSeconds.' }
 
 try {
@@ -130,7 +130,7 @@ try {
     if ($bridgeProcess.ExitCode -ne 0) { throw "Embedded RadarBridge exited with code $($bridgeProcess.ExitCode)." }
 
     Write-Host "Embedded RadarBridge top-level window passed: $windowTitle"
-    Write-Host 'IPC v2 Hello/HelloAck passed with Bridge version 1.2.8.'
+    Write-Host 'IPC v2 Hello/HelloAck passed with Bridge version 1.2.9.'
     Write-Host 'Parent-process shutdown passed with exit code 0.'
 }
 finally {

@@ -1,6 +1,6 @@
 {
   "name": "com.blaze.radar",
-  "version": "1.2.8",
+  "version": "1.2.9",
   "displayName": "Blaze Radar SDK",
   "description": "FaseLase F10/F20 self-contained RadarBridge, Named Pipe client and multi-pointer EventSystem input for Unity.",
   "unity": "2021.3",

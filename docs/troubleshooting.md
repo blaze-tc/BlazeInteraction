@@ -1,18 +1,18 @@
-# 1.2.8 故障排查与现场证据
+# 1.2.9 故障排查与现场证据
 
-## 包版本或 Bridge 不是 1.2.8
+## 包版本或 Bridge 不是 1.2.9
 
 Package Manager 应解析：
 
 ```text
-https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.8
+https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.9
 ```
 
-移除旧 URL、本地覆盖和已导入的旧 Sample。确认 Version `1.2.8` 和 Resolved Path 指向本项目新 `Library/PackageCache/com.blaze.radar@...`。仍陈旧时关闭 Unity，只清除该包缓存与 lock 条目后重开。Player 构建后比较 `RadarBridge/bridge-version.txt` 和包内/已审核 EXE SHA-256；不要用单个旧 EXE 覆盖完整目录。
+移除旧 URL、本地覆盖和已导入的旧 Sample。确认 Version `1.2.9` 和 Resolved Path 指向本项目新 `Library/PackageCache/com.blaze.radar@...`。仍陈旧时关闭 Unity，只清除该包缓存与 lock 条目后重开。Player 构建后比较 `RadarBridge/bridge-version.txt` 和包内/已审核 EXE SHA-256；不要用单个旧 EXE 覆盖完整目录。
 
 ## IPC protocol mismatch 或一直 DISCONNECTED
 
-IPC v1 PointerFrame 与 IPC v2 PointerBatch 不兼容。关闭所有旧 RadarBridge/Player，确认 package、SDK、Bridge 都为 `1.2.8`，日志显示 IPC 2，Pipe Name 两侧一致，再重连。HelloAck 必须包含 protocol 2、Bridge 1.2.8 和当前 screen summaries；不能忽略 Error 强行继续。
+IPC v1 PointerFrame 与 IPC v2 PointerBatch 不兼容。关闭所有旧 RadarBridge/Player，确认 package、SDK、Bridge 都为 `1.2.9`，日志显示 IPC 2，Pipe Name 两侧一致，再重连。HelloAck 必须包含 protocol 2、Bridge 1.2.9 和当前 screen summaries；不能忽略 Error 强行继续。
 
 ## 某屏无输入、串屏或重叠区双点
 
@@ -24,7 +24,7 @@ IPC v1 PointerFrame 与 IPC v2 PointerBatch 不兼容。关闭所有旧 RadarBri
 
 ## 三面墙边线噪点进入 Unity
 
-不要缩小有效拉框来躲避墙角或地面边线。选择对应雷达，在“雷达参数 > 边线过滤（优先）”分别设置左、右、上、下向内死区；从 `0.05–0.15 m` 开始，观察 1B/放大编辑器的橙色带覆盖静态边线，而 1A 保留原始点用于诊断。1.2.8 按绿色拉框的真实斜边计算距离，不受拉框旋转或梯形透视影响。设置后必须保存并应用。
+不要缩小有效拉框来躲避墙角或地面边线。选择对应雷达，在“雷达参数 > 边线过滤（优先）”分别设置左、右、上、下向内死区；从 `0.05–0.15 m` 开始，观察 1B/放大编辑器的橙色带覆盖静态边线，而 1A 保留原始点用于诊断。1.2.9 按绿色拉框的真实斜边计算距离，不受拉框旋转或梯形透视影响。设置后必须保存并应用。
 
 ## 快速挥动点位稀疏或 Pointer ID 跳变
 
@@ -39,7 +39,11 @@ IPC v1 PointerFrame 与 IPC v2 PointerBatch 不兼容。关闭所有旧 RadarBri
 
 ## WPF 控件消失或变模糊
 
-Bridge 在窗口创建前强制 WPF 软件渲染，路径不依赖 GPU。仍需记录 Windows 缩放、投影分辨率、GPU/驱动和精确操作；测试 click、drag、scroll、resize、minimize/restore、跨 DPI 屏移动和 projector focus change。若能复现，保存同一时间段日志与截图，确认运行的是包内 1.2.8 完整 payload，而非缓存旧版。
+Bridge 在窗口创建前强制 WPF 软件渲染，路径不依赖 GPU。仍需记录 Windows 缩放、投影分辨率、GPU/驱动和精确操作；测试 click、drag、scroll、resize、minimize/restore、跨 DPI 屏移动和 projector focus change。若能复现，保存同一时间段日志与截图，确认运行的是包内 1.2.9 完整 payload，而非缓存旧版。
+
+## 小数参数无法输入
+
+1.2.9 起右侧所有浮点参数同时接受点和逗号小数，例如 `0.15` 与 `0,15`。输入过程中的 `0.` 或 `0,` 会保留在文本框中，继续输入数字后才更新配置；整数参数仍只接受整数。若分隔符仍被立即删除，请检查窗口页眉与 Package Manager 是否确认为 1.2.9。
 
 ## 日志关联
 
