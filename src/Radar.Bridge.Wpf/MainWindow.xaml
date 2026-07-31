@@ -20,7 +20,7 @@
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel VerticalAlignment="Center">
                     <TextBlock Text="RADARBRIDGE" FontSize="18" FontWeight="Bold"/>
-                    <TextBlock Text="Bridge 1.2.7 · IPC 2 · Windows x64" Style="{StaticResource CaptionStyle}" Margin="0,1,0,0"/>
+                    <TextBlock Text="Bridge 1.2.8 · IPC 2 · Windows x64" Style="{StaticResource CaptionStyle}" Margin="0,1,0,0"/>
                     <TextBlock Text="多屏幕 · 多雷达 · 融合诊断" Style="{StaticResource CaptionStyle}" Margin="0,2,0,0"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
@@ -140,6 +140,10 @@
                                                                   MaximumRangeMeters="{Binding SelectedSensor.VisualizationRangeMeters}"
                                                                   RegionVertices="{Binding SelectedSensor.RegionVertices}"
                                                                   MaskedRegions="{Binding SelectedSensor.MaskedPolygons}"
+                                                                  LeftEdgeDeadZoneMeters="{Binding SelectedSensor.LeftEdgeDeadZoneMeters}"
+                                                                  RightEdgeDeadZoneMeters="{Binding SelectedSensor.RightEdgeDeadZoneMeters}"
+                                                                  TopEdgeDeadZoneMeters="{Binding SelectedSensor.TopEdgeDeadZoneMeters}"
+                                                                  BottomEdgeDeadZoneMeters="{Binding SelectedSensor.BottomEdgeDeadZoneMeters}"
                                                                   ShowRawPoints="False" ShowValidPoints="True" ShowClusters="False"
                                                                   ShowFilterOverlay="True" ShowBlindZone="False" IsRegionEditable="True"
                                                                   RegionVertexMoved="OnRegionVertexMoved"/>
@@ -196,8 +200,13 @@
                                 </Grid>
                                 <TextBlock Text="最大关联距离 (px)" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedScreen.MaximumAssociationDistancePixels, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/>
                                 <TextBlock Text="平滑系数" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedScreen.SmoothingAlpha, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/>
+                                <Button Content="载入快速移动预设" Command="{Binding ApplyFastMotionPresetCommand}" Margin="0,10,0,0"
+                                        ToolTip="当前屏幕：确认帧 1、丢失帧 5、平滑 0.8；关联距离按分辨率计算；其雷达最少聚类点数设为 1。仍需保存并应用配置。"/>
+                                <TextBlock Text="用于快速挥动：先过滤边线噪点，再载入预设并保存。输出 30 Hz 不会增加雷达真实扫描帧。"
+                                           Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" Margin="0,5,0,0"/>
                                 <TextBlock Text="交互模式" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><ComboBox ItemsSource="{Binding SelectedScreen.AvailableInteractionModes}" SelectedItem="{Binding SelectedScreen.InteractionMode}"/>
                                 <TextBlock Text="停留时长 (ms)" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedScreen.DwellMilliseconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/>
+                                <Button Content="保存并应用配置" Command="{Binding SaveConfigurationCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,10,0,0"/>
                             </StackPanel>
                         </ScrollViewer>
                     </TabItem>
@@ -227,6 +236,18 @@
                                 <TextBlock Text="显示最大范围" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedSensor.VisualizationRangeMeters, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/>
                                 <TextBlock Text="旋转角度" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedSensor.RotationDegrees, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/>
                                 <StackPanel Orientation="Horizontal"><CheckBox Content="翻转 X" IsChecked="{Binding SelectedSensor.FlipX}" Margin="0,5,16,0"/><CheckBox Content="翻转 Y" IsChecked="{Binding SelectedSensor.FlipY}" Margin="0,5,0,0"/></StackPanel>
+                                <Separator/>
+                                <TextBlock Text="边线过滤（优先）" Style="{StaticResource SectionTitleStyle}"/>
+                                <TextBlock Text="沿绿色拉框真实边缘向内过滤。建议从 0.05–0.15 m 开始；三面墙通常先调左、右、下边。橙色带为会被丢弃的区域。"
+                                           Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" Margin="0,0,0,7"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                                    <StackPanel Margin="0,0,4,4"><TextBlock Text="左边线 (m)" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.LeftEdgeDeadZoneMeters, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                    <StackPanel Grid.Column="1" Margin="4,0,0,4"><TextBlock Text="右边线 (m)" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.RightEdgeDeadZoneMeters, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                    <StackPanel Grid.Row="1" Margin="0,4,4,0"><TextBlock Text="上边线 (m)" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.TopEdgeDeadZoneMeters, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                    <StackPanel Grid.Row="1" Grid.Column="1" Margin="4,4,0,0"><TextBlock Text="下边线 (m)" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.BottomEdgeDeadZoneMeters, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                </Grid>
                                 <Separator/>
                                 <TextBlock Text="聚类" Style="{StaticResource SectionTitleStyle}"/>
                                 <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>

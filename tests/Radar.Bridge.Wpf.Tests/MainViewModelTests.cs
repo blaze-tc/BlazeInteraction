@@ -11,6 +11,56 @@ namespace Yuexin.Radar.Bridge.Wpf.Tests;
 public sealed class MainViewModelTests
 {
     [Fact]
+    public void SensorEdgeDeadZoneEditors_WriteThePersistedFourSideConfiguration()
+    {
+        var configuration = new RadarSensorConfiguration();
+        var sensor = new SensorItemViewModel(configuration);
+        var values = new Dictionary<string, float>
+        {
+            ["LeftEdgeDeadZoneMeters"] = 0.08f,
+            ["RightEdgeDeadZoneMeters"] = 0.09f,
+            ["TopEdgeDeadZoneMeters"] = 0.04f,
+            ["BottomEdgeDeadZoneMeters"] = 0.12f
+        };
+
+        foreach (var (propertyName, value) in values)
+        {
+            var property = typeof(SensorItemViewModel).GetProperty(propertyName);
+            Assert.NotNull(property);
+            property.SetValue(sensor, value);
+        }
+
+        Assert.Equal(0.08f, configuration.Range.EdgeDeadZones.LeftMeters);
+        Assert.Equal(0.09f, configuration.Range.EdgeDeadZones.RightMeters);
+        Assert.Equal(0.04f, configuration.Range.EdgeDeadZones.TopMeters);
+        Assert.Equal(0.12f, configuration.Range.EdgeDeadZones.BottomMeters);
+    }
+
+    [Fact]
+    public void FastMotionPreset_UsesResolutionAwareAssociationAndSparsePointTracking()
+    {
+        var configuration = new RadarAppConfiguration { Screens = [Screen("front", true, "f1")] };
+        configuration.Screens[0].IsPrimary = true;
+        configuration.Screens[0].ResolutionMode = RadarResolutionMode.Override;
+        configuration.Screens[0].WidthPixels = 4096;
+        configuration.Screens[0].HeightPixels = 1536;
+        using var viewModel = new MainViewModel(configuration, new TestRuntime());
+        var commandProperty = typeof(MainViewModel).GetProperty("ApplyFastMotionPresetCommand");
+        Assert.NotNull(commandProperty);
+        var command = Assert.IsAssignableFrom<ICommand>(commandProperty.GetValue(viewModel));
+
+        command.Execute(null);
+
+        Assert.Equal(30, configuration.Screens[0].Fusion.OutputRateHz);
+        Assert.Equal(220, configuration.Screens[0].Fusion.SensorDataMaxAgeMilliseconds);
+        Assert.Equal(1, configuration.Screens[0].Tracking.ConfirmFrames);
+        Assert.Equal(5, configuration.Screens[0].Tracking.LostFrames);
+        Assert.Equal(409.6f, configuration.Screens[0].Tracking.MaximumAssociationDistancePixels, 2);
+        Assert.Equal(0.8f, configuration.Screens[0].Tracking.SmoothingAlpha);
+        Assert.Equal(1, configuration.Screens[0].Sensors[0].Clustering.MinimumClusterPointCount);
+    }
+
+    [Fact]
     public async Task ReplayDialogCommand_OnlyOpensForAssociatedReplaySensor()
     {
         var dialogs = new FakeDialogs { ReplayPath = "sample.radarrec" };

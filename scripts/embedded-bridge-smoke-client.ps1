@@ -87,7 +87,7 @@ try {
         $responsePayload = $response.payload | ConvertTo-Json -Depth 8 -Compress
         throw "Expected IPC v2 HelloAck; received protocol '$($response.protocolVersion)' message '$($response.messageType)' payload '$responsePayload'."
     }
-    if ($response.payload.protocolVersion -ne 2 -or $response.payload.bridgeVersion -ne '1.2.7') {
+    if ($response.payload.protocolVersion -ne 2 -or $response.payload.bridgeVersion -ne '1.2.8') {
         throw "HelloAck identity mismatch: Bridge '$($response.payload.bridgeVersion)', IPC '$($response.payload.protocolVersion)'."
     }
 

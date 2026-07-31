@@ -22,6 +22,7 @@ public sealed class RadarPointCloudView : FrameworkElement
     private static readonly Brush RawPointBrush = Frozen(Color.FromArgb(210, 119, 159, 187));
     private static readonly Brush ValidPointBrush = Frozen(Color.FromRgb(56, 211, 214));
     private static readonly Brush RegionBrush = Frozen(Color.FromRgb(126, 231, 135));
+    private static readonly Brush EdgeDeadZoneBrush = Frozen(Color.FromArgb(92, 255, 176, 32));
     private static readonly Brush MaskBrush = Frozen(Color.FromArgb(48, 245, 93, 91));
     private static readonly Brush ClusterBrush = Frozen(Color.FromRgb(192, 132, 252));
     private static readonly Brush MaskBorderBrush = Frozen(Color.FromArgb(190, 245, 93, 91));
@@ -67,6 +68,18 @@ public sealed class RadarPointCloudView : FrameworkElement
     public static readonly DependencyProperty ShowBlindZoneProperty = DependencyProperty.Register(
         nameof(ShowBlindZone), typeof(bool), typeof(RadarPointCloudView),
         new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsRender));
+    public static readonly DependencyProperty LeftEdgeDeadZoneMetersProperty = DependencyProperty.Register(
+        nameof(LeftEdgeDeadZoneMeters), typeof(float), typeof(RadarPointCloudView),
+        new FrameworkPropertyMetadata(0f, FrameworkPropertyMetadataOptions.AffectsRender));
+    public static readonly DependencyProperty RightEdgeDeadZoneMetersProperty = DependencyProperty.Register(
+        nameof(RightEdgeDeadZoneMeters), typeof(float), typeof(RadarPointCloudView),
+        new FrameworkPropertyMetadata(0f, FrameworkPropertyMetadataOptions.AffectsRender));
+    public static readonly DependencyProperty TopEdgeDeadZoneMetersProperty = DependencyProperty.Register(
+        nameof(TopEdgeDeadZoneMeters), typeof(float), typeof(RadarPointCloudView),
+        new FrameworkPropertyMetadata(0f, FrameworkPropertyMetadataOptions.AffectsRender));
+    public static readonly DependencyProperty BottomEdgeDeadZoneMetersProperty = DependencyProperty.Register(
+        nameof(BottomEdgeDeadZoneMeters), typeof(float), typeof(RadarPointCloudView),
+        new FrameworkPropertyMetadata(0f, FrameworkPropertyMetadataOptions.AffectsRender));
     public static readonly DependencyProperty IsRegionEditableProperty = DependencyProperty.Register(
         nameof(IsRegionEditable), typeof(bool), typeof(RadarPointCloudView), new FrameworkPropertyMetadata(false));
     public static readonly DependencyProperty IsPanEnabledProperty = DependencyProperty.Register(
@@ -106,6 +119,10 @@ public sealed class RadarPointCloudView : FrameworkElement
     public bool ShowClusters { get => (bool)GetValue(ShowClustersProperty); set => SetValue(ShowClustersProperty, value); }
     public bool ShowFilterOverlay { get => (bool)GetValue(ShowFilterOverlayProperty); set => SetValue(ShowFilterOverlayProperty, value); }
     public bool ShowBlindZone { get => (bool)GetValue(ShowBlindZoneProperty); set => SetValue(ShowBlindZoneProperty, value); }
+    public float LeftEdgeDeadZoneMeters { get => (float)GetValue(LeftEdgeDeadZoneMetersProperty); set => SetValue(LeftEdgeDeadZoneMetersProperty, value); }
+    public float RightEdgeDeadZoneMeters { get => (float)GetValue(RightEdgeDeadZoneMetersProperty); set => SetValue(RightEdgeDeadZoneMetersProperty, value); }
+    public float TopEdgeDeadZoneMeters { get => (float)GetValue(TopEdgeDeadZoneMetersProperty); set => SetValue(TopEdgeDeadZoneMetersProperty, value); }
+    public float BottomEdgeDeadZoneMeters { get => (float)GetValue(BottomEdgeDeadZoneMetersProperty); set => SetValue(BottomEdgeDeadZoneMetersProperty, value); }
     public bool IsRegionEditable { get => (bool)GetValue(IsRegionEditableProperty); set => SetValue(IsRegionEditableProperty, value); }
     public bool IsPanEnabled { get => (bool)GetValue(IsPanEnabledProperty); set => SetValue(IsPanEnabledProperty, value); }
     public Vector PanOffset { get => (Vector)GetValue(PanOffsetProperty); set => SetValue(PanOffsetProperty, value); }
@@ -116,7 +133,7 @@ public sealed class RadarPointCloudView : FrameworkElement
         context.DrawRectangle(BackgroundBrush, null, new Rect(RenderSize));
         if (ActualWidth <= 0d || ActualHeight <= 0d) return;
         DrawGrid(context);
-        if (ShowFilterOverlay) { DrawRegion(context); DrawMasks(context); }
+        if (ShowFilterOverlay) { DrawEdgeDeadZones(context); DrawRegion(context); DrawMasks(context); }
         var snapshot = Snapshot;
         if (snapshot is null) { DrawText(context, "等待选中雷达数据", new Point(18d, 18d), Frozen(Color.FromRgb(147, 168, 188)), 12d); return; }
         if (ShowRawPoints) DrawPointLayers(context, _rawPointFrames.GetLayers(DateTimeOffset.UtcNow), RawPointBrush, 1.2d);
@@ -255,6 +272,36 @@ public sealed class RadarPointCloudView : FrameworkElement
         _isPanning = false;
         Cursor = null;
         if (IsMouseCaptured) ReleaseMouseCapture();
+    }
+    private void DrawEdgeDeadZones(DrawingContext context)
+    {
+        var vertices = RegionVertices;
+        if (vertices is null || vertices.Count < 3) return;
+        var scale = RadarViewportTransform.CalculateScale(ActualWidth, ActualHeight, Math.Max(.1f, MaximumRangeMeters));
+        var clip = new StreamGeometry();
+        using (var stream = clip.Open())
+        {
+            stream.BeginFigure(ToScreen(vertices[0]), true, true);
+            for (var index = 1; index < vertices.Count; index++) stream.LineTo(ToScreen(vertices[index]), true, false);
+        }
+        clip.Freeze();
+        context.PushClip(clip);
+        foreach (var edge in RadarRegionEdges.Classify(vertices))
+        {
+            var widthMeters = edge.Side switch
+            {
+                RadarRegionEdgeSide.Left => LeftEdgeDeadZoneMeters,
+                RadarRegionEdgeSide.Right => RightEdgeDeadZoneMeters,
+                RadarRegionEdgeSide.Top => TopEdgeDeadZoneMeters,
+                RadarRegionEdgeSide.Bottom => BottomEdgeDeadZoneMeters,
+                _ => 0f
+            };
+            if (!float.IsFinite(widthMeters) || widthMeters <= 0f) continue;
+            var pen = new Pen(EdgeDeadZoneBrush, Math.Max(1d, widthMeters * scale * 2d));
+            pen.Freeze();
+            context.DrawLine(pen, ToScreen(edge.Start), ToScreen(edge.End));
+        }
+        context.Pop();
     }
     private void DrawText(DrawingContext context, string text, Point origin, Brush brush, double size) =>
         context.DrawText(new FormattedText(text, System.Globalization.CultureInfo.CurrentUICulture, FlowDirection.LeftToRight, new Typeface("Segoe UI"), size, brush, VisualTreeHelper.GetDpi(this).PixelsPerDip), origin);

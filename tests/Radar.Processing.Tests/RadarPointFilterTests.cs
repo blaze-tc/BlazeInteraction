@@ -66,6 +66,34 @@ public sealed class RadarPointFilterTests
         Assert.Equal(1f, remaining.Y);
     }
 
+    [Fact]
+    public void Filter_EdgeDeadZonesFollowRotatedPolygonEdgesInsteadOfItsBoundingBox()
+    {
+        var points = new[]
+        {
+            Point(1f, 10f, 0.9f, 0.9f),
+            Point(1f, 10f, 0f, 0f)
+        };
+        var options = new RadarFilterOptions
+        {
+            MinimumDistanceMeters = 0f,
+            MaximumDistanceMeters = 5f,
+            BlindZoneStartDegrees = 230f,
+            BlindZoneEndDegrees = 310f,
+            ActivePolygon = [new(0f, 2f), new(2f, 0f), new(0f, -2f), new(-2f, 0f)],
+            LeftEdgeDeadZoneMeters = 0.2f,
+            RightEdgeDeadZoneMeters = 0.2f,
+            BottomEdgeDeadZoneMeters = 0.2f,
+            TopEdgeDeadZoneMeters = 0.2f
+        };
+
+        var filtered = RadarPointFilter.Apply(points, options);
+
+        var remaining = Assert.Single(filtered);
+        Assert.Equal(0f, remaining.X);
+        Assert.Equal(0f, remaining.Y);
+    }
+
     private static RadarPoint Point(float distanceMeters, float angle, float? x = null, float? y = null)
     {
         return new RadarPoint(

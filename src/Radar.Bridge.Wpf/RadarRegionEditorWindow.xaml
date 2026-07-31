@@ -40,6 +40,10 @@
                                           MaximumRangeMeters="{Binding EditorRangeMeters, ElementName=EditorWindow}"
                                           RegionVertices="{Binding RegionVertices}"
                                           MaskedRegions="{Binding MaskedPolygons}"
+                                          LeftEdgeDeadZoneMeters="{Binding LeftEdgeDeadZoneMeters}"
+                                          RightEdgeDeadZoneMeters="{Binding RightEdgeDeadZoneMeters}"
+                                          TopEdgeDeadZoneMeters="{Binding TopEdgeDeadZoneMeters}"
+                                          BottomEdgeDeadZoneMeters="{Binding BottomEdgeDeadZoneMeters}"
                                           ShowRawPoints="True" ShowValidPoints="True" ShowClusters="False"
                                           ShowFilterOverlay="True" ShowBlindZone="False" IsRegionEditable="True" IsPanEnabled="True"
                                           RegionVertexMoved="OnRegionVertexMoved"
@@ -47,6 +51,6 @@
         </Border>
 
         <TextBlock Grid.Row="2" Margin="18,0" VerticalAlignment="Center" Foreground="{StaticResource TextSecondaryBrush}"
-                   Text="灰色为原始点，青色为过滤后点；拖动绿色顶点调整区域，按住空白处拖动画布。平移与缩放都不改变雷达参数和 Unity 坐标。"/>
+                   Text="灰色为原始点，青色为过滤后点，橙色带为边线过滤区；拖动绿色顶点调整区域，按住空白处拖动画布。平移与缩放都不改变雷达参数和 Unity 坐标。"/>
     </Grid>
 </Window>

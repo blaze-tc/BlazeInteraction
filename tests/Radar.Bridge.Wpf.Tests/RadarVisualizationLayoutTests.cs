@@ -37,6 +37,10 @@ public sealed class RadarVisualizationLayoutTests
         Assert.Equal("True", (string?)filtered.Attribute("ShowFilterOverlay"));
         Assert.Equal("{Binding SelectedSensor.RegionVertices}", (string?)filtered.Attribute("RegionVertices"));
         Assert.Equal("{Binding SelectedSensor.MaskedPolygons}", (string?)filtered.Attribute("MaskedRegions"));
+        Assert.Equal("{Binding SelectedSensor.LeftEdgeDeadZoneMeters}", (string?)filtered.Attribute("LeftEdgeDeadZoneMeters"));
+        Assert.Equal("{Binding SelectedSensor.RightEdgeDeadZoneMeters}", (string?)filtered.Attribute("RightEdgeDeadZoneMeters"));
+        Assert.Equal("{Binding SelectedSensor.TopEdgeDeadZoneMeters}", (string?)filtered.Attribute("TopEdgeDeadZoneMeters"));
+        Assert.Equal("{Binding SelectedSensor.BottomEdgeDeadZoneMeters}", (string?)filtered.Attribute("BottomEdgeDeadZoneMeters"));
         Assert.Equal("True", (string?)filtered.Attribute("IsRegionEditable"));
         Assert.Equal("OnRegionVertexMoved", (string?)filtered.Attribute("RegionVertexMoved"));
         Assert.Contains(document.Descendants(presentation + "TextBlock"), element =>
@@ -77,6 +81,8 @@ public sealed class RadarVisualizationLayoutTests
         {
             "SelectedSensor.Enabled", "SelectedSensor.SourceMode", "SelectedSensor.LocalIp",
             "SelectedSensor.BaseGapMeters", "SelectedSensor.OutputX", "SelectedScreen.InteractionMode",
+            "SelectedSensor.LeftEdgeDeadZoneMeters", "SelectedSensor.RightEdgeDeadZoneMeters",
+            "SelectedSensor.TopEdgeDeadZoneMeters", "SelectedSensor.BottomEdgeDeadZoneMeters", "ApplyFastMotionPresetCommand",
             "SaveConfigurationCommand", "BeginCalibrationCommand", "UndoCalibrationPointCommand",
             "ClearCalibrationCommand", "DeleteMaskedRegionCommand", "StartRecordingCommand",
             "SelectReplayFileCommand", "PauseReplayCommand", "StepReplayCommand", "StopReplayCommand"
@@ -97,6 +103,7 @@ public sealed class RadarVisualizationLayoutTests
             "WidthPixels", "HeightPixels", "OutputRateHz", "SensorDataMaxAgeMilliseconds", "FusionDistancePixels",
             "ConfirmFrames", "LostFrames", "MaximumAssociationDistancePixels", "SmoothingAlpha", "DwellMilliseconds",
             "Port", "MinimumDistanceMeters", "MaximumDistanceMeters", "VisualizationRangeMeters", "RotationDegrees",
+            "LeftEdgeDeadZoneMeters", "RightEdgeDeadZoneMeters", "TopEdgeDeadZoneMeters", "BottomEdgeDeadZoneMeters",
             "BaseGapMeters", "DistanceScale", "MinimumClusterPointCount", "MaximumClusterWidthMeters",
             "OutputX", "OutputY", "OutputWidth", "OutputHeight", "ReplaySpeed"
         })

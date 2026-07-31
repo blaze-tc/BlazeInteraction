@@ -71,13 +71,22 @@ public static class RadarPointFilter
 
     private static bool IsInsideEdgeDeadZone(Point2 point, RadarFilterOptions options)
     {
-        var minimumX = options.ActivePolygon.Min(vertex => vertex.X);
-        var maximumX = options.ActivePolygon.Max(vertex => vertex.X);
-        var minimumY = options.ActivePolygon.Min(vertex => vertex.Y);
-        var maximumY = options.ActivePolygon.Max(vertex => vertex.Y);
-        return point.X < minimumX + options.LeftEdgeDeadZoneMeters ||
-               point.X > maximumX - options.RightEdgeDeadZoneMeters ||
-               point.Y < minimumY + options.BottomEdgeDeadZoneMeters ||
-               point.Y > maximumY - options.TopEdgeDeadZoneMeters;
+        foreach (var edge in RadarRegionEdges.Classify(options.ActivePolygon))
+        {
+            var deadZoneMeters = edge.Side switch
+            {
+                RadarRegionEdgeSide.Left => options.LeftEdgeDeadZoneMeters,
+                RadarRegionEdgeSide.Right => options.RightEdgeDeadZoneMeters,
+                RadarRegionEdgeSide.Top => options.TopEdgeDeadZoneMeters,
+                RadarRegionEdgeSide.Bottom => options.BottomEdgeDeadZoneMeters,
+                _ => 0f
+            };
+            if (deadZoneMeters > 0f && edge.DistanceTo(point) < deadZoneMeters)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.8 - 2026-07-31
+
+- Filter wall/floor boundary noise by independent left, right, top and bottom inward bands that follow the actual active-polygon edges, including rotated or skewed quadrilaterals.
+- Visualize boundary dead zones as amber bands in the filtered radar view and large region editor, and expose the four persisted values in Radar Parameters.
+- Add a resolution-aware fast-motion preset that widens screen tracking association, reduces confirmation latency and accepts sparse single-point clusters after boundary noise has been filtered.
+
 ## 1.2.7 - 2026-07-30
 
 - Add a large independent region editor with mouse-wheel and button zoom, fit-to-region, and restore-to-parameter-range controls.

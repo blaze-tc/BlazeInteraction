@@ -46,6 +46,10 @@ public sealed class SensorItemViewModel : ObservableObject, System.ComponentMode
     public float VisualizationRangeMeters { get => _configuration.Range.VisualizationRangeMeters; set => Set(value, () => _configuration.Range.VisualizationRangeMeters, item => _configuration.Range.VisualizationRangeMeters = item); }
     public float MinimumAngleDegrees { get => _configuration.Range.MinimumAngleDegrees; set => Set(value, () => _configuration.Range.MinimumAngleDegrees, item => _configuration.Range.MinimumAngleDegrees = item); }
     public float MaximumAngleDegrees { get => _configuration.Range.MaximumAngleDegrees; set => Set(value, () => _configuration.Range.MaximumAngleDegrees, item => _configuration.Range.MaximumAngleDegrees = item); }
+    public float LeftEdgeDeadZoneMeters { get => _configuration.Range.EdgeDeadZones.LeftMeters; set => Set(value, () => _configuration.Range.EdgeDeadZones.LeftMeters, item => _configuration.Range.EdgeDeadZones.LeftMeters = item); }
+    public float RightEdgeDeadZoneMeters { get => _configuration.Range.EdgeDeadZones.RightMeters; set => Set(value, () => _configuration.Range.EdgeDeadZones.RightMeters, item => _configuration.Range.EdgeDeadZones.RightMeters = item); }
+    public float TopEdgeDeadZoneMeters { get => _configuration.Range.EdgeDeadZones.TopMeters; set => Set(value, () => _configuration.Range.EdgeDeadZones.TopMeters, item => _configuration.Range.EdgeDeadZones.TopMeters = item); }
+    public float BottomEdgeDeadZoneMeters { get => _configuration.Range.EdgeDeadZones.BottomMeters; set => Set(value, () => _configuration.Range.EdgeDeadZones.BottomMeters, item => _configuration.Range.EdgeDeadZones.BottomMeters = item); }
     public IReadOnlyList<RadarPoint2> ActivePolygon => _configuration.Range.ActivePolygon;
     public ObservableCollection<Point2> RegionVertices { get; }
     public IReadOnlyList<IReadOnlyList<RadarPoint2>> MaskedPolygons => _configuration.Range.MaskedPolygons;
@@ -77,6 +81,11 @@ public sealed class SensorItemViewModel : ObservableObject, System.ComponentMode
         nameof(Port) when Port is < 1 or > 65535 => "Port must be between 1 and 65535.",
         nameof(MinimumDistanceMeters) or nameof(MaximumDistanceMeters) when !float.IsFinite(MinimumDistanceMeters) || !float.IsFinite(MaximumDistanceMeters) || MinimumDistanceMeters < 0f || MaximumDistanceMeters <= MinimumDistanceMeters => "Range is invalid.",
         nameof(VisualizationRangeMeters) when !float.IsFinite(VisualizationRangeMeters) || VisualizationRangeMeters <= 0f => "Visualization range must be positive.",
+        nameof(LeftEdgeDeadZoneMeters) or nameof(RightEdgeDeadZoneMeters) or nameof(TopEdgeDeadZoneMeters) or nameof(BottomEdgeDeadZoneMeters)
+            when !float.IsFinite(LeftEdgeDeadZoneMeters) || !float.IsFinite(RightEdgeDeadZoneMeters) ||
+                 !float.IsFinite(TopEdgeDeadZoneMeters) || !float.IsFinite(BottomEdgeDeadZoneMeters) ||
+                 LeftEdgeDeadZoneMeters < 0f || RightEdgeDeadZoneMeters < 0f || TopEdgeDeadZoneMeters < 0f || BottomEdgeDeadZoneMeters < 0f
+            => "Edge dead zones must be finite and non-negative.",
         nameof(RotationDegrees) when !float.IsFinite(RotationDegrees) => "Rotation must be finite.",
         nameof(OutputX) or nameof(OutputY) when OutputX < 0 || OutputY < 0 => "Output origin cannot be negative.",
         nameof(OutputWidth) or nameof(OutputHeight) when OutputWidth < 1 || OutputHeight < 1 => "Output size must be positive.",

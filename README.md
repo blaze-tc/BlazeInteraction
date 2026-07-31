@@ -1,14 +1,14 @@
-# RadarControl 1.2.7
+# RadarControl 1.2.8
 
 FaseLase F10/F20 雷达桥接程序与 Unity 多屏、多雷达、多指针交互 SDK。Windows x64 的 `RadarBridge.exe` 独占雷达 TCP 连接，Unity 只通过 IPC 2 Named Pipe 接收按屏幕分组的指针批次。
 
 正式项目请固定到已审核标签：
 
 ```text
-https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.7
+https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.8
 ```
 
-从旧版本升级时，先从 `Packages/manifest.json` 删除旧的 Git URL，再安装上述 URL；安装后在 Package Manager 中选择 Blaze Radar SDK，确认版本为 `1.2.7`，Resolved Path 指向本次解析的 `Library/PackageCache/com.blaze.radar@...`，而不是旧缓存或本地覆盖目录。完整步骤见 [安装、升级与现场验收](INSTALL.md)。
+从旧版本升级时，先从 `Packages/manifest.json` 删除旧的 Git URL，再安装上述 URL；安装后在 Package Manager 中选择 Blaze Radar SDK，确认版本为 `1.2.8`，Resolved Path 指向本次解析的 `Library/PackageCache/com.blaze.radar@...`，而不是旧缓存或本地覆盖目录。完整步骤见 [安装、升级与现场验收](INSTALL.md)。
 
 ## 快速验证
 
@@ -24,11 +24,12 @@ powershell -ExecutionPolicy Bypass -File scripts/test-embedded-bridge.ps1 -Start
 
 发布脚本生成完整 self-contained 输出到 `artifacts/publish/RadarBridge/win-x64/`，再原样嵌入 `UnityPackage/com.blaze.radar/Bridge~/win-x64/`。两个目录必须保留全部 DLL、runtimeconfig、`profiles/` 和 `bridge-version.txt`；只复制 EXE 无法运行。
 
-## 1.2.7 工作流
+## 1.2.8 工作流
 
 - 在 **Project Settings > Blaze Radar** 定义任意数量逻辑屏幕，给每屏设置稳定且唯一的 Screen ID、逻辑分辨率和顺序；所有启用屏幕中必须恰好一个 Primary。
 - Unity Hello 后，Bridge 的“Unity 屏幕”列表选择对应屏幕；每屏可新增/删除多个传感器，分别配置 F10/F20、雷达/本机 IP、输出矩形、变换、过滤与标定，再配置该屏幕的融合、跟踪和交互参数。
 - 区域 1 的“放大编辑”提供独立大画布；空白处左键拖动可平移，滚轮/按钮可缩放，并可适应完整拉框或恢复雷达参数范围，所有视图操作都不改变 Unity 坐标。
+- 雷达参数提供左、右、上、下独立边线死区，橙色带沿绿色拉框的真实斜边向内过滤墙角/地面静态回波；屏幕参数提供需手动保存的“快速移动预设”，按分辨率放宽跟踪关联并允许稀疏单点簇。
 - 推荐现场拓扑：`LEFT/L1`、`FRONT/F1+F2`（输出矩形保留重叠区用于融合）、`RIGHT/R1`。Pointer ID 只保证同屏稳定，不跨屏延续。
 - **Basic Interaction** 用于单屏 UGUI/2D/3D 事件检查；**Multi-Screen Camera Routing** 可切换 LOCAL 模拟或 BRIDGE IPC，验证独立 Display、Camera `pixelRect` 和 RenderTexture 路由。
 - Bridge 日志带 `[SCREEN/SENSOR]` 标签；与 `Player.log` 中 SDK/Bridge/IPC 版本、screenId、batch/frame sequence、pointer count、dropped count 和 latency 对时排障。

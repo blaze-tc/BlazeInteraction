@@ -40,6 +40,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         DeleteSensorCommand = CreateCommand(DeleteSensorAsync, () => CanEditSelectedScreen && SelectedSensor is not null);
         DeleteOrphanedScreenConfigurationCommand = CreateCommand(DeleteOrphanedScreenConfigurationAsync, () => SelectedScreen is { IsAssociated: false });
         RestoreUnityResolutionCommand = new RelayCommand(() => { if (SelectedScreen is not null) SelectedScreen.ResolutionMode = RadarResolutionMode.FollowUnityDefault; }, () => SelectedScreen is not null);
+        ApplyFastMotionPresetCommand = new RelayCommand(ApplyFastMotionPreset, () => SelectedScreen is not null);
         ConnectSensorCommand = CreateCommand(token => WithSelectedSensorAsync((screen, sensor) => _runtime.ConnectSensorAsync(screen.ScreenId, sensor.SensorId, token)), CanOperateSelectedSensor);
         DisconnectSensorCommand = CreateCommand(_ => WithSelectedSensorAsync((screen, sensor) => _runtime.DisconnectSensorAsync(screen.ScreenId, sensor.SensorId)), CanOperateSelectedSensor);
         ConnectScreenCommand = CreateCommand(token => SelectedScreen is { IsAssociated: true } screen ? _runtime.ConnectScreenAsync(screen.ScreenId, token) : Task.CompletedTask, () => SelectedScreen is { IsAssociated: true });
@@ -125,6 +126,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ICommand DeleteSensorCommand { get; }
     public ICommand DeleteOrphanedScreenConfigurationCommand { get; }
     public ICommand RestoreUnityResolutionCommand { get; }
+    public ICommand ApplyFastMotionPresetCommand { get; }
     public ICommand ConnectSensorCommand { get; }
     public ICommand DisconnectSensorCommand { get; }
     public ICommand ConnectScreenCommand { get; }
@@ -173,6 +175,27 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
     public void ReceiveLogForTest(string entry, DateTimeOffset? timestamp = null) => ReceiveLog(entry, timestamp);
     internal int MoveLogThrottleStateCount => _lastMoveLogAt.Count;
+
+    private void ApplyFastMotionPreset()
+    {
+        if (SelectedScreen is not { } screen)
+        {
+            return;
+        }
+
+        screen.OutputRateHz = 30;
+        screen.SensorDataMaxAgeMilliseconds = 220;
+        screen.ConfirmFrames = 1;
+        screen.LostFrames = 5;
+        screen.MaximumAssociationDistancePixels = Math.Clamp(screen.EffectiveWidthPixels * 0.1f, 240f, 480f);
+        screen.SmoothingAlpha = 0.8f;
+        foreach (var sensor in screen.Sensors)
+        {
+            sensor.MinimumClusterPointCount = 1;
+        }
+
+        ReceiveLog($"[{screen.ScreenId}/FUSION] 已载入快速移动预设；点击‘保存并应用配置’后生效。关联距离={screen.MaximumAssociationDistancePixels:0.#} px，最少点数=1。");
+    }
 
     private Task StartRecordingFromDialogAsync(CancellationToken token)
     {
@@ -361,7 +384,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
     private void NotifyCommandState()
     {
-        foreach (var command in new ICommand[] { AddSensorCommand, DeleteSensorCommand, DeleteOrphanedScreenConfigurationCommand, RestoreUnityResolutionCommand, ConnectSensorCommand, DisconnectSensorCommand, ConnectScreenCommand, DisconnectScreenCommand, StartReplayCommand, PauseReplayCommand, ResumeReplayCommand, StepReplayCommand, StopReplayCommand, SaveConfigurationCommand, StartRecordingCommand, StopRecordingCommand, SelectReplayFileCommand, ResetRegionCommand, BeginCalibrationCommand, CaptureCalibrationPointCommand, UndoCalibrationPointCommand, SaveCalibrationCommand, ClearCalibrationCommand, AddMaskedRegionCommand, DeleteMaskedRegionCommand })
+        foreach (var command in new ICommand[] { AddSensorCommand, DeleteSensorCommand, DeleteOrphanedScreenConfigurationCommand, RestoreUnityResolutionCommand, ApplyFastMotionPresetCommand, ConnectSensorCommand, DisconnectSensorCommand, ConnectScreenCommand, DisconnectScreenCommand, StartReplayCommand, PauseReplayCommand, ResumeReplayCommand, StepReplayCommand, StopReplayCommand, SaveConfigurationCommand, StartRecordingCommand, StopRecordingCommand, SelectReplayFileCommand, ResetRegionCommand, BeginCalibrationCommand, CaptureCalibrationPointCommand, UndoCalibrationPointCommand, SaveCalibrationCommand, ClearCalibrationCommand, AddMaskedRegionCommand, DeleteMaskedRegionCommand })
         {
             if (command is RelayCommand relay) relay.NotifyCanExecuteChanged();
             else if (command is AsyncRelayCommand asyncRelay) asyncRelay.NotifyCanExecuteChanged();
