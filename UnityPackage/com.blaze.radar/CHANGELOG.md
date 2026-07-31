@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.10 - 2026-07-31
+
+- Hold each confirmed target and its last known Pointer position throughout the configured lost-frame tolerance instead of clearing Area 2 and Unity Move/Hover output on every transient detection gap.
+- Document that lost-frame tolerance is counted in output ticks, including the recommended 10–12 ticks at 60 Hz for approximately 167–200 ms of continuity.
+
 ## 1.2.9 - 2026-07-31
 
 - Accept both dot and comma decimal separators in every floating-point field in the right parameter panel, independent of the Windows regional format.

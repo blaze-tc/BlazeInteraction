@@ -121,8 +121,8 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
 
         _lastTickTimestamp = timestamp;
         var observations = FuseCurrentDetections(timestamp);
-        var observedTracks = AssociateAndTrack(observations);
-        var targets = observedTracks
+        var activeTracks = AssociateAndTrack(observations);
+        var targets = activeTracks
             .OrderBy(track => track.TrackId)
             .Select(track => new FusedScreenTarget(
                 track.TrackId,
@@ -133,16 +133,16 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
                 track.ObservedFrames >= _options.ConfirmFrames))
             .ToArray();
 
-        var pointerTargets = targets
-            .Where(target => target.IsConfirmed)
-            .Select(target => new RadarTarget(
-                target.TrackId,
-                target.PixelX / _options.Screen.WidthPixels,
-                target.PixelY / _options.Screen.HeightPixels,
-                target.PixelX,
-                target.PixelY,
-                target.Confidence,
-                target.SourceSensorCount,
+        var pointerTargets = activeTracks
+            .Where(track => track.MissingFrames == 0 && track.ObservedFrames >= _options.ConfirmFrames)
+            .Select(track => new RadarTarget(
+                track.TrackId,
+                track.PixelX / _options.Screen.WidthPixels,
+                track.PixelY / _options.Screen.HeightPixels,
+                track.PixelX,
+                track.PixelY,
+                track.Confidence,
+                track.SourceSensorCount,
                 true))
             .ToArray();
 
@@ -169,6 +169,27 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
             {
                 _pressedTouchPointers.Remove(pointer.PointerId);
                 _pointerPositions.Remove(pointer.PointerId);
+            }
+        }
+
+        var heldPhase = _options.InteractionMode switch
+        {
+            RadarInteractionMode.Touch => RadarPointerPhase.Move,
+            RadarInteractionMode.Dwell or RadarInteractionMode.HoverOnly => RadarPointerPhase.Hover,
+            _ => (RadarPointerPhase?)null
+        };
+        if (heldPhase.HasValue)
+        {
+            var emittedPointerIds = pointers.Select(pointer => pointer.PointerId).ToHashSet();
+            foreach (var track in activeTracks.Where(track => track.MissingFrames > 0 &&
+                                                               track.ObservedFrames >= _options.ConfirmFrames &&
+                                                               !emittedPointerIds.Contains(track.TrackId) &&
+                                                               _pointerStateMachine.ContainsPointer(track.TrackId)))
+            {
+                if (_pointerPositions.TryGetValue(track.TrackId, out var position))
+                {
+                    pointers.Add(ToScreenPointer(track.TrackId, heldPhase.Value, position, timestamp));
+                }
             }
         }
 
@@ -345,7 +366,7 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
             }
         }
 
-        return matchedTrackIds.OrderBy(trackId => trackId).Select(trackId => _tracks[trackId]).ToArray();
+        return _tracks.Values.OrderBy(track => track.TrackId).ToArray();
     }
 
     private RadarScreenPointer ToScreenPointer(int pointerId, RadarPointerPhase phase, PointerPosition position, DateTimeOffset timestamp)

@@ -769,7 +769,7 @@ public sealed class RadarBridgeCoordinatorTests
         var acknowledgement = await IpcStream.ReadAsync(client, cancellationToken);
         Assert.Equal(IpcMessageType.HelloAck, acknowledgement.MessageType);
         var ack = acknowledgement.DeserializePayload<HelloAckPayload>();
-        Assert.Equal("1.2.9", BridgeVersion.Value);
+        Assert.Equal("1.2.10", BridgeVersion.Value);
         Assert.Equal(BridgeVersion.Value, ack.BridgeVersion);
         Assert.Equal(["left", "front", "right"], ack.Screens.Select(screen => screen.ScreenId));
         return client;

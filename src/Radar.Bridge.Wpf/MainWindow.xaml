@@ -20,7 +20,7 @@
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel VerticalAlignment="Center">
                     <TextBlock Text="RADARBRIDGE" FontSize="18" FontWeight="Bold"/>
-                    <TextBlock Text="Bridge 1.2.9 · IPC 2 · Windows x64" Style="{StaticResource CaptionStyle}" Margin="0,1,0,0"/>
+                    <TextBlock Text="Bridge 1.2.10 · IPC 2 · Windows x64" Style="{StaticResource CaptionStyle}" Margin="0,1,0,0"/>
                     <TextBlock Text="多屏幕 · 多雷达 · 融合诊断" Style="{StaticResource CaptionStyle}" Margin="0,2,0,0"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">

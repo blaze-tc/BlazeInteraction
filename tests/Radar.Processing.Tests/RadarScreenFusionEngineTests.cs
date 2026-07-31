@@ -32,9 +32,50 @@ public sealed class RadarScreenFusionEngineTests
         var up = Assert.Single(engine.Tick(now.AddMilliseconds(233)).Pointers);
 
         Assert.Equal(down.PointerId, move.PointerId);
-        Assert.Empty(empty.Pointers);
+        var held = Assert.Single(empty.Pointers);
+        Assert.Equal(down.PointerId, held.PointerId);
+        Assert.Equal(RadarPointerPhase.Move, held.Phase);
         Assert.Equal(RadarPointerPhase.Up, up.Phase);
         Assert.Empty(engine.Tick(now.AddMilliseconds(266)).Pointers);
+    }
+
+    [Fact]
+    public void Tick_HoldsLastKnownTargetAndTouchPointerAcrossAToleratedDetectionGap()
+    {
+        var engine = CreateEngine(confirmFrames: 1, lostFrames: 3, smoothingAlpha: 1f);
+        var now = DateTimeOffset.UnixEpoch;
+        engine.Publish(new SensorDetectionFrame("f1", now, [new(1, 320, 180, 0.9f)]));
+        var down = Assert.Single(engine.Tick(now).Pointers);
+        engine.Publish(new SensorDetectionFrame("f1", now.AddMilliseconds(16), []));
+
+        var gap = engine.Tick(now.AddMilliseconds(16));
+
+        var target = Assert.Single(gap.Targets);
+        var pointer = Assert.Single(gap.Pointers);
+        Assert.Equal(down.PointerId, target.TrackId);
+        Assert.Equal(down.PointerId, pointer.PointerId);
+        Assert.Equal(320f, pointer.PixelX);
+        Assert.Equal(180f, pointer.PixelY);
+        Assert.Equal(RadarPointerPhase.Move, pointer.Phase);
+    }
+
+    [Theory]
+    [InlineData(RadarInteractionMode.Dwell)]
+    [InlineData(RadarInteractionMode.HoverOnly)]
+    public void Tick_HoldsLastKnownHoverPointerAcrossAToleratedDetectionGap(RadarInteractionMode mode)
+    {
+        var engine = CreateEngine(confirmFrames: 1, lostFrames: 3, interactionMode: mode);
+        var now = DateTimeOffset.UnixEpoch;
+        engine.Publish(new SensorDetectionFrame("f1", now, [new(1, 320, 180, 0.9f)]));
+        var initial = Assert.Single(engine.Tick(now).Pointers);
+        engine.Publish(new SensorDetectionFrame("f1", now.AddMilliseconds(16), []));
+
+        var held = Assert.Single(engine.Tick(now.AddMilliseconds(16)).Pointers);
+
+        Assert.Equal(initial.PointerId, held.PointerId);
+        Assert.Equal(RadarPointerPhase.Hover, held.Phase);
+        Assert.Equal(320f, held.PixelX);
+        Assert.Equal(180f, held.PixelY);
     }
 
     [Fact]
@@ -56,7 +97,7 @@ public sealed class RadarScreenFusionEngineTests
     [Fact]
     public void Tick_DiscardsStaleSensorFrames()
     {
-        var engine = CreateEngine(sensorDataMaxAgeMilliseconds: 100, confirmFrames: 1);
+        var engine = CreateEngine(sensorDataMaxAgeMilliseconds: 100, confirmFrames: 1, lostFrames: 1);
         var now = DateTimeOffset.UnixEpoch;
         engine.Publish(new SensorDetectionFrame("f1", now, [new(1, 100, 100, 1f)]));
 

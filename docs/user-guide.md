@@ -1,6 +1,6 @@
 # RadarControl 图文使用说明
 
-本文说明 Blaze Radar SDK 与 `RadarBridge.exe` 的安装、连接、界面按钮、参数含义，以及 Unity Sample 的验证方法。适用版本：`1.2.9`，IPC 协议：`2`。
+本文说明 Blaze Radar SDK 与 `RadarBridge.exe` 的安装、连接、界面按钮、参数含义，以及 Unity Sample 的验证方法。适用版本：`1.2.10`，IPC 协议：`2`。
 
 ## 1. 安装到 Unity
 
@@ -9,10 +9,10 @@
 3. 输入：
 
    ```text
-   https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.9
+   https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.10
    ```
 
-4. 选中 **Blaze Radar SDK**，确认版本为 `1.2.9`。
+4. 选中 **Blaze Radar SDK**，确认版本为 `1.2.10`。
 5. 在 **Samples** 中导入 **Basic Interaction**；多屏项目再导入 **Multi-Screen Camera Routing**。
 6. 打开 **Tools > Blaze Radar > Create or Select Settings**，再到 **Project Settings > Blaze Radar** 配置 Unity 逻辑屏幕。
 
@@ -22,9 +22,9 @@
 
 ![RadarBridge 主界面布局，屏幕参数页展开](images/radarbridge-overview.png)
 
-> 图 1：RadarBridge 主界面布局示意，右侧已展开“屏幕参数”；图内版本号仅用于布局定位，安装与现场验收必须以 Package Manager、`bridge-version.txt` 和窗口页眉显示的 `1.2.9` 为准。截图中的 `Unity 连接: False` 和 `Stopped` 表示没有连接 Unity 或真实雷达。
+> 图 1：RadarBridge 主界面布局示意，右侧已展开“屏幕参数”；图内版本号仅用于布局定位，安装与现场验收必须以 Package Manager、`bridge-version.txt` 和窗口页眉显示的 `1.2.10` 为准。截图中的 `Unity 连接: False` 和 `Stopped` 表示没有连接 Unity 或真实雷达。
 
-界面从左到右分为五个功能区。`1.2.9` 将单雷达视图明确拆为 `1A 原始点观察` 与 `1B 拉框过滤结果`，提供独立的大画布拉框编辑器，并让参数正文铺满面板；页签标题保持居中，滚动条固定在参数面板最右侧。
+界面从左到右分为五个功能区。`1.2.10` 将单雷达视图明确拆为 `1A 原始点观察` 与 `1B 拉框过滤结果`，提供独立的大画布拉框编辑器，并让参数正文铺满面板；页签标题保持居中，滚动条固定在参数面板最右侧。
 
 | 位置 | 功能 | 观察重点 |
 | --- | --- | --- |
@@ -82,7 +82,7 @@
 
 先在左上选择 Unity 屏幕，再点击右侧 **屏幕参数**。该页只修改当前屏幕的逻辑分辨率、融合、跟踪和交互配置，不修改任何单雷达的 IP、安装方向或物理过滤范围。
 
-参数正文应横向铺满右侧面板：宽度/高度各占一列，其余单值输入框占满可用宽度；内容超出可见高度时，使用面板最右侧的垂直滚动条继续查看。浮点参数同时接受 `0.15` 和 `0,15`；输入到 `0.` 或 `0,` 时会保留编辑状态，继续输入数字后再更新配置。整数参数仍只接受整数。若正文缩在中间、滚动条不在最右侧、页签出现白底浅字或小数点仍被吞掉，说明运行的不是 `1.2.9` 完整包，应检查 Package Manager Version、Resolved Path 和 `bridge-version.txt`。
+参数正文应横向铺满右侧面板：宽度/高度各占一列，其余单值输入框占满可用宽度；内容超出可见高度时，使用面板最右侧的垂直滚动条继续查看。浮点参数同时接受 `0.15` 和 `0,15`；输入到 `0.` 或 `0,` 时会保留编辑状态，继续输入数字后再更新配置。整数参数仍只接受整数。若正文缩在中间、滚动条不在最右侧、页签出现白底浅字或小数点仍被吞掉，说明运行的不是 `1.2.10` 完整包，应检查 Package Manager Version、Resolved Path 和 `bridge-version.txt`。
 
 | 参数 | 含义与建议 |
 | --- | --- |
@@ -92,7 +92,7 @@
 | 数据最大年龄 (ms) | 超过此时间的雷达检测不参与本帧融合 |
 | 跨雷达融合距离 (px) | 同屏不同雷达目标小于该像素距离时合并 |
 | 确认帧 | 连续命中多少帧后建立稳定 Pointer |
-| 丢失帧 | 连续丢失多少帧后释放 Pointer |
+| 丢失帧 | 连续丢失多少个输出 Tick 后释放 Pointer；容忍毫秒约为 `丢失帧 ÷ 输出频率 × 1000`。30 Hz 建议 5，60 Hz 建议 10–12 |
 | 最大关联距离 (px) | 相邻帧目标允许关联到同一 Pointer 的最大位移 |
 | 平滑系数 | 0–1；越大越跟手，越小越平滑 |
 | 载入快速移动预设 | 当前屏幕设为 30 Hz、220 ms、确认 1 帧、丢失 5 帧、平滑 0.8；最大关联距离按屏幕宽度的 10% 计算并限制在 240–480 px；当前屏幕全部雷达的最少点数设为 1。点击后仍须“保存并应用配置” |

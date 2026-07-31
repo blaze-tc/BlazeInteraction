@@ -17,7 +17,7 @@
 - Pipe：`Yuexin.RadarBridge`。
 - Frame：4-byte little-endian JSON byte length + UTF-8 JSON；length、JSON 和 protocolVersion 在业务层前验证。
 - Unity 首帧必须是 protocol 2 `Hello`，payload 带 Unity PID/version 和启用 Screen summaries（stable ID、name、logical width/height、primary、order）。
-- Bridge 校验非空/唯一 ID、合法分辨率/order 和恰好一个 Primary，应用 topology 后返回 `HelloAck`：Bridge `1.2.9`、protocol 2、capability `multi-screen` 和最终 screen summaries。
+- Bridge 校验非空/唯一 ID、合法分辨率/order 和恰好一个 Primary，应用 topology 后返回 `HelloAck`：Bridge `1.2.10`、protocol 2、capability `multi-screen` 和最终 screen summaries。
 - 业务消息为 `PointerBatch`、Status、Ping/Pong、Shutdown、Error。PointerBatch 含每屏 summary、screen-local sequence/timestamp 和 Pointers；坐标同时包含该屏左下原点 normalized `[0,1]` 与 logical pixels。
 
 每个 Pointer ID 仅保证在其 Screen 内稳定。LEFT/L1、FRONT/F1+F2 overlap、RIGHT/R1 中，FRONT 的 F1/F2 detections 先映射到同一逻辑像素空间再融合；IPC 不暴露两个雷达的重复 Pointer。
@@ -26,7 +26,7 @@
 
 IPC 2 禁止发布 legacy `PointerFrame`，IPC 1 客户端也不理解 screen-addressed `PointerBatch`。主版本不一致时服务端返回 Error 并拒绝业务会话；客户端不得继续消费或静默降级。
 
-恢复顺序：停止 Player/Play Mode → 关闭旧 Bridge → 移除旧 Package URL/cache → 安装 `https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.9` → 确认 package/SDK/Bridge `1.2.9`、Resolved Path 和 `bridge-version.txt` → 重新握手并检查 HelloAck protocol 2/screen summaries。Pipe Name 不应用来绕过版本校验。
+恢复顺序：停止 Player/Play Mode → 关闭旧 Bridge → 移除旧 Package URL/cache → 安装 `https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.10` → 确认 package/SDK/Bridge `1.2.10`、Resolved Path 和 `bridge-version.txt` → 重新握手并检查 HelloAck protocol 2/screen summaries。Pipe Name 不应用来绕过版本校验。
 
 ## 诊断契约
 
