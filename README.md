@@ -49,6 +49,7 @@ powershell -ExecutionPolicy Bypass -File scripts/test-embedded-bridge.ps1 -Start
 - [Unity 多屏集成](docs/unity-integration.md)
 - [故障排查](docs/troubleshooting.md)
 - [架构与线程模型](docs/architecture.md)
+- [代码大纲、代码介绍与修改方案](docs/code-outline-and-modification-guide.md)
 - [雷达及 IPC 2 协议](docs/protocol.md)
 - [版本与限制](docs/version-and-limitations.md)
 - [区域与四点标定](docs/calibration.md)
