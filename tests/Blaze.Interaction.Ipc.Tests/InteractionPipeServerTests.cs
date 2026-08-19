@@ -1,4 +1,6 @@
 using System.IO.Pipes;
+using System.Buffers.Binary;
+using System.Text;
 using Blaze.Interaction.Contracts;
 using Blaze.Interaction.Ipc;
 
@@ -241,6 +243,40 @@ public sealed class InteractionPipeServerTests
     }
 
     [Fact]
+    public Task Server_IsolatesOversizedFrameAndAcceptsNextClient()
+    {
+        return AssertClientProtocolViolationIsIsolatedAsync(async (client, cancellationToken) =>
+        {
+            var prefix = new byte[InteractionIpcProtocol.LengthPrefixSize];
+            BinaryPrimitives.WriteInt32LittleEndian(
+                prefix,
+                InteractionIpcProtocol.DefaultMaximumPayloadLength + 1);
+            await client.WriteAsync(prefix, cancellationToken);
+            await client.FlushAsync(cancellationToken);
+        });
+    }
+
+    [Fact]
+    public Task Server_IsolatesMalformedJsonFrameAndAcceptsNextClient()
+    {
+        return AssertClientProtocolViolationIsIsolatedAsync((client, cancellationToken) =>
+            WriteRawFrameAsync(client, "{"u8.ToArray(), cancellationToken));
+    }
+
+    [Fact]
+    public Task Server_IsolatesInvalidPayloadAndAcceptsNextClient()
+    {
+        return AssertClientProtocolViolationIsIsolatedAsync(async (client, cancellationToken) =>
+        {
+            var invalidPing = InteractionEnvelope.Create(
+                InteractionMessageType.Ping,
+                9,
+                new { timestampUnixMs = "not-a-number" });
+            await InteractionIpcStream.WriteAsync(client, invalidPing, cancellationToken);
+        });
+    }
+
+    [Fact]
     public async Task OutboundQueue_CoalescesFramesToLatestValueAndPrioritizesControl()
     {
         await using var queue = new InteractionOutboundQueue(controlCapacity: 2);
@@ -314,6 +350,74 @@ public sealed class InteractionPipeServerTests
         {
             await Task.Delay(10, cancellationToken);
         }
+    }
+
+    private static async Task AssertClientProtocolViolationIsIsolatedAsync(
+        Func<NamedPipeClientStream, CancellationToken, Task> sendViolation)
+    {
+        var pipeName = NewPipeName();
+        await using var server = new InteractionPipeServer(new InteractionPipeServerOptions
+        {
+            PipeName = pipeName,
+            CreateHelloAckAsync = (_, _) => ValueTask.FromResult(Ack())
+        });
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var stopServer = new CancellationTokenSource();
+        var run = server.RunAsync(stopServer.Token);
+        try
+        {
+            await using (var first = new NamedPipeClientStream(".", pipeName,
+                PipeDirection.InOut, PipeOptions.Asynchronous))
+            {
+                await first.ConnectAsync(timeout.Token);
+                await InteractionIpcStream.WriteAsync(first,
+                    InteractionEnvelope.Create(InteractionMessageType.Hello, 1, Hello()), timeout.Token);
+                Assert.Equal(InteractionMessageType.HelloAck,
+                    (await InteractionIpcStream.ReadAsync(first, timeout.Token)).MessageType);
+                await sendViolation(first, timeout.Token);
+                await WaitUntilAsync(() => !server.IsClientConnected, timeout.Token);
+            }
+
+            await Task.WhenAny(run, Task.Delay(100, timeout.Token));
+            Assert.False(run.IsFaulted, run.Exception?.ToString());
+            Assert.False(run.IsCompleted);
+
+            await using var second = new NamedPipeClientStream(".", pipeName,
+                PipeDirection.InOut, PipeOptions.Asynchronous);
+            await second.ConnectAsync(timeout.Token);
+            await InteractionIpcStream.WriteAsync(second,
+                InteractionEnvelope.Create(InteractionMessageType.Hello, 2, Hello()), timeout.Token);
+            Assert.Equal(InteractionMessageType.HelloAck,
+                (await InteractionIpcStream.ReadAsync(second, timeout.Token)).MessageType);
+            Assert.False(run.IsCompleted);
+
+            stopServer.Cancel();
+            await run.WaitAsync(timeout.Token);
+        }
+        finally
+        {
+            stopServer.Cancel();
+            try
+            {
+                await run.WaitAsync(timeout.Token);
+            }
+            catch (InvalidDataException)
+            {
+                // Expected only during the RED run against the pre-isolation server.
+            }
+        }
+    }
+
+    private static async Task WriteRawFrameAsync(
+        Stream stream,
+        byte[] payload,
+        CancellationToken cancellationToken)
+    {
+        var prefix = new byte[InteractionIpcProtocol.LengthPrefixSize];
+        BinaryPrimitives.WriteInt32LittleEndian(prefix, payload.Length);
+        await stream.WriteAsync(prefix, cancellationToken);
+        await stream.WriteAsync(payload, cancellationToken);
+        await stream.FlushAsync(cancellationToken);
     }
 
     private sealed class ServerFixture : IAsyncDisposable

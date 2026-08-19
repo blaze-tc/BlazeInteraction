@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using System.Text.Json;
 using Blaze.Interaction.Contracts;
 
 namespace Blaze.Interaction.Ipc;
@@ -415,6 +416,12 @@ internal sealed class InteractionPipeSession : IAsyncDisposable
         {
         }
         catch (IOException)
+        {
+        }
+        catch (InvalidDataException)
+        {
+        }
+        catch (JsonException)
         {
         }
     }
