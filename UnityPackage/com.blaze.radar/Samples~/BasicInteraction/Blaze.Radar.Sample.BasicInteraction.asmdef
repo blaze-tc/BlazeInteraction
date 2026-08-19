@@ -1,0 +1,17 @@
+{
+  "name": "Blaze.Radar.Sample.BasicInteraction",
+  "rootNamespace": "Blaze.Radar.Samples",
+  "references": [
+    "Blaze.Radar.Runtime",
+    "Unity.ugui"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

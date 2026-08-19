@@ -1,0 +1,311 @@
+<Window x:Class="Yuexin.Radar.Bridge.Wpf.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="clr-namespace:Yuexin.Radar.Bridge.Wpf.Controls"
+        Title="RadarBridge · 多屏雷达控制台"
+        Width="1600" Height="900" MinWidth="1120" MinHeight="680"
+        UseLayoutRounding="True" SnapsToDevicePixels="True"
+        TextOptions.TextFormattingMode="Display" TextOptions.TextRenderingMode="ClearType"
+        WindowStartupLocation="CenterScreen">
+    <Grid Background="{StaticResource AppBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="64"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="150"/>
+            <RowDefinition Height="30"/>
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Background="#0B1725" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+            <Grid Margin="20,0">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="RADARBRIDGE" FontSize="18" FontWeight="Bold"/>
+                    <TextBlock Text="Bridge 1.2.10 · IPC 2 · Windows x64" Style="{StaticResource CaptionStyle}" Margin="0,1,0,0"/>
+                    <TextBlock Text="多屏幕 · 多雷达 · 融合诊断" Style="{StaticResource CaptionStyle}" Margin="0,2,0,0"/>
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border Background="#12283A" CornerRadius="14" Padding="12,5" Margin="0,0,8,0">
+                        <TextBlock Text="{Binding UnityStatus.IsConnected, StringFormat=Unity 连接：{0}}" Foreground="{StaticResource PrimaryBrush}"/>
+                    </Border>
+                    <Button Content="全部连接" Command="{Binding ConnectAllCommand}" Margin="0,0,6,0"/>
+                    <Button Content="全部断开" Command="{Binding DisconnectAllCommand}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1" Margin="14">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="280" MinWidth="220"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="*" MinWidth="420"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="330" MinWidth="270"/>
+            </Grid.ColumnDefinitions>
+
+            <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Background="{StaticResource AppBackgroundBrush}">
+                <StackPanel>
+                    <Border Style="{StaticResource CardStyle}">
+                        <StackPanel>
+                            <TextBlock Text="Unity 屏幕" Style="{StaticResource SectionTitleStyle}"/>
+                            <ListBox x:Name="ScreenList" ItemsSource="{Binding Screens}" SelectedItem="{Binding SelectedScreen}" MaxHeight="230">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="2">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding UnityDisplayName}" TextTrimming="CharacterEllipsis" FontWeight="SemiBold"/>
+                                                <TextBlock Text="{Binding EffectiveResolutionText}" Style="{StaticResource CaptionStyle}" Margin="0"/>
+                                            </StackPanel>
+                                            <TextBlock Grid.Column="1" Text="{Binding OnlineSensorCount, StringFormat=雷达 {0}}" Foreground="{StaticResource PrimaryBrush}" VerticalAlignment="Center"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <Button Content="连接屏幕" Command="{Binding ConnectScreenCommand}" Margin="0,0,6,0"/>
+                                <Button Content="断开屏幕" Command="{Binding DisconnectScreenCommand}"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource CardStyle}">
+                        <StackPanel>
+                            <DockPanel>
+                                <TextBlock Text="当前屏幕雷达" Style="{StaticResource SectionTitleStyle}" DockPanel.Dock="Left"/>
+                                <Button Content="＋" Command="{Binding AddSensorCommand}" Width="32" Padding="0" HorizontalAlignment="Right"/>
+                            </DockPanel>
+                            <ListBox x:Name="SensorList" ItemsSource="{Binding SelectedScreen.Sensors}" SelectedItem="{Binding SelectedSensor}" MaxHeight="260">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="2">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" FontWeight="SemiBold"/>
+                                                <TextBlock Text="{Binding SourceMode}" Style="{StaticResource CaptionStyle}" Margin="0"/>
+                                            </StackPanel>
+                                            <TextBlock Grid.Column="1" Text="{Binding RuntimeState}" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                            <Grid Margin="0,10,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                <Button Content="连接所选" Command="{Binding ConnectSensorCommand}" Margin="0,0,4,0"/>
+                                <Button Grid.Column="1" Content="断开所选" Command="{Binding DisconnectSensorCommand}" Margin="4,0,0,0"/>
+                            </Grid>
+                            <Grid Margin="0,6,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                <Button Content="一键模拟" Command="{Binding StartAllSimulationCommand}" Margin="0,0,4,0"
+                                        ToolTip="将所有已启用雷达切换为模拟模式、保存配置并立即启动"/>
+                                <Button Grid.Column="1" Content="停止模拟" Command="{Binding StopAllSimulationCommand}" Margin="4,0,0,0"
+                                        ToolTip="停止所有已关联屏幕中正在运行的模拟雷达，保留模拟配置"/>
+                            </Grid>
+                            <Button Content="删除雷达" Command="{Binding DeleteSensorCommand}" Margin="0,6,0,0"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <Grid Grid.Column="2">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="1.35*"/><ColumnDefinition Width="10"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                <Border Grid.Column="0" Style="{StaticResource CardStyle}" Margin="0">
+                    <Grid>
+                        <Grid.RowDefinitions><RowDefinition Height="48"/><RowDefinition Height="*"/><RowDefinition Height="28"/></Grid.RowDefinitions>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="区域 1 · 单雷达数据" Style="{StaticResource SectionTitleStyle}" Margin="0"/>
+                                <TextBlock Text="左侧只观察原始点；右侧显示变换及拉框过滤结果。" Style="{StaticResource CaptionStyle}" Margin="0,3,0,0" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                            <Button Grid.Column="1" Content="放大编辑" Click="OnOpenRegionEditor" IsEnabled="{Binding HasSelectedSensor}"
+                                    Margin="8,0,0,0" Padding="10,3" VerticalAlignment="Top"
+                                    ToolTip="打开独立的大画布调整拉框；预览缩放不会修改雷达范围参数"/>
+                        </Grid>
+                        <Grid Grid.Row="1">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <Grid Grid.Column="0">
+                                <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                                <TextBlock Text="1A · 原始点观察" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}" VerticalAlignment="Center"/>
+                                <Border Grid.Row="1" Background="#080F19" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="5" ClipToBounds="True">
+                                    <controls:RadarPointCloudView x:Name="RawRadarView"
+                                                                  Snapshot="{Binding SelectedSensor.Snapshot}"
+                                                                  MaximumRangeMeters="{Binding SelectedSensor.VisualizationRangeMeters}"
+                                                                  ShowRawPoints="True" ShowValidPoints="False" ShowClusters="False"
+                                                                  ShowFilterOverlay="False" ShowBlindZone="False" IsRegionEditable="False"/>
+                                </Border>
+                            </Grid>
+                            <Grid Grid.Column="2">
+                                <Grid.RowDefinitions><RowDefinition Height="26"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                                <TextBlock Text="1B · 拉框过滤结果" FontWeight="SemiBold" Foreground="{StaticResource PrimaryBrush}" VerticalAlignment="Center"/>
+                                <Border Grid.Row="1" Background="#080F19" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="5" ClipToBounds="True">
+                                    <controls:RadarPointCloudView x:Name="FilteredRadarView"
+                                                                  Snapshot="{Binding SelectedSensor.Snapshot}"
+                                                                  MaximumRangeMeters="{Binding SelectedSensor.VisualizationRangeMeters}"
+                                                                  RegionVertices="{Binding SelectedSensor.RegionVertices}"
+                                                                  MaskedRegions="{Binding SelectedSensor.MaskedPolygons}"
+                                                                  LeftEdgeDeadZoneMeters="{Binding SelectedSensor.LeftEdgeDeadZoneMeters}"
+                                                                  RightEdgeDeadZoneMeters="{Binding SelectedSensor.RightEdgeDeadZoneMeters}"
+                                                                  TopEdgeDeadZoneMeters="{Binding SelectedSensor.TopEdgeDeadZoneMeters}"
+                                                                  BottomEdgeDeadZoneMeters="{Binding SelectedSensor.BottomEdgeDeadZoneMeters}"
+                                                                  ShowRawPoints="False" ShowValidPoints="True" ShowClusters="False"
+                                                                  ShowFilterOverlay="True" ShowBlindZone="False" IsRegionEditable="True"
+                                                                  RegionVertexMoved="OnRegionVertexMoved"/>
+                                </Border>
+                            </Grid>
+                        </Grid>
+                        <Grid Grid.Row="2">
+                            <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                            <TextBlock Text="{Binding SelectedSensor.Snapshot.RawPoints.Count, StringFormat=原始点：{0}}" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Text="{Binding SelectedSensor.Snapshot.ValidPoints.Count, StringFormat=过滤点：{0}}" Foreground="{StaticResource PrimaryBrush}" VerticalAlignment="Center"/>
+                        </Grid>
+                    </Grid>
+                </Border>
+                <Border Grid.Column="2" Style="{StaticResource CardStyle}" Margin="0">
+                    <Grid>
+                        <Grid.RowDefinitions><RowDefinition Height="48"/><RowDefinition Height="*"/><RowDefinition Height="28"/></Grid.RowDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="区域 2 · 屏幕融合输出" Style="{StaticResource SectionTitleStyle}" Margin="0"/>
+                            <TextBlock Text="OutputRect、各雷达检测、融合目标与 Pointer。" Style="{StaticResource CaptionStyle}" Margin="0,3,0,0"/>
+                        </StackPanel>
+                        <Border Grid.Row="1" Background="#080F19" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="5" ClipToBounds="True">
+                            <controls:RadarScreenFusionView x:Name="ScreenFusionView"
+                                                            Snapshot="{Binding SelectedScreen.LatestSnapshot}"
+                                                            Sensors="{Binding SelectedScreen.Sensors}"
+                                                            SelectedSensorId="{Binding SelectedSensor.SensorId}"/>
+                        </Border>
+                        <TextBlock Grid.Row="2" Text="{Binding SelectedScreen.FusedTargetCount, StringFormat=融合目标：{0}}" Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center"/>
+                    </Grid>
+                </Border>
+            </Grid>
+
+            <Border Grid.Column="4" Style="{StaticResource CardStyle}" Margin="0">
+                <TabControl>
+                    <TabItem Header="屏幕参数">
+                        <ScrollViewer x:Name="ScreenParameterScroll" VerticalScrollBarVisibility="Auto" Background="{StaticResource PanelBrush}">
+                            <StackPanel Margin="4,10,4,4" IsEnabled="{Binding HasSelectedScreen}">
+                                <TextBlock Text="{Binding SelectedScreen.UnityDisplayName}" Style="{StaticResource SectionTitleStyle}"/>
+                                <TextBlock Text="有效分辨率" Style="{StaticResource CaptionStyle}"/>
+                                <TextBlock Text="{Binding SelectedScreen.EffectiveResolutionText}" FontWeight="SemiBold"/>
+                                <Grid Margin="0,8,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,4,0"><TextBlock Text="宽度" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedScreen.WidthPixels, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                    <StackPanel Grid.Column="1" Margin="4,0,0,0"><TextBlock Text="高度" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedScreen.HeightPixels, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                </Grid>
+                                <Button Content="恢复 Unity 默认分辨率" Command="{Binding RestoreUnityResolutionCommand}" Margin="0,8,0,0"/>
+                                <Separator/>
+                                <TextBlock Text="融合" Style="{StaticResource SectionTitleStyle}"/>
+                                <TextBlock Text="输出频率 (Hz)" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedScreen.OutputRateHz, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/>
+                                <TextBlock Text="数据最大年龄 (ms)" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedScreen.SensorDataMaxAgeMilliseconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/>
+                                <TextBlock Text="跨雷达融合距离 (px)" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedScreen.FusionDistancePixels, Converter={StaticResource FlexibleNumericTextConverter}, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/>
+                                <TextBlock Text="跟踪与交互" Style="{StaticResource SectionTitleStyle}" Margin="0,12,0,8"/>
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,4,0"><TextBlock Text="确认帧" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedScreen.ConfirmFrames, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                    <StackPanel Grid.Column="1" Margin="4,0,0,0"><TextBlock Text="丢失帧" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedScreen.LostFrames, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                </Grid>
+                                <TextBlock Text="最大关联距离 (px)" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedScreen.MaximumAssociationDistancePixels, Converter={StaticResource FlexibleNumericTextConverter}, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/>
+                                <TextBlock Text="平滑系数" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedScreen.SmoothingAlpha, Converter={StaticResource FlexibleNumericTextConverter}, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/>
+                                <Button Content="载入快速移动预设" Command="{Binding ApplyFastMotionPresetCommand}" Margin="0,10,0,0"
+                                        ToolTip="当前屏幕：确认帧 1、丢失帧 5、平滑 0.8；关联距离按分辨率计算；其雷达最少聚类点数设为 1。仍需保存并应用配置。"/>
+                                <TextBlock Text="用于快速挥动：先过滤边线噪点，再载入预设并保存。输出 30 Hz 不会增加雷达真实扫描帧。"
+                                           Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" Margin="0,5,0,0"/>
+                                <TextBlock Text="交互模式" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><ComboBox ItemsSource="{Binding SelectedScreen.AvailableInteractionModes}" SelectedItem="{Binding SelectedScreen.InteractionMode}"/>
+                                <TextBlock Text="停留时长 (ms)" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedScreen.DwellMilliseconds, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/>
+                                <Button Content="保存并应用配置" Command="{Binding SaveConfigurationCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,10,0,0"/>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </TabItem>
+                    <TabItem Header="雷达参数">
+                        <ScrollViewer x:Name="SensorParameterScroll" VerticalScrollBarVisibility="Auto" Background="{StaticResource PanelBrush}">
+                            <StackPanel Margin="4,10,4,4" IsEnabled="{Binding HasSelectedSensor}">
+                                <TextBlock Text="{Binding SelectedSensor.DisplayName}" Style="{StaticResource SectionTitleStyle}"/>
+                                <TextBlock Text="数据源 / 型号" Style="{StaticResource CaptionStyle}"/>
+                                <ComboBox ItemsSource="{Binding SelectedSensor.AvailableModels}" SelectedItem="{Binding SelectedSensor.DeviceModel}"/>
+                                <CheckBox Content="启用此雷达" IsChecked="{Binding SelectedSensor.Enabled}"/>
+                                <TextBlock Text="数据源模式" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/>
+                                <ComboBox ItemsSource="{Binding SelectedSensor.AvailableSourceModes}" SelectedItem="{Binding SelectedSensor.SourceMode}"/>
+                                <TextBlock Text="雷达 IP / 端口" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/>
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="80"/></Grid.ColumnDefinitions>
+                                    <TextBox Text="{Binding SelectedSensor.RadarIp, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,4,0"/>
+                                    <TextBox Grid.Column="1" Text="{Binding SelectedSensor.Port, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}" Margin="4,0,0,0"/>
+                                </Grid>
+                                <TextBlock Text="本机网卡 IP" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/>
+                                <TextBox Text="{Binding SelectedSensor.LocalIp, UpdateSourceTrigger=PropertyChanged}"/>
+                                <CheckBox Content="自动重连" IsChecked="{Binding SelectedSensor.AutoReconnect}"/>
+                                <Separator/>
+                                <TextBlock Text="物理范围 / 变换" Style="{StaticResource SectionTitleStyle}"/>
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,4,0"><TextBlock Text="最小距离" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.MinimumDistanceMeters, Converter={StaticResource FlexibleNumericTextConverter}, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                    <StackPanel Grid.Column="1" Margin="4,0,0,0"><TextBlock Text="最大距离" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.MaximumDistanceMeters, Converter={StaticResource FlexibleNumericTextConverter}, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                </Grid>
+                                <TextBlock Text="显示最大范围" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedSensor.VisualizationRangeMeters, Converter={StaticResource FlexibleNumericTextConverter}, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/>
+                                <TextBlock Text="旋转角度" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedSensor.RotationDegrees, Converter={StaticResource FlexibleNumericTextConverter}, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/>
+                                <StackPanel Orientation="Horizontal"><CheckBox Content="翻转 X" IsChecked="{Binding SelectedSensor.FlipX}" Margin="0,5,16,0"/><CheckBox Content="翻转 Y" IsChecked="{Binding SelectedSensor.FlipY}" Margin="0,5,0,0"/></StackPanel>
+                                <Separator/>
+                                <TextBlock Text="边线过滤（优先）" Style="{StaticResource SectionTitleStyle}"/>
+                                <TextBlock Text="沿绿色拉框真实边缘向内过滤。建议从 0.05–0.15 m 开始；三面墙通常先调左、右、下边。橙色带为会被丢弃的区域。"
+                                           Style="{StaticResource CaptionStyle}" TextWrapping="Wrap" Margin="0,0,0,7"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                                    <StackPanel Margin="0,0,4,4"><TextBlock Text="左边线 (m)" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.LeftEdgeDeadZoneMeters, Converter={StaticResource FlexibleNumericTextConverter}, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                    <StackPanel Grid.Column="1" Margin="4,0,0,4"><TextBlock Text="右边线 (m)" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.RightEdgeDeadZoneMeters, Converter={StaticResource FlexibleNumericTextConverter}, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                    <StackPanel Grid.Row="1" Margin="0,4,4,0"><TextBlock Text="上边线 (m)" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.TopEdgeDeadZoneMeters, Converter={StaticResource FlexibleNumericTextConverter}, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                    <StackPanel Grid.Row="1" Grid.Column="1" Margin="4,4,0,0"><TextBlock Text="下边线 (m)" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.BottomEdgeDeadZoneMeters, Converter={StaticResource FlexibleNumericTextConverter}, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                </Grid>
+                                <Separator/>
+                                <TextBlock Text="聚类" Style="{StaticResource SectionTitleStyle}"/>
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,4,0"><TextBlock Text="基础间隙" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.BaseGapMeters, Converter={StaticResource FlexibleNumericTextConverter}, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                    <StackPanel Grid.Column="1" Margin="4,0,0,0"><TextBlock Text="距离缩放" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.DistanceScale, Converter={StaticResource FlexibleNumericTextConverter}, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                </Grid>
+                                <TextBlock Text="最少点数" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedSensor.MinimumClusterPointCount, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/>
+                                <TextBlock Text="最大宽度" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/><TextBox Text="{Binding SelectedSensor.MaximumClusterWidthMeters, Converter={StaticResource FlexibleNumericTextConverter}, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/>
+                                <Separator/>
+                                <TextBlock Text="输出矩形 (px)" Style="{StaticResource SectionTitleStyle}"/>
+                                <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                                    <StackPanel Margin="0,0,4,4"><TextBlock Text="X" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.OutputX, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                    <StackPanel Grid.Column="1" Margin="4,0,0,4"><TextBlock Text="Y" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.OutputY, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                    <StackPanel Grid.Row="1" Margin="0,4,4,0"><TextBlock Text="宽" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.OutputWidth, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                    <StackPanel Grid.Row="1" Grid.Column="1" Margin="4,4,0,0"><TextBlock Text="高" Style="{StaticResource CaptionStyle}"/><TextBox Text="{Binding SelectedSensor.OutputHeight, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/></StackPanel>
+                                </Grid>
+                                <Separator/>
+                                <TextBlock Text="区域 / 校准" Style="{StaticResource SectionTitleStyle}"/>
+                                <UniformGrid Columns="3">
+                                    <Button Content="重置区域" Command="{Binding ResetRegionCommand}" Margin="0,0,4,0"/>
+                                    <Button Content="添加屏蔽" Command="{Binding AddMaskedRegionCommand}" Margin="2,0"/>
+                                    <Button Content="删除屏蔽" Command="{Binding DeleteMaskedRegionCommand}" Margin="4,0,0,0"/>
+                                </UniformGrid>
+                                <UniformGrid Columns="3" Margin="0,6,0,0">
+                                    <Button Content="开始标定" Command="{Binding BeginCalibrationCommand}" Margin="0,0,4,4"/>
+                                    <Button Content="采集点" Command="{Binding CaptureCalibrationPointCommand}" Margin="2,0,2,4"/>
+                                    <Button Content="撤销" Command="{Binding UndoCalibrationPointCommand}" Margin="4,0,0,4"/>
+                                    <Button Content="保存" Command="{Binding SaveCalibrationCommand}" Margin="0,2,4,0"/>
+                                    <Button Content="清除" Command="{Binding ClearCalibrationCommand}" Margin="2,2,2,0"/>
+                                </UniformGrid>
+                                <TextBlock Text="{Binding SelectedSensor.CalibrationStatus}" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/>
+                                <Separator/>
+                                <TextBlock Text="录制 / 回放" Style="{StaticResource SectionTitleStyle}"/>
+                                <Button Content="开始录制" Command="{Binding StartRecordingCommand}"/><Button Content="停止录制" Command="{Binding StopRecordingCommand}" Margin="0,6,0,0"/>
+                                <Button Content="选择回放文件" Command="{Binding SelectReplayFileCommand}" Margin="0,6,0,0"/>
+                                <TextBlock Text="回放速度 (0.1x - 8.0x)" Style="{StaticResource CaptionStyle}" Margin="0,8,0,0"/>
+                                <TextBox Text="{Binding SelectedSensor.ReplaySpeed, Converter={StaticResource FlexibleNumericTextConverter}, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True, ValidatesOnDataErrors=True}"/>
+                                <CheckBox Content="循环回放" IsChecked="{Binding SelectedSensor.ReplayLoop}" Margin="0,6,0,0"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,6,0,0"><Button Content="暂停" Command="{Binding PauseReplayCommand}" Margin="0,0,5,0"/><Button Content="继续" Command="{Binding ResumeReplayCommand}" Margin="0,0,5,0"/><Button Content="单步" Command="{Binding StepReplayCommand}" Margin="0,0,5,0"/><Button Content="停止" Command="{Binding StopReplayCommand}"/></StackPanel>
+                                <Button Content="保存并应用配置" Command="{Binding SaveConfigurationCommand}" Style="{StaticResource PrimaryButtonStyle}" Margin="0,10,0,0"/>
+                            </StackPanel>
+                        </ScrollViewer>
+                    </TabItem>
+                </TabControl>
+            </Border>
+        </Grid>
+
+        <Border Grid.Row="2" Margin="14,0,14,8" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="6" Padding="10">
+            <Grid>
+                <Grid.RowDefinitions><RowDefinition Height="30"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="运行日志" Style="{StaticResource SectionTitleStyle}" Margin="0,0,14,0" VerticalAlignment="Center"/>
+                    <TextBox Width="130" Text="{Binding SelectedLogScreenId, UpdateSourceTrigger=PropertyChanged}" ToolTip="屏幕筛选；* 表示全部" Margin="0,0,6,0"/>
+                    <TextBox Width="130" Text="{Binding SelectedLogSensorId, UpdateSourceTrigger=PropertyChanged}" ToolTip="雷达筛选；* 表示全部"/>
+                </StackPanel>
+                <ListBox Grid.Row="1" ItemsSource="{Binding VisibleLogEntries}" FontFamily="Cascadia Mono" FontSize="11" ScrollViewer.VerticalScrollBarVisibility="Auto"/>
+            </Grid>
+        </Border>
+        <TextBlock Grid.Row="3" Margin="18,0" Text="屏幕配置由 Unity 拓扑同步；日志上限 500 条。" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center"/>
+    </Grid>
+</Window>

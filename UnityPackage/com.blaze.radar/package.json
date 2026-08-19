@@ -1,0 +1,32 @@
+{
+  "name": "com.blaze.radar",
+  "version": "1.2.10",
+  "displayName": "Blaze Radar SDK",
+  "description": "FaseLase F10/F20 self-contained RadarBridge, Named Pipe client and multi-pointer EventSystem input for Unity.",
+  "unity": "2021.3",
+  "keywords": [
+    "radar",
+    "input",
+    "multipointer",
+    "faselase"
+  ],
+  "author": {
+    "name": "Blaze"
+  },
+  "dependencies": {
+    "com.unity.ugui": "1.0.0",
+    "com.unity.nuget.newtonsoft-json": "3.0.2"
+  },
+  "samples": [
+    {
+      "displayName": "Basic Interaction",
+      "description": "Authored UGUI, 3D and 2D EventSystem sample with live frame diagnostics and bounded event history.",
+      "path": "Samples~/BasicInteraction"
+    },
+    {
+      "displayName": "Multi-Screen Camera Routing",
+      "description": "Three-screen Camera routing, world raycast particles and detailed multi-radar diagnostics.",
+      "path": "Samples~/MultiScreenCameraRouting"
+    }
+  ]
+}
