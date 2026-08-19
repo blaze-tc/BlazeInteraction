@@ -8,7 +8,7 @@ Plan: `docs/superpowers/plans/2026-08-19-blaze-interaction-gate-a.md`
 | 1. Interaction contracts | Complete | e9c744b + c5491dd + 07bd238 + current JSON matching fix | Contracts 39/39; full solution 437/437; Radar .NET 398/398 |
 | 2. Provider API/catalog/loader | Complete | 27eb51c + hardening pending | Runtime 34/34; full solution 471/471; Radar .NET 398/398 |
 | 3. Provider manager | Complete | c247463 + 559fbd3 + 2a9673f + this commit | Runtime 72/72; full solution 509/509; Radar .NET 398/398 |
-| 4. Interaction IPC | Complete | facaaaf + current isolation fix | IPC 36/36; full solution 545/545; Radar .NET 398/398 |
+| 4. Interaction IPC | Complete | facaaaf + 2f00daa + current writer-fault fix | IPC 38/38; full solution 547/547; Radar .NET 398/398 |
 | 5. Radar provider | Pending | pending | pending |
 | 6. Bridge/publish | Pending | pending | pending |
 | 7. Unity core runtime | Pending | pending | pending |
@@ -86,6 +86,8 @@ Plan: `docs/superpowers/plans/2026-08-19-blaze-interaction-gate-a.md`
 - Active-dispose RED/GREEN: disposing the server with an authenticated client initially raced `InteractionPipeSession.RunAsync` and threw `ObjectDisposedException`; the server now cancels/deactivates, waits for the run loop's deterministic cleanup, and only then disposes shared cancellation state. The focused regression passed 1/1 and the IPC suite passed 33/33.
 - Malformed-session review RED: three real Named Pipe tests sent an oversized length prefix, a malformed JSON frame, and a Ping payload with an invalid numeric value after a successful Hello/HelloAck. Each test observed `InteractionPipeServer.RunAsync` fault instead of preserving the accept loop.
 - Malformed-session review GREEN: the authenticated session boundary now isolates only expected client/protocol `InvalidDataException`, `JsonException`, and existing transport/EOF/cancellation failures; all three tests proved state reset, a second Hello/HelloAck, a still-running accept loop, and clean final cancellation. Listener failures and fatal exceptions remain unhandled.
+- Writer-fault review RED: two internal post-handshake session tests injected `InvalidDataException` and direct `JsonException` from the server write path; the session returned normally, proving the broad session-level protocol catches hid server program faults.
+- Writer-fault review GREEN: recoverable protocol handling now lives only around `ReadAsync` length/decode validation and Ping payload deserialization, producing an explicit `ProtocolError` session outcome and cancelling the writer. Session aggregation no longer catches protocol/JSON exceptions, so both injected writer faults propagate unchanged while the three malformed-client reconnect tests remain green.
 - Provider-neutral boundary: `Blaze.Interaction.Ipc.csproj` references only `Blaze.Interaction.Contracts`; production IPC paths contain no `Radar.*` or `Yuexin` references and no Provider API creates a pipe.
-- Full verification: whitespace verification exited 0; `dotnet test BlazeInteraction.sln -c Release --no-restore --nologo` passed 545/545 (147 Interaction plus 398 Radar tests); a fresh `scripts/test.ps1 -Configuration Release` passed Radar 398/398.
+- Full verification: whitespace verification exited 0; `dotnet test BlazeInteraction.sln -c Release --no-restore --nologo` passed 547/547 (149 Interaction plus 398 Radar tests); a fresh `scripts/test.ps1 -Configuration Release` passed Radar 398/398.
 - V1 risk/decision: the named pipe intentionally allows one active client; a second client waits until the authenticated session disconnects. Control messages wait on a bounded queue instead of being dropped, while only pending `InteractionFrame` messages are coalesced to the latest value.

@@ -1,5 +1,4 @@
 using System.IO.Pipes;
-using System.Text.Json;
 using Blaze.Interaction.Contracts;
 
 namespace Blaze.Interaction.Ipc;
@@ -399,31 +398,45 @@ internal sealed class InteractionPipeSession : IAsyncDisposable
 
     internal bool IsActive => Volatile.Read(ref _active) != 0;
 
-    internal async Task RunAsync()
+    internal async Task<InteractionPipeSessionOutcome> RunAsync()
     {
         var reader = ReadLoopAsync(_cancellation.Token);
         var writer = WriteLoopAsync(_cancellation.Token);
-        await Task.WhenAny(reader, writer).ConfigureAwait(false);
-        Deactivate();
+        var completed = await Task.WhenAny(reader, writer).ConfigureAwait(false);
+        if (ReferenceEquals(completed, reader))
+        {
+            var outcome = await reader.ConfigureAwait(false);
+            Deactivate();
+            try
+            {
+                await writer.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (_cancellation.IsCancellationRequested)
+            {
+            }
+            catch (IOException)
+            {
+            }
+
+            return outcome;
+        }
+
         try
         {
-            await Task.WhenAll(reader, writer).ConfigureAwait(false);
+            await writer.ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (_cancellation.IsCancellationRequested)
-        {
-        }
-        catch (EndOfStreamException)
         {
         }
         catch (IOException)
         {
         }
-        catch (InvalidDataException)
+        finally
         {
+            Deactivate();
         }
-        catch (JsonException)
-        {
-        }
+
+        return await reader.ConfigureAwait(false);
     }
 
     internal void Deactivate()
@@ -449,14 +462,36 @@ internal sealed class InteractionPipeSession : IAsyncDisposable
         _cancellation.Dispose();
     }
 
-    private async Task ReadLoopAsync(CancellationToken cancellationToken)
+    private async Task<InteractionPipeSessionOutcome> ReadLoopAsync(
+        CancellationToken cancellationToken)
     {
         while (!cancellationToken.IsCancellationRequested)
         {
-            var message = await InteractionIpcStream.ReadAsync(
-                _stream,
-                cancellationToken,
-                _maximumPayloadLength).ConfigureAwait(false);
+            InteractionEnvelope message;
+            try
+            {
+                message = await InteractionIpcStream.ReadAsync(
+                    _stream,
+                    cancellationToken,
+                    _maximumPayloadLength).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return InteractionPipeSessionOutcome.Cancelled;
+            }
+            catch (EndOfStreamException)
+            {
+                return InteractionPipeSessionOutcome.Disconnected;
+            }
+            catch (IOException)
+            {
+                return InteractionPipeSessionOutcome.Disconnected;
+            }
+            catch (InvalidDataException)
+            {
+                return InteractionPipeSessionOutcome.ProtocolError;
+            }
+
             if (message.ProtocolVersion != InteractionIpcProtocol.CurrentVersion)
             {
                 await Outbound.EnqueueControlAsync(
@@ -471,7 +506,16 @@ internal sealed class InteractionPipeSession : IAsyncDisposable
             switch (message.MessageType)
             {
                 case InteractionMessageType.Ping:
-                    var ping = message.DeserializePayload<PingPayload>();
+                    PingPayload ping;
+                    try
+                    {
+                        ping = message.DeserializePayload<PingPayload>();
+                    }
+                    catch (InvalidDataException)
+                    {
+                        return InteractionPipeSessionOutcome.ProtocolError;
+                    }
+
                     await Outbound.EnqueueControlAsync(
                         InteractionEnvelope.Create(
                             InteractionMessageType.Pong,
@@ -481,7 +525,7 @@ internal sealed class InteractionPipeSession : IAsyncDisposable
                     break;
 
                 case InteractionMessageType.Shutdown:
-                    return;
+                    return InteractionPipeSessionOutcome.Shutdown;
 
                 default:
                     await Outbound.EnqueueControlAsync(
@@ -495,6 +539,8 @@ internal sealed class InteractionPipeSession : IAsyncDisposable
                     break;
             }
         }
+
+        return InteractionPipeSessionOutcome.Cancelled;
     }
 
     private async Task WriteLoopAsync(CancellationToken cancellationToken)
@@ -505,6 +551,14 @@ internal sealed class InteractionPipeSession : IAsyncDisposable
             await InteractionIpcStream.WriteAsync(_stream, message, cancellationToken).ConfigureAwait(false);
         }
     }
+}
+
+internal enum InteractionPipeSessionOutcome
+{
+    Disconnected = 0,
+    Shutdown = 1,
+    ProtocolError = 2,
+    Cancelled = 3
 }
 
 internal sealed class InteractionOutboundQueue : IAsyncDisposable

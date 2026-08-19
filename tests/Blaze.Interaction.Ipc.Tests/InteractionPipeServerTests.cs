@@ -1,6 +1,7 @@
 using System.IO.Pipes;
 using System.Buffers.Binary;
 using System.Text;
+using System.Text.Json;
 using Blaze.Interaction.Contracts;
 using Blaze.Interaction.Ipc;
 
@@ -308,6 +309,20 @@ public sealed class InteractionPipeServerTests
                 new ErrorPayload("two", "Two.")), cancellation.Token));
     }
 
+    [Fact]
+    public Task Session_PropagatesInvalidDataWriterFault()
+    {
+        return AssertWriterFaultPropagatesAsync(
+            new InvalidDataException("Injected writer program fault."));
+    }
+
+    [Fact]
+    public Task Session_PropagatesJsonWriterFault()
+    {
+        return AssertWriterFaultPropagatesAsync(
+            new JsonException("Injected writer serialization fault."));
+    }
+
     private static HelloAckPayload Ack() => new(
         "1.0.0",
         new ProviderReferencePayload("blaze.radar.f10f20", "radar-main"),
@@ -418,6 +433,54 @@ public sealed class InteractionPipeServerTests
         await stream.WriteAsync(prefix, cancellationToken);
         await stream.WriteAsync(payload, cancellationToken);
         await stream.FlushAsync(cancellationToken);
+    }
+
+    private static async Task AssertWriterFaultPropagatesAsync<TException>(TException expected)
+        where TException : Exception
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await using var stream = new ThrowingWriteDuplexStream(expected);
+        await using var session = new InteractionPipeSession(
+            stream,
+            controlQueueCapacity: 1,
+            InteractionIpcProtocol.DefaultMaximumPayloadLength,
+            timeout.Token);
+        await session.Outbound.EnqueueControlAsync(
+            InteractionEnvelope.Create(
+                InteractionMessageType.Status,
+                1,
+                new StatusPayload("ready", "Ready", "Ready.", null, 1)),
+            timeout.Token);
+
+        var actual = await Assert.ThrowsAsync<TException>(() => session.RunAsync());
+
+        Assert.Same(expected, actual);
+    }
+
+    private sealed class ThrowingWriteDuplexStream(Exception writeException) : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override Task FlushAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw writeException;
+        public override ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default) => ValueTask.FromException(writeException);
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            return 0;
+        }
     }
 
     private sealed class ServerFixture : IAsyncDisposable
