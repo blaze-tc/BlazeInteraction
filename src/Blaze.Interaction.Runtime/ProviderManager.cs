@@ -6,7 +6,8 @@ namespace Blaze.Interaction.Runtime;
 public enum ProviderFrameRejectionReason
 {
     InvalidLifecycle = 0,
-    IdentityMismatch = 1
+    IdentityMismatch = 1,
+    NonIncreasingSequence = 2
 }
 
 public sealed class ProviderManagerStatusChangedEventArgs : EventArgs
@@ -83,6 +84,7 @@ public sealed class ProviderManager : IAsyncDisposable
 {
     private readonly object _stateGate = new();
     private readonly object _disposeGate = new();
+    private readonly AsyncLocal<int> _eventDispatchDepth = new();
     private readonly Dictionary<string, ProviderRegistration> _registrations = new(StringComparer.Ordinal);
     private readonly List<PendingCleanup> _pendingCleanup = [];
     private readonly SemaphoreSlim _transitionGate = new(1, 1);
@@ -181,6 +183,7 @@ public sealed class ProviderManager : IAsyncDisposable
         ProviderInitializationContext initializationContext,
         CancellationToken cancellationToken)
     {
+        ThrowIfLifecycleReentry(nameof(SwitchAsync));
         if (string.IsNullOrWhiteSpace(providerInstanceId))
         {
             throw new ArgumentException("A provider instance ID is required.", nameof(providerInstanceId));
@@ -246,6 +249,7 @@ public sealed class ProviderManager : IAsyncDisposable
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
+        ThrowIfLifecycleReentry(nameof(StopAsync));
         await _transitionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -285,6 +289,7 @@ public sealed class ProviderManager : IAsyncDisposable
 
     public ValueTask DisposeAsync()
     {
+        ThrowIfLifecycleReentry(nameof(DisposeAsync));
         lock (_disposeGate)
         {
             if (_disposeTask is null)
@@ -318,18 +323,33 @@ public sealed class ProviderManager : IAsyncDisposable
             throw;
         }
 
-        if (!string.Equals(provider.ProviderInstanceId, registration.Identity.ProviderInstanceId, StringComparison.Ordinal))
+        string? actualInstanceId = null;
+        Exception? identityFailure = null;
+        try
         {
-            var mismatch = new InvalidOperationException(
-                $"The provider factory returned instance ID '{provider.ProviderInstanceId}' instead of the registered ID '{registration.Identity.ProviderInstanceId}'.");
+            actualInstanceId = provider.ProviderInstanceId;
+            if (!string.Equals(actualInstanceId, registration.Identity.ProviderInstanceId, StringComparison.Ordinal))
+            {
+                identityFailure = new InvalidOperationException(
+                    $"The provider factory returned instance ID '{actualInstanceId}' instead of the registered ID '{registration.Identity.ProviderInstanceId}'.");
+            }
+        }
+        catch (Exception exception)
+        {
+            identityFailure = exception;
+        }
+
+        if (identityFailure is not null)
+        {
+            PublishDiagnostic("ValidateProviderInstance", identityFailure, registration.Identity);
             var disposeFailure = await TryDisposeProviderAsync(provider, registration.Identity).ConfigureAwait(false);
             if (disposeFailure is not null)
             {
                 MarkFault(disposeFailure);
-                throw new AggregateException(mismatch, disposeFailure);
+                throw new AggregateException(identityFailure, disposeFailure);
             }
 
-            throw mismatch;
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(identityFailure).Throw();
         }
 
         var session = new ActiveSession(
@@ -540,38 +560,52 @@ public sealed class ProviderManager : IAsyncDisposable
 
         try
         {
-            ManagerLifecycle lifecycle;
-            bool isCurrent;
-            lock (_stateGate)
+            lock (session.FrameDispatchGate)
             {
-                lifecycle = _lifecycle;
-                isCurrent = ReferenceEquals(_current, session) && _generation == session.Generation;
-            }
+                ManagerLifecycle lifecycle;
+                bool isCurrent;
+                lock (_stateGate)
+                {
+                    lifecycle = _lifecycle;
+                    isCurrent = ReferenceEquals(_current, session) && _generation == session.Generation;
+                }
 
-            if (!isCurrent || lifecycle != ManagerLifecycle.Running)
-            {
-                PublishFrameRejected(
-                    new ProviderFrameRejectedEventArgs(
-                        frame,
-                        ProviderFrameRejectionReason.InvalidLifecycle,
-                        "The provider emitted a frame outside its active running lifecycle."),
-                    session.Identity);
-                return;
-            }
+                if (!isCurrent || lifecycle != ManagerLifecycle.Running)
+                {
+                    PublishFrameRejected(
+                        new ProviderFrameRejectedEventArgs(
+                            frame,
+                            ProviderFrameRejectionReason.InvalidLifecycle,
+                            "The provider emitted a frame outside its active running lifecycle."),
+                        session.Identity);
+                    return;
+                }
 
-            if (!HasExpectedIdentity(session.Identity, frame))
-            {
-                PublishFrameRejected(
-                    new ProviderFrameRejectedEventArgs(
-                        frame,
-                        ProviderFrameRejectionReason.IdentityMismatch,
-                        "The frame identity does not match the active provider and surface."),
-                    session.Identity);
-                return;
-            }
+                if (!HasExpectedIdentity(session.Identity, frame))
+                {
+                    PublishFrameRejected(
+                        new ProviderFrameRejectedEventArgs(
+                            frame,
+                            ProviderFrameRejectionReason.IdentityMismatch,
+                            "The frame identity does not match the active provider and surface."),
+                        session.Identity);
+                    return;
+                }
 
-            _activePoints.Apply(frame);
-            InvokeSubscribers(FrameReceived, new InteractionFrameEventArgs(frame), nameof(FrameReceived), session.Identity);
+                if (!session.TryAdvanceSequence(frame.SurfaceId, frame.Sequence))
+                {
+                    PublishFrameRejected(
+                        new ProviderFrameRejectedEventArgs(
+                            frame,
+                            ProviderFrameRejectionReason.NonIncreasingSequence,
+                            "The frame sequence must increase monotonically for each provider instance and surface."),
+                        session.Identity);
+                    return;
+                }
+
+                _activePoints.Apply(frame);
+                InvokeSubscribers(FrameReceived, new InteractionFrameEventArgs(frame), nameof(FrameReceived), session.Identity);
+            }
         }
         finally
         {
@@ -649,6 +683,7 @@ public sealed class ProviderManager : IAsyncDisposable
 
         foreach (var subscriber in subscribers.GetInvocationList().Cast<EventHandler<TEventArgs>>())
         {
+            using var dispatch = EnterEventDispatch();
             try
             {
                 subscriber(this, args);
@@ -671,6 +706,7 @@ public sealed class ProviderManager : IAsyncDisposable
         var args = new ProviderManagerDiagnosticEventArgs(operation, exception, identity);
         foreach (var subscriber in subscribers.GetInvocationList().Cast<EventHandler<ProviderManagerDiagnosticEventArgs>>())
         {
+            using var dispatch = EnterEventDispatch();
             try
             {
                 subscriber(this, args);
@@ -779,6 +815,21 @@ public sealed class ProviderManager : IAsyncDisposable
         }
     }
 
+    private void ThrowIfLifecycleReentry(string operation)
+    {
+        if (_eventDispatchDepth.Value > 0)
+        {
+            throw new InvalidOperationException(
+                $"{operation} cannot be called synchronously from a ProviderManager outbound event handler.");
+        }
+    }
+
+    private IDisposable EnterEventDispatch()
+    {
+        _eventDispatchDepth.Value++;
+        return new EventDispatchScope(this);
+    }
+
     private sealed record ProviderRegistration(
         ProviderIdentity Identity,
         Func<IInteractionProvider> Factory);
@@ -789,6 +840,8 @@ public sealed class ProviderManager : IAsyncDisposable
 
     private sealed class ActiveSession
     {
+        private readonly Dictionary<string, long> _lastSequenceBySurface = new(StringComparer.Ordinal);
+
         internal ActiveSession(
             ProviderManager owner,
             ProviderIdentity identity,
@@ -805,9 +858,35 @@ public sealed class ProviderManager : IAsyncDisposable
         internal ProviderIdentity Identity { get; }
         internal IInteractionProvider Provider { get; }
         internal long Generation { get; }
+        internal object FrameDispatchGate { get; } = new();
         internal CallbackAdmissionGate Callbacks { get; } = new();
         internal EventHandler<InteractionFrameEventArgs> FrameHandler { get; }
         internal EventHandler<ProviderStatusChangedEventArgs> StatusHandler { get; }
+
+        internal bool TryAdvanceSequence(string surfaceId, long sequence)
+        {
+            if (_lastSequenceBySurface.TryGetValue(surfaceId, out var previous) && sequence <= previous)
+            {
+                return false;
+            }
+
+            _lastSequenceBySurface[surfaceId] = sequence;
+            return true;
+        }
+    }
+
+    private sealed class EventDispatchScope(ProviderManager owner) : IDisposable
+    {
+        private ProviderManager? _owner = owner;
+
+        public void Dispose()
+        {
+            var current = Interlocked.Exchange(ref _owner, null);
+            if (current is not null)
+            {
+                current._eventDispatchDepth.Value--;
+            }
+        }
     }
 
     private sealed class CallbackAdmissionGate
