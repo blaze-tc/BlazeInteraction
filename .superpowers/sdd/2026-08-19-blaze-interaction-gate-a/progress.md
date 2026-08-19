@@ -7,7 +7,7 @@ Plan: `docs/superpowers/plans/2026-08-19-blaze-interaction-gate-a.md`
 | 0. Radar 1.2.10 baseline | Complete | pending | .NET 398/398; Unity EditMode 6/6; PlayMode 68/68 |
 | 1. Interaction contracts | Complete | e9c744b + c5491dd + 07bd238 + current JSON matching fix | Contracts 39/39; full solution 437/437; Radar .NET 398/398 |
 | 2. Provider API/catalog/loader | Complete | 27eb51c + hardening pending | Runtime 34/34; full solution 471/471; Radar .NET 398/398 |
-| 3. Provider manager | Pending | pending | pending |
+| 3. Provider manager | Complete | this commit | Runtime 50/50; full solution 487/487; Radar .NET 398/398 |
 | 4. Interaction IPC | Pending | pending | pending |
 | 5. Radar provider | Pending | pending | pending |
 | 6. Bridge/publish | Pending | pending | pending |
@@ -51,3 +51,14 @@ Plan: `docs/superpowers/plans/2026-08-19-blaze-interaction-gate-a.md`
 - Quality-review GREEN: Runtime passed 34/34 in both Release and Debug after enforcing canonical provider-local files, rejecting provider/manifest/entry reparse escapes, validating plugin descriptors, using exact shared-assembly identities, restricting native names, and making `LoadedProvider.Dispose` atomic and collectible.
 - Quality-review lifecycle evidence: plugin and load-context `WeakReference` instances became dead while the disposed `LoadedProvider` itself remained alive; 500 parallel Dispose/Plugin operations produced only valid values or `ObjectDisposedException`.
 - Quality-review full verification: `dotnet test BlazeInteraction.sln -c Release --nologo` passed 471/471 (73 Interaction plus 398 Radar tests), and a fresh `scripts/test.ps1 -Configuration Release` passed Radar 398/398.
+
+## Task 3 evidence
+
+- RED: `dotnet test tests\Blaze.Interaction.Runtime.Tests\Blaze.Interaction.Runtime.Tests.csproj -c Release --no-restore` exited 1 with CS0246 because the requested `ProviderManager` API did not exist.
+- GREEN: the Runtime suite passed 48/48 after adding the instance-keyed, single-active manager, active-point cancellation registry, serialized switch/stop lifecycle, provider-neutral events, failure cleanup, and event isolation.
+- Rollback RED: the focused replacement-failure test failed 1/1 because a failed candidate left consumers without the required old-provider-to-inactive state transition.
+- Rollback GREEN: Runtime passed 49/49 after publishing deterministic inactive rollback only when a replacement fails after the old provider has stopped.
+- Stale-callback RED: the focused captured-status test failed 1/1 because a callback captured before unsubscription could still cross the provider-instance boundary after switching.
+- Stale-callback GREEN: Runtime passed 50/50 after filtering status callbacks against the manager's current instance under the state lock.
+- Full solution: `dotnet test BlazeInteraction.sln -c Release --no-restore --nologo` passed 487/487 (89 Interaction plus 398 Radar tests).
+- Radar regression: `powershell -ExecutionPolicy Bypass -File scripts\test.ps1 -Configuration Release` passed 398/398.
