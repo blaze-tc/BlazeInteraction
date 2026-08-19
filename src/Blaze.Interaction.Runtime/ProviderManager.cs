@@ -60,22 +60,46 @@ public sealed class ProviderFrameRejectedEventArgs : EventArgs
     public string Message { get; }
 }
 
+public sealed class ProviderManagerDiagnosticEventArgs : EventArgs
+{
+    public ProviderManagerDiagnosticEventArgs(
+        string operation,
+        Exception exception,
+        ProviderIdentity? provider = null)
+    {
+        Operation = string.IsNullOrWhiteSpace(operation)
+            ? throw new ArgumentException("A diagnostic operation is required.", nameof(operation))
+            : operation;
+        Exception = exception ?? throw new ArgumentNullException(nameof(exception));
+        Provider = provider;
+    }
+
+    public string Operation { get; }
+    public Exception Exception { get; }
+    public ProviderIdentity? Provider { get; }
+}
+
 public sealed class ProviderManager : IAsyncDisposable
 {
     private readonly object _stateGate = new();
     private readonly object _disposeGate = new();
-    private readonly Dictionary<string, ProviderEntry> _providers = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ProviderRegistration> _registrations = new(StringComparer.Ordinal);
+    private readonly List<PendingCleanup> _pendingCleanup = [];
     private readonly SemaphoreSlim _transitionGate = new(1, 1);
     private readonly ActivePointRegistry _activePoints = new();
-    private ProviderEntry? _current;
+    private ActiveSession? _current;
     private ManagerLifecycle _lifecycle;
+    private Exception? _fault;
     private Task? _disposeTask;
+    private long _generation;
+    private bool _disposeRequested;
     private bool _disposed;
 
     public event EventHandler<InteractionFrameEventArgs>? FrameReceived;
     public event EventHandler<ProviderManagerStatusChangedEventArgs>? StatusChanged;
     public event EventHandler<ProviderChangedEventArgs>? ProviderChanged;
     public event EventHandler<ProviderFrameRejectedEventArgs>? FrameRejected;
+    public event EventHandler<ProviderManagerDiagnosticEventArgs>? Diagnostic;
 
     public IReadOnlyList<ProviderIdentity> Providers
     {
@@ -83,7 +107,7 @@ public sealed class ProviderManager : IAsyncDisposable
         {
             lock (_stateGate)
             {
-                return _providers.Values.Select(entry => entry.Identity).ToArray().AsReadOnly();
+                return _registrations.Values.Select(registration => registration.Identity).ToArray().AsReadOnly();
             }
         }
     }
@@ -99,31 +123,55 @@ public sealed class ProviderManager : IAsyncDisposable
         }
     }
 
-    public void Register(ProviderDescriptor descriptor, IInteractionProvider provider)
+    public bool IsFaulted
+    {
+        get
+        {
+            lock (_stateGate)
+            {
+                return _lifecycle == ManagerLifecycle.Faulted;
+            }
+        }
+    }
+
+    public Exception? Fault
+    {
+        get
+        {
+            lock (_stateGate)
+            {
+                return _fault;
+            }
+        }
+    }
+
+    public void Register(
+        ProviderDescriptor descriptor,
+        string providerInstanceId,
+        Func<IInteractionProvider> providerFactory)
     {
         ArgumentNullException.ThrowIfNull(descriptor);
-        ArgumentNullException.ThrowIfNull(provider);
-        if (string.IsNullOrWhiteSpace(provider.ProviderInstanceId))
+        if (string.IsNullOrWhiteSpace(providerInstanceId))
         {
-            throw new ArgumentException("The provider instance ID cannot be null, empty, or whitespace.", nameof(provider));
+            throw new ArgumentException("A provider instance ID is required.", nameof(providerInstanceId));
         }
 
-        var entry = new ProviderEntry(
-            this,
+        ArgumentNullException.ThrowIfNull(providerFactory);
+        var registration = new ProviderRegistration(
             new ProviderIdentity
             {
                 ProviderId = descriptor.Id,
-                ProviderInstanceId = provider.ProviderInstanceId
+                ProviderInstanceId = providerInstanceId
             },
-            provider);
+            providerFactory);
 
         lock (_stateGate)
         {
-            ThrowIfDisposed();
-            if (!_providers.TryAdd(provider.ProviderInstanceId, entry))
+            ThrowIfUnavailable();
+            if (!_registrations.TryAdd(providerInstanceId, registration))
             {
                 throw new InvalidOperationException(
-                    $"A provider with instance ID '{provider.ProviderInstanceId}' is already registered.");
+                    $"A provider with instance ID '{providerInstanceId}' is already registered.");
             }
         }
     }
@@ -142,18 +190,18 @@ public sealed class ProviderManager : IAsyncDisposable
         await _transitionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            ProviderEntry target;
+            ProviderRegistration target;
             ProviderIdentity? previous;
             lock (_stateGate)
             {
-                ThrowIfDisposed();
+                ThrowIfUnavailable();
                 if (_lifecycle == ManagerLifecycle.Running
                     && string.Equals(_current?.Identity.ProviderInstanceId, providerInstanceId, StringComparison.Ordinal))
                 {
                     return;
                 }
 
-                if (!_providers.TryGetValue(providerInstanceId, out target!))
+                if (!_registrations.TryGetValue(providerInstanceId, out target!))
                 {
                     throw new KeyNotFoundException($"Provider instance '{providerInstanceId}' is not registered.");
                 }
@@ -163,24 +211,32 @@ public sealed class ProviderManager : IAsyncDisposable
 
             if (previous is not null)
             {
-                await DeactivateCurrentAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await DeactivateCurrentAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch
+                {
+                    PublishProviderChanged(previous, null);
+                    throw;
+                }
             }
 
             try
             {
-                await ActivateAsync(target, initializationContext, cancellationToken).ConfigureAwait(false);
+                await CreateAndActivateAsync(target, initializationContext, cancellationToken).ConfigureAwait(false);
             }
             catch
             {
                 if (previous is not null)
                 {
-                    ProviderChanged?.Invoke(this, new ProviderChangedEventArgs(previous, null));
+                    PublishProviderChanged(previous, null);
                 }
 
                 throw;
             }
 
-            ProviderChanged?.Invoke(this, new ProviderChangedEventArgs(previous, target.Identity));
+            PublishProviderChanged(previous, target.Identity);
         }
         finally
         {
@@ -196,7 +252,7 @@ public sealed class ProviderManager : IAsyncDisposable
             ProviderIdentity? previous;
             lock (_stateGate)
             {
-                ThrowIfDisposed();
+                ThrowIfUnavailable();
                 previous = _lifecycle == ManagerLifecycle.Running ? _current?.Identity : null;
             }
 
@@ -205,8 +261,21 @@ public sealed class ProviderManager : IAsyncDisposable
                 return;
             }
 
-            await DeactivateCurrentAsync(cancellationToken).ConfigureAwait(false);
-            ProviderChanged?.Invoke(this, new ProviderChangedEventArgs(previous, null));
+            Exception? failure = null;
+            try
+            {
+                await DeactivateCurrentAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+
+            PublishProviderChanged(previous, null);
+            if (failure is not null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+            }
         }
         finally
         {
@@ -218,176 +287,329 @@ public sealed class ProviderManager : IAsyncDisposable
     {
         lock (_disposeGate)
         {
-            _disposeTask ??= DisposeCoreAsync();
+            if (_disposeTask is null)
+            {
+                lock (_stateGate)
+                {
+                    _disposeRequested = true;
+                }
+
+                _disposeTask = DisposeCoreAsync();
+            }
+
             return new ValueTask(_disposeTask);
         }
     }
 
-    private async Task ActivateAsync(
-        ProviderEntry entry,
+    private async Task CreateAndActivateAsync(
+        ProviderRegistration registration,
         ProviderInitializationContext initializationContext,
         CancellationToken cancellationToken)
     {
-        Subscribe(entry);
+        IInteractionProvider provider;
+        try
+        {
+            provider = registration.Factory()
+                ?? throw new InvalidOperationException("The provider factory returned null.");
+        }
+        catch (Exception exception)
+        {
+            PublishDiagnostic("CreateProvider", exception, registration.Identity);
+            throw;
+        }
+
+        if (!string.Equals(provider.ProviderInstanceId, registration.Identity.ProviderInstanceId, StringComparison.Ordinal))
+        {
+            var mismatch = new InvalidOperationException(
+                $"The provider factory returned instance ID '{provider.ProviderInstanceId}' instead of the registered ID '{registration.Identity.ProviderInstanceId}'.");
+            var disposeFailure = await TryDisposeProviderAsync(provider, registration.Identity).ConfigureAwait(false);
+            if (disposeFailure is not null)
+            {
+                MarkFault(disposeFailure);
+                throw new AggregateException(mismatch, disposeFailure);
+            }
+
+            throw mismatch;
+        }
+
+        var session = new ActiveSession(
+            this,
+            registration.Identity,
+            provider,
+            Interlocked.Increment(ref _generation));
         lock (_stateGate)
         {
-            _current = entry;
+            _current = session;
             _lifecycle = ManagerLifecycle.Initializing;
         }
 
         try
         {
-            await entry.Provider.InitializeAsync(initializationContext, cancellationToken).ConfigureAwait(false);
+            Subscribe(session);
+            await provider.InitializeAsync(initializationContext, cancellationToken).ConfigureAwait(false);
             lock (_stateGate)
             {
                 _lifecycle = ManagerLifecycle.Starting;
             }
 
-            await entry.Provider.StartAsync(cancellationToken).ConfigureAwait(false);
+            await provider.StartAsync(cancellationToken).ConfigureAwait(false);
             lock (_stateGate)
             {
                 _lifecycle = ManagerLifecycle.Running;
             }
         }
-        catch
+        catch (Exception activationFailure)
         {
-            await CleanupFailedActivationAsync(entry).ConfigureAwait(false);
-            throw;
+            var cleanupFailures = await CleanupFailedActivationAsync(session).ConfigureAwait(false);
+            if (cleanupFailures.Count == 0)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(activationFailure).Throw();
+            }
+
+            cleanupFailures.Insert(0, activationFailure);
+            throw new AggregateException("Provider activation and cleanup failed.", cleanupFailures);
         }
     }
 
     private async Task DeactivateCurrentAsync(CancellationToken cancellationToken)
     {
-        ProviderEntry entry;
+        ActiveSession session;
+        Task callbacksDrained;
         lock (_stateGate)
         {
-            entry = _current ?? throw new InvalidOperationException("There is no current provider to stop.");
+            session = _current ?? throw new InvalidOperationException("There is no current provider to stop.");
+            callbacksDrained = session.Callbacks.CloseAndGetDrainTask();
             _lifecycle = ManagerLifecycle.Stopping;
         }
 
-        PublishCancellationFrames(entry.Identity);
+        await callbacksDrained.ConfigureAwait(false);
+        PublishCancellationFrames(session.Identity);
+        Unsubscribe(session);
+
+        Exception? stopFailure = null;
         try
         {
-            await entry.Provider.StopAsync(cancellationToken).ConfigureAwait(false);
+            await session.Provider.StopAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch
+        catch (Exception exception)
+        {
+            stopFailure = exception;
+            PublishDiagnostic(nameof(IInteractionProvider.StopAsync), exception, session.Identity);
+        }
+
+        var disposeFailure = await TryDisposeProviderAsync(session.Provider, session.Identity).ConfigureAwait(false);
+        _activePoints.Discard(session.Identity);
+        lock (_stateGate)
+        {
+            _current = null;
+            if (disposeFailure is null)
+            {
+                _lifecycle = ManagerLifecycle.Idle;
+            }
+            else
+            {
+                _fault = disposeFailure;
+                _lifecycle = ManagerLifecycle.Faulted;
+            }
+        }
+
+        if (stopFailure is not null && disposeFailure is not null)
+        {
+            throw new AggregateException("Provider stop and disposal failed.", stopFailure, disposeFailure);
+        }
+
+        if (disposeFailure is not null)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(disposeFailure).Throw();
+        }
+
+        if (stopFailure is not null)
+        {
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(stopFailure).Throw();
+        }
+    }
+
+    private async Task<List<Exception>> CleanupFailedActivationAsync(ActiveSession session)
+    {
+        var failures = new List<Exception>();
+        Task callbacksDrained;
+        lock (_stateGate)
+        {
+            callbacksDrained = session.Callbacks.CloseAndGetDrainTask();
+            _lifecycle = ManagerLifecycle.Stopping;
+        }
+
+        await callbacksDrained.ConfigureAwait(false);
+        Unsubscribe(session);
+        try
+        {
+            await session.Provider.StopAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            failures.Add(exception);
+            PublishDiagnostic(nameof(IInteractionProvider.StopAsync), exception, session.Identity);
+        }
+
+        var disposeFailure = await TryDisposeProviderAsync(session.Provider, session.Identity).ConfigureAwait(false);
+        if (disposeFailure is not null)
+        {
+            failures.Add(disposeFailure);
+        }
+
+        _activePoints.Discard(session.Identity);
+        lock (_stateGate)
+        {
+            _current = null;
+            if (disposeFailure is null)
+            {
+                _lifecycle = ManagerLifecycle.Idle;
+            }
+            else
+            {
+                _fault = disposeFailure;
+                _lifecycle = ManagerLifecycle.Faulted;
+            }
+        }
+
+        return failures;
+    }
+
+    private async Task<Exception?> TryDisposeProviderAsync(
+        IInteractionProvider provider,
+        ProviderIdentity identity)
+    {
+        try
+        {
+            await provider.DisposeAsync().ConfigureAwait(false);
+            lock (_stateGate)
+            {
+                _pendingCleanup.RemoveAll(item => ReferenceEquals(item.Provider, provider));
+            }
+
+            return null;
+        }
+        catch (Exception exception)
         {
             lock (_stateGate)
             {
-                _lifecycle = ManagerLifecycle.Running;
+                if (!_pendingCleanup.Any(item => ReferenceEquals(item.Provider, provider)))
+                {
+                    _pendingCleanup.Add(new PendingCleanup(provider, identity));
+                }
             }
 
-            throw;
-        }
-
-        Unsubscribe(entry);
-        lock (_stateGate)
-        {
-            _current = null;
-            _lifecycle = ManagerLifecycle.Idle;
+            PublishDiagnostic(nameof(IAsyncDisposable.DisposeAsync), exception, identity);
+            return exception;
         }
     }
 
-    private async Task CleanupFailedActivationAsync(ProviderEntry entry)
+    private void Subscribe(ActiveSession session)
     {
-        lock (_stateGate)
+        session.Provider.FrameReceived += session.FrameHandler;
+        session.Provider.StatusChanged += session.StatusHandler;
+    }
+
+    private void Unsubscribe(ActiveSession session)
+    {
+        try
         {
-            _lifecycle = ManagerLifecycle.Stopping;
+            session.Provider.FrameReceived -= session.FrameHandler;
+        }
+        catch (Exception exception)
+        {
+            PublishDiagnostic("UnsubscribeFrame", exception, session.Identity);
         }
 
         try
         {
-            await entry.Provider.StopAsync(CancellationToken.None).ConfigureAwait(false);
+            session.Provider.StatusChanged -= session.StatusHandler;
         }
-        catch
+        catch (Exception exception)
         {
-            // Cleanup must continue so a failed provider cannot remain subscribed or undisposed.
+            PublishDiagnostic("UnsubscribeStatus", exception, session.Identity);
+        }
+    }
+
+    private void HandleFrame(ActiveSession session, InteractionFrame frame)
+    {
+        if (!session.Callbacks.TryEnter())
+        {
+            return;
         }
 
-        Unsubscribe(entry);
-        _activePoints.Discard(entry.Identity);
         try
         {
-            await entry.Provider.DisposeAsync().ConfigureAwait(false);
-        }
-        catch
-        {
-            // Preserve the activation exception while still removing the failed instance.
-        }
-
-        lock (_stateGate)
-        {
-            _providers.Remove(entry.Identity.ProviderInstanceId);
-            _current = null;
-            _lifecycle = ManagerLifecycle.Idle;
-        }
-    }
-
-    private void Subscribe(ProviderEntry entry)
-    {
-        entry.Provider.FrameReceived += entry.FrameHandler;
-        entry.Provider.StatusChanged += entry.StatusHandler;
-    }
-
-    private void Unsubscribe(ProviderEntry entry)
-    {
-        entry.Provider.FrameReceived -= entry.FrameHandler;
-        entry.Provider.StatusChanged -= entry.StatusHandler;
-    }
-
-    private void HandleFrame(ProviderEntry entry, InteractionFrame frame)
-    {
-        ManagerLifecycle lifecycle;
-        bool isCurrent;
-        lock (_stateGate)
-        {
-            lifecycle = _lifecycle;
-            isCurrent = ReferenceEquals(_current, entry);
-        }
-
-        if (!isCurrent || lifecycle != ManagerLifecycle.Running)
-        {
-            FrameRejected?.Invoke(
-                this,
-                new ProviderFrameRejectedEventArgs(
-                    frame,
-                    ProviderFrameRejectionReason.InvalidLifecycle,
-                    "The provider emitted a frame outside its active running lifecycle."));
-            return;
-        }
-
-        if (!HasExpectedIdentity(entry.Identity, frame))
-        {
-            FrameRejected?.Invoke(
-                this,
-                new ProviderFrameRejectedEventArgs(
-                    frame,
-                    ProviderFrameRejectionReason.IdentityMismatch,
-                    "The frame identity does not match the active provider and surface."));
-            return;
-        }
-
-        _activePoints.Apply(frame);
-        FrameReceived?.Invoke(this, new InteractionFrameEventArgs(frame));
-    }
-
-    private void HandleStatus(ProviderEntry entry, ProviderStatusChangedEventArgs status)
-    {
-        lock (_stateGate)
-        {
-            if (!ReferenceEquals(_current, entry))
+            ManagerLifecycle lifecycle;
+            bool isCurrent;
+            lock (_stateGate)
             {
+                lifecycle = _lifecycle;
+                isCurrent = ReferenceEquals(_current, session) && _generation == session.Generation;
+            }
+
+            if (!isCurrent || lifecycle != ManagerLifecycle.Running)
+            {
+                PublishFrameRejected(
+                    new ProviderFrameRejectedEventArgs(
+                        frame,
+                        ProviderFrameRejectionReason.InvalidLifecycle,
+                        "The provider emitted a frame outside its active running lifecycle."),
+                    session.Identity);
                 return;
             }
+
+            if (!HasExpectedIdentity(session.Identity, frame))
+            {
+                PublishFrameRejected(
+                    new ProviderFrameRejectedEventArgs(
+                        frame,
+                        ProviderFrameRejectionReason.IdentityMismatch,
+                        "The frame identity does not match the active provider and surface."),
+                    session.Identity);
+                return;
+            }
+
+            _activePoints.Apply(frame);
+            InvokeSubscribers(FrameReceived, new InteractionFrameEventArgs(frame), nameof(FrameReceived), session.Identity);
+        }
+        finally
+        {
+            session.Callbacks.Exit();
+        }
+    }
+
+    private void HandleStatus(ActiveSession session, ProviderStatusChangedEventArgs status)
+    {
+        if (!session.Callbacks.TryEnter())
+        {
+            return;
         }
 
-        StatusChanged?.Invoke(
-            this,
-            new ProviderManagerStatusChangedEventArgs(
-                entry.Identity,
-                status.PreviousStatus,
-                status.Status,
-                status.Error));
+        try
+        {
+            lock (_stateGate)
+            {
+                if (!ReferenceEquals(_current, session) || _generation != session.Generation)
+                {
+                    return;
+                }
+            }
+
+            InvokeSubscribers(
+                StatusChanged,
+                new ProviderManagerStatusChangedEventArgs(
+                    session.Identity,
+                    status.PreviousStatus,
+                    status.Status,
+                    status.Error),
+                nameof(StatusChanged),
+                session.Identity);
+        }
+        finally
+        {
+            session.Callbacks.Exit();
+        }
     }
 
     private void PublishCancellationFrames(ProviderIdentity identity)
@@ -395,7 +617,68 @@ public sealed class ProviderManager : IAsyncDisposable
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         foreach (var frame in _activePoints.DrainCancellationFrames(identity, timestamp))
         {
-            FrameReceived?.Invoke(this, new InteractionFrameEventArgs(frame));
+            InvokeSubscribers(FrameReceived, new InteractionFrameEventArgs(frame), nameof(FrameReceived), identity);
+        }
+    }
+
+    private void PublishProviderChanged(ProviderIdentity? previous, ProviderIdentity? current)
+    {
+        InvokeSubscribers(
+            ProviderChanged,
+            new ProviderChangedEventArgs(previous, current),
+            nameof(ProviderChanged),
+            current ?? previous);
+    }
+
+    private void PublishFrameRejected(ProviderFrameRejectedEventArgs args, ProviderIdentity identity)
+    {
+        InvokeSubscribers(FrameRejected, args, nameof(FrameRejected), identity);
+    }
+
+    private void InvokeSubscribers<TEventArgs>(
+        EventHandler<TEventArgs>? subscribers,
+        TEventArgs args,
+        string operation,
+        ProviderIdentity? identity)
+        where TEventArgs : EventArgs
+    {
+        if (subscribers is null)
+        {
+            return;
+        }
+
+        foreach (var subscriber in subscribers.GetInvocationList().Cast<EventHandler<TEventArgs>>())
+        {
+            try
+            {
+                subscriber(this, args);
+            }
+            catch (Exception exception)
+            {
+                PublishDiagnostic(operation, exception, identity);
+            }
+        }
+    }
+
+    private void PublishDiagnostic(string operation, Exception exception, ProviderIdentity? identity)
+    {
+        var subscribers = Diagnostic;
+        if (subscribers is null)
+        {
+            return;
+        }
+
+        var args = new ProviderManagerDiagnosticEventArgs(operation, exception, identity);
+        foreach (var subscriber in subscribers.GetInvocationList().Cast<EventHandler<ProviderManagerDiagnosticEventArgs>>())
+        {
+            try
+            {
+                subscriber(this, args);
+            }
+            catch
+            {
+                // Diagnostic consumers cannot affect provider lifecycle or other consumers.
+            }
         }
     }
 
@@ -413,10 +696,9 @@ public sealed class ProviderManager : IAsyncDisposable
     {
         await _transitionGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         List<Exception>? errors = null;
-        ProviderEntry[] providers;
         try
         {
-            ProviderEntry? current;
+            ProviderIdentity? previous;
             lock (_stateGate)
             {
                 if (_disposed)
@@ -424,55 +706,44 @@ public sealed class ProviderManager : IAsyncDisposable
                     return;
                 }
 
-                _disposed = true;
-                current = _current;
-                if (current is not null)
-                {
-                    _lifecycle = ManagerLifecycle.Stopping;
-                }
+                previous = _current?.Identity;
             }
 
-            if (current is not null)
+            if (previous is not null)
             {
                 try
                 {
-                    PublishCancellationFrames(current.Identity);
+                    await DeactivateCurrentAsync(CancellationToken.None).ConfigureAwait(false);
                 }
                 catch (Exception exception)
                 {
                     (errors ??= []).Add(exception);
                 }
 
-                try
-                {
-                    await current.Provider.StopAsync(CancellationToken.None).ConfigureAwait(false);
-                }
-                catch (Exception exception)
-                {
-                    (errors ??= []).Add(exception);
-                }
+                PublishProviderChanged(previous, null);
+            }
 
-                Unsubscribe(current);
+            PendingCleanup[] pending;
+            lock (_stateGate)
+            {
+                pending = _pendingCleanup.ToArray();
+            }
+
+            foreach (var item in pending)
+            {
+                var retryFailure = await TryDisposeProviderAsync(item.Provider, item.Identity).ConfigureAwait(false);
+                if (retryFailure is not null)
+                {
+                    (errors ??= []).Add(retryFailure);
+                }
             }
 
             lock (_stateGate)
             {
-                providers = _providers.Values.ToArray();
-                _providers.Clear();
+                _registrations.Clear();
                 _current = null;
+                _disposed = true;
                 _lifecycle = ManagerLifecycle.Disposed;
-            }
-
-            foreach (var entry in providers)
-            {
-                try
-                {
-                    await entry.Provider.DisposeAsync().ConfigureAwait(false);
-                }
-                catch (Exception exception)
-                {
-                    (errors ??= []).Add(exception);
-                }
             }
 
             _activePoints.Dispose();
@@ -488,28 +759,112 @@ public sealed class ProviderManager : IAsyncDisposable
         }
     }
 
-    private void ThrowIfDisposed()
+    private void MarkFault(Exception exception)
     {
-        ObjectDisposedException.ThrowIf(_disposed, this);
+        lock (_stateGate)
+        {
+            _fault = exception;
+            _lifecycle = ManagerLifecycle.Faulted;
+        }
     }
 
-    private sealed class ProviderEntry
+    private void ThrowIfUnavailable()
     {
-        internal ProviderEntry(
+        ObjectDisposedException.ThrowIf(_disposeRequested || _disposed, this);
+        if (_lifecycle == ManagerLifecycle.Faulted)
+        {
+            throw new InvalidOperationException(
+                "The provider manager is faulted because provider cleanup could not be confirmed.",
+                _fault);
+        }
+    }
+
+    private sealed record ProviderRegistration(
+        ProviderIdentity Identity,
+        Func<IInteractionProvider> Factory);
+
+    private sealed record PendingCleanup(
+        IInteractionProvider Provider,
+        ProviderIdentity Identity);
+
+    private sealed class ActiveSession
+    {
+        internal ActiveSession(
             ProviderManager owner,
             ProviderIdentity identity,
-            IInteractionProvider provider)
+            IInteractionProvider provider,
+            long generation)
         {
             Identity = identity;
             Provider = provider;
+            Generation = generation;
             FrameHandler = (_, args) => owner.HandleFrame(this, args.Frame);
             StatusHandler = (_, args) => owner.HandleStatus(this, args);
         }
 
         internal ProviderIdentity Identity { get; }
         internal IInteractionProvider Provider { get; }
+        internal long Generation { get; }
+        internal CallbackAdmissionGate Callbacks { get; } = new();
         internal EventHandler<InteractionFrameEventArgs> FrameHandler { get; }
         internal EventHandler<ProviderStatusChangedEventArgs> StatusHandler { get; }
+    }
+
+    private sealed class CallbackAdmissionGate
+    {
+        private readonly object _gate = new();
+        private TaskCompletionSource? _drained;
+        private bool _accepting = true;
+        private int _inFlight;
+
+        internal bool TryEnter()
+        {
+            lock (_gate)
+            {
+                if (!_accepting)
+                {
+                    return false;
+                }
+
+                _inFlight++;
+                return true;
+            }
+        }
+
+        internal void Exit()
+        {
+            TaskCompletionSource? drained = null;
+            lock (_gate)
+            {
+                if (_inFlight <= 0)
+                {
+                    throw new InvalidOperationException("The callback admission count is unbalanced.");
+                }
+
+                _inFlight--;
+                if (!_accepting && _inFlight == 0)
+                {
+                    drained = _drained;
+                }
+            }
+
+            drained?.TrySetResult();
+        }
+
+        internal Task CloseAndGetDrainTask()
+        {
+            lock (_gate)
+            {
+                _accepting = false;
+                if (_inFlight == 0)
+                {
+                    return Task.CompletedTask;
+                }
+
+                _drained ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                return _drained.Task;
+            }
+        }
     }
 
     private enum ManagerLifecycle
@@ -519,6 +874,7 @@ public sealed class ProviderManager : IAsyncDisposable
         Starting = 2,
         Running = 3,
         Stopping = 4,
-        Disposed = 5
+        Faulted = 5,
+        Disposed = 6
     }
 }

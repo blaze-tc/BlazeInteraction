@@ -11,6 +11,300 @@ public sealed class ProviderManagerTests
         EmptyServices.Instance);
 
     [Fact]
+    public async Task SwitchAsync_WaitsForAdmittedFrameCallbackBeforeCancelAndStop()
+    {
+        var timeline = new List<string>();
+        var provider = new TestProvider("first", timeline);
+        var replacement = new TestProvider("second", timeline);
+        await using var manager = CreateManager(provider, replacement);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        var callbackFinished = false;
+        manager.FrameReceived += (_, args) =>
+        {
+            if (args.Frame.Points.All(point => point.Phase != InteractionPhase.Cancel))
+            {
+                timeline.Add("callback-start");
+                entered.TrySetResult();
+                Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+                callbackFinished = true;
+                timeline.Add("callback-end");
+            }
+            else
+            {
+                timeline.Add("cancel");
+            }
+        };
+        manager.ProviderChanged += (_, _) => timeline.Add("changed");
+        await manager.SwitchAsync("first", InitializationContext, CancellationToken.None);
+        timeline.Clear();
+        var emission = Task.Run(
+            () => provider.Emit(Frame("first", "FRONT", 1, Point("first", "FRONT", 1, InteractionPhase.Down))));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var switching = manager.SwitchAsync("second", InitializationContext, CancellationToken.None);
+        await Task.Delay(100);
+        var completedEarly = switching.IsCompleted;
+        var stopCountBeforeRelease = provider.StopCount;
+        release.Set();
+        await Task.WhenAll(emission, switching).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(completedEarly);
+        Assert.Equal(0, stopCountBeforeRelease);
+        Assert.True(callbackFinished);
+        Assert.Equal(
+            [
+                "callback-start", "callback-end", "cancel", "first.stop", "first.dispose",
+                "second.initialize", "second.start", "changed"
+            ],
+            timeline);
+    }
+
+    [Fact]
+    public async Task SwitchAsync_WaitsForAdmittedStatusCallbackBeforeDeactivation()
+    {
+        var timeline = new List<string>();
+        var provider = new TestProvider("first", timeline);
+        var replacement = new TestProvider("second", timeline);
+        await using var manager = CreateManager(provider, replacement);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        manager.StatusChanged += (_, _) =>
+        {
+            timeline.Add("status-start");
+            entered.TrySetResult();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+            timeline.Add("status-end");
+        };
+        manager.ProviderChanged += (_, _) => timeline.Add("changed");
+        await manager.SwitchAsync("first", InitializationContext, CancellationToken.None);
+        timeline.Clear();
+        var emission = Task.Run(
+            () => provider.EmitStatus(ProviderRuntimeStatus.Running, ProviderRuntimeStatus.Running));
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var switching = manager.SwitchAsync("second", InitializationContext, CancellationToken.None);
+        await Task.Delay(100);
+        var completedEarly = switching.IsCompleted;
+        var stopCountBeforeRelease = provider.StopCount;
+        release.Set();
+        await Task.WhenAll(emission, switching).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(completedEarly);
+        Assert.Equal(0, stopCountBeforeRelease);
+        Assert.Equal(
+            [
+                "status-start", "status-end", "first.stop", "first.dispose",
+                "second.initialize", "second.start", "changed"
+            ],
+            timeline);
+    }
+
+    [Fact]
+    public async Task SwitchAsync_EventSubscriberFailureIsDiagnosedWithoutBreakingCancelOrLifecycle()
+    {
+        var log = new List<string>();
+        var running = 0;
+        var maximumRunning = 0;
+        var provider = new TestProvider("first", log)
+        {
+            OnStarted = () => maximumRunning = Math.Max(maximumRunning, Interlocked.Increment(ref running)),
+            OnStopped = () => Interlocked.Decrement(ref running)
+        };
+        var replacement = new TestProvider("second", log)
+        {
+            OnStarted = () => maximumRunning = Math.Max(maximumRunning, Interlocked.Increment(ref running)),
+            OnStopped = () => Interlocked.Decrement(ref running)
+        };
+        await using var manager = CreateManager(provider, replacement);
+        var diagnostics = new List<ProviderManagerDiagnosticEventArgs>();
+        manager.Diagnostic += (_, args) => diagnostics.Add(args);
+        manager.FrameReceived += (_, args) =>
+        {
+            if (args.Frame.Points.Any(point => point.Phase == InteractionPhase.Cancel))
+            {
+                throw new InvalidOperationException("consumer");
+            }
+        };
+        manager.FrameReceived += (_, args) =>
+        {
+            if (args.Frame.Points.Any(point => point.Phase == InteractionPhase.Cancel))
+            {
+                log.Add("cancel-observed");
+            }
+        };
+        await manager.SwitchAsync("first", InitializationContext, CancellationToken.None);
+        provider.Emit(Frame("first", "FRONT", 1, Point("first", "FRONT", 1, InteractionPhase.Down)));
+        log.Clear();
+
+        await manager.SwitchAsync("second", InitializationContext, CancellationToken.None);
+
+        Assert.Equal(
+            ["cancel-observed", "first.stop", "first.dispose", "second.initialize", "second.start"],
+            log.Take(5));
+        Assert.Equal("second", manager.ActiveProvider?.ProviderInstanceId);
+        Assert.Equal(1, maximumRunning);
+        var diagnostic = Assert.Single(diagnostics, item => item.Operation == nameof(manager.FrameReceived));
+        Assert.Equal("consumer", diagnostic.Exception.Message);
+    }
+
+    [Fact]
+    public async Task StopAsync_StopFailureFailsClosedDisposesOldAndAllowsLaterCleanSwitch()
+    {
+        var provider = new TestProvider("first") { StopError = new InvalidOperationException("stop") };
+        var replacement = new TestProvider("second");
+        await using var manager = CreateManager(provider, replacement);
+        var frames = new List<InteractionFrame>();
+        manager.FrameReceived += (_, args) => frames.Add(args.Frame);
+        await manager.SwitchAsync("first", InitializationContext, CancellationToken.None);
+        provider.Emit(Frame("first", "FRONT", 1, Point("first", "FRONT", 1, InteractionPhase.Down)));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => manager.StopAsync(CancellationToken.None));
+        provider.Emit(Frame("first", "FRONT", 2, Point("first", "FRONT", 1, InteractionPhase.Move)));
+        await manager.SwitchAsync("second", InitializationContext, CancellationToken.None);
+
+        Assert.DoesNotContain(
+            frames,
+            frame => frame.Sequence == 2 && frame.Points.Any(point => point.Phase == InteractionPhase.Move));
+        Assert.Equal(1, provider.DisposeCount);
+        Assert.Equal("second", manager.ActiveProvider?.ProviderInstanceId);
+    }
+
+    [Fact]
+    public async Task SwitchAsync_FactoryCreatesFreshInstanceAndDisposesOldBeforeCreatingReplacement()
+    {
+        var log = new List<string>();
+        var firstInstances = new List<TestProvider>();
+        var secondInstances = new List<TestProvider>();
+        await using var manager = new ProviderManager();
+        manager.Register(Descriptor(), "first", () =>
+        {
+            log.Add("first.create");
+            var provider = new TestProvider("first", log);
+            firstInstances.Add(provider);
+            return provider;
+        });
+        manager.Register(Descriptor(), "second", () =>
+        {
+            log.Add("second.create");
+            var provider = new TestProvider("second", log);
+            secondInstances.Add(provider);
+            return provider;
+        });
+        manager.FrameReceived += (_, args) =>
+        {
+            if (args.Frame.Points.Any(point => point.Phase == InteractionPhase.Cancel))
+            {
+                log.Add("cancel");
+            }
+        };
+        await manager.SwitchAsync("first", InitializationContext, CancellationToken.None);
+        firstInstances[0].Emit(Frame("first", "FRONT", 1, Point("first", "FRONT", 1, InteractionPhase.Down)));
+        log.Clear();
+
+        await manager.SwitchAsync("second", InitializationContext, CancellationToken.None);
+        await manager.SwitchAsync("first", InitializationContext, CancellationToken.None);
+
+        Assert.Equal(
+            [
+                "cancel", "first.stop", "first.dispose", "second.create", "second.initialize", "second.start",
+                "second.stop", "second.dispose", "first.create", "first.initialize", "first.start"
+            ],
+            log);
+        Assert.Equal(2, firstInstances.Count);
+        Assert.Single(secondInstances);
+        Assert.Equal(1, firstInstances[0].DisposeCount);
+        Assert.Equal(0, firstInstances[1].DisposeCount);
+        Assert.Equal(1, secondInstances[0].DisposeCount);
+    }
+
+    [Fact]
+    public async Task SwitchAsync_FactoryInstanceIdMismatchIsDisposedBeforeInitialization()
+    {
+        var mismatched = new TestProvider("wrong");
+        await using var manager = new ProviderManager();
+        manager.Register(Descriptor(), "expected", () => mismatched);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => manager.SwitchAsync("expected", InitializationContext, CancellationToken.None));
+
+        Assert.Equal(0, mismatched.InitializeCount);
+        Assert.Equal(1, mismatched.DisposeCount);
+        Assert.Null(manager.ActiveProvider);
+    }
+
+    [Fact]
+    public async Task SwitchAsync_EventSubscriptionFailureStopsDisposesAndUnhooksPartialSubscription()
+    {
+        var provider = new ThrowingSubscriptionProvider("first");
+        await using var manager = new ProviderManager();
+        manager.Register(Descriptor(), "first", () => provider);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => manager.SwitchAsync("first", InitializationContext, CancellationToken.None));
+
+        Assert.Equal(0, provider.FrameSubscriberCount);
+        Assert.Equal(1, provider.StopCount);
+        Assert.Equal(1, provider.DisposeCount);
+        Assert.Null(manager.ActiveProvider);
+    }
+
+    [Fact]
+    public async Task StopAsync_StopAndDisposeFailureFaultsManagerAndRejectsEveryLaterSwitch()
+    {
+        var old = new TestProvider("first")
+        {
+            StopError = new InvalidOperationException("stop"),
+            DisposeError = new InvalidOperationException("dispose")
+        };
+        var candidateFactoryCalls = 0;
+        await using var manager = new ProviderManager();
+        manager.Register(Descriptor(), "first", () => old);
+        manager.Register(Descriptor(), "second", () =>
+        {
+            candidateFactoryCalls++;
+            return new TestProvider("second");
+        });
+        var frames = new List<InteractionFrame>();
+        manager.FrameReceived += (_, args) => frames.Add(args.Frame);
+        await manager.SwitchAsync("first", InitializationContext, CancellationToken.None);
+        old.Emit(Frame("first", "FRONT", 1, Point("first", "FRONT", 1, InteractionPhase.Down)));
+
+        await Assert.ThrowsAnyAsync<Exception>(() => manager.StopAsync(CancellationToken.None));
+        old.Emit(Frame("first", "FRONT", 2, Point("first", "FRONT", 1, InteractionPhase.Move)));
+        var switchError = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => manager.SwitchAsync("second", InitializationContext, CancellationToken.None));
+
+        Assert.True(manager.IsFaulted);
+        Assert.Contains("faulted", switchError.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(manager.ActiveProvider);
+        Assert.DoesNotContain(
+            frames,
+            frame => frame.Sequence == 2 && frame.Points.Any(point => point.Phase == InteractionPhase.Move));
+        Assert.Equal(0, candidateFactoryCalls);
+        old.DisposeError = null;
+    }
+
+    [Fact]
+    public async Task DisposeAsync_RetriesCreatedProviderWhoseEarlierDisposalCouldNotBeConfirmed()
+    {
+        var provider = new TestProvider("first")
+        {
+            StopError = new InvalidOperationException("stop"),
+            DisposeError = new InvalidOperationException("dispose")
+        };
+        var manager = new ProviderManager();
+        manager.Register(Descriptor(), "first", () => provider);
+        await manager.SwitchAsync("first", InitializationContext, CancellationToken.None);
+        await Assert.ThrowsAnyAsync<Exception>(() => manager.StopAsync(CancellationToken.None));
+        provider.DisposeError = null;
+
+        await manager.DisposeAsync();
+
+        Assert.Equal(2, provider.DisposeCount);
+    }
+
+    [Fact]
     public async Task SwitchAsync_InitializesAndStartsOnlyTheSelectedProviderThenPublishesChange()
     {
         var log = new List<string>();
@@ -51,42 +345,14 @@ public sealed class ProviderManagerTests
 
         await manager.SwitchAsync("second", InitializationContext, CancellationToken.None);
 
-        Assert.Equal(["cancel", "cancel", "first.stop", "second.initialize", "second.start"], log.Take(5));
+        Assert.Equal(
+            ["cancel", "cancel", "first.stop", "first.dispose", "second.initialize", "second.start"],
+            log.Take(6));
         var cancellations = forwarded.Where(frame => frame.Points.Any(point => point.Phase == InteractionPhase.Cancel)).ToArray();
         Assert.Equal(2, cancellations.Length);
         Assert.Equal(["FRONT", "LEFT"], cancellations.Select(frame => frame.SurfaceId));
         Assert.All(cancellations.SelectMany(frame => frame.Points), point => Assert.Equal(InteractionPhase.Cancel, point.Phase));
         Assert.All(cancellations, frame => Assert.True(frame.Sequence is 11 or 21));
-    }
-
-    [Fact]
-    public async Task SwitchAsync_ReverseSwitchRestartsOriginalInstanceWithoutOverlappingProviders()
-    {
-        var running = 0;
-        var maximumRunning = 0;
-        var log = new List<string>();
-        var first = new TestProvider("first", log)
-        {
-            OnStarted = () => maximumRunning = Math.Max(maximumRunning, Interlocked.Increment(ref running)),
-            OnStopped = () => Interlocked.Decrement(ref running)
-        };
-        var second = new TestProvider("second", log)
-        {
-            OnStarted = () => maximumRunning = Math.Max(maximumRunning, Interlocked.Increment(ref running)),
-            OnStopped = () => Interlocked.Decrement(ref running)
-        };
-        await using var manager = CreateManager(first, second);
-
-        await manager.SwitchAsync("first", InitializationContext, CancellationToken.None);
-        await manager.SwitchAsync("second", InitializationContext, CancellationToken.None);
-        await manager.SwitchAsync("first", InitializationContext, CancellationToken.None);
-
-        Assert.Equal(1, maximumRunning);
-        Assert.Equal(1, running);
-        Assert.Equal(2, first.InitializeCount);
-        Assert.Equal(2, first.StartCount);
-        Assert.Equal(1, first.StopCount);
-        Assert.Equal("first", manager.ActiveProvider?.ProviderInstanceId);
     }
 
     [Fact]
@@ -195,6 +461,63 @@ public sealed class ProviderManagerTests
     }
 
     [Fact]
+    public async Task SwitchAsync_AlreadyCapturedOldFrameCallbackCannotCrossCompletedGeneration()
+    {
+        var first = new TestProvider("first");
+        var second = new TestProvider("second");
+        await using var manager = CreateManager(first, second);
+        var frames = new List<InteractionFrame>();
+        var rejections = new List<ProviderFrameRejectedEventArgs>();
+        manager.FrameReceived += (_, args) => frames.Add(args.Frame);
+        manager.FrameRejected += (_, args) => rejections.Add(args);
+        await manager.SwitchAsync("first", InitializationContext, CancellationToken.None);
+        var staleCallback = first.CaptureFrameCallback(
+            Frame("first", "FRONT", 77, Point("first", "FRONT", 7, InteractionPhase.Move)));
+
+        await manager.SwitchAsync("second", InitializationContext, CancellationToken.None);
+        frames.Clear();
+        rejections.Clear();
+        staleCallback();
+
+        Assert.Empty(frames);
+        Assert.Empty(rejections);
+    }
+
+    [Fact]
+    public async Task OutboundEvents_IsolateEverySubscriberIncludingDiagnosticConsumers()
+    {
+        var first = new TestProvider("first");
+        var second = new TestProvider("second");
+        await using var manager = CreateManager(first, second);
+        var diagnostics = new List<ProviderManagerDiagnosticEventArgs>();
+        var statusObserved = 0;
+        var rejectionObserved = 0;
+        var changesObserved = 0;
+        manager.Diagnostic += (_, _) => throw new InvalidOperationException("diagnostic-consumer");
+        manager.Diagnostic += (_, args) => diagnostics.Add(args);
+        manager.StatusChanged += (_, _) => throw new InvalidOperationException("status-consumer");
+        manager.StatusChanged += (_, _) => statusObserved++;
+        manager.FrameRejected += (_, _) => throw new InvalidOperationException("rejection-consumer");
+        manager.FrameRejected += (_, _) => rejectionObserved++;
+        manager.ProviderChanged += (_, _) => throw new InvalidOperationException("change-consumer");
+        manager.ProviderChanged += (_, _) => changesObserved++;
+        await manager.SwitchAsync("first", InitializationContext, CancellationToken.None);
+        diagnostics.Clear();
+        changesObserved = 0;
+
+        first.EmitStatus(ProviderRuntimeStatus.Running, ProviderRuntimeStatus.Running);
+        first.Emit(Frame("wrong", "FRONT", 1, Point("wrong", "FRONT", 1, InteractionPhase.Move)));
+        await manager.SwitchAsync("second", InitializationContext, CancellationToken.None);
+
+        Assert.Equal(1, statusObserved);
+        Assert.Equal(1, rejectionObserved);
+        Assert.Equal(1, changesObserved);
+        Assert.Contains(diagnostics, item => item.Operation == nameof(manager.StatusChanged));
+        Assert.Contains(diagnostics, item => item.Operation == nameof(manager.FrameRejected));
+        Assert.Contains(diagnostics, item => item.Operation == nameof(manager.ProviderChanged));
+    }
+
+    [Fact]
     public async Task ProviderFrame_WithMismatchedIdentityIsRejectedWithoutChangingActivePoints()
     {
         var provider = new TestProvider("first");
@@ -231,7 +554,7 @@ public sealed class ProviderManagerTests
     }
 
     [Fact]
-    public async Task SwitchAsync_InitializationFailureStopsDisposesAndRemovesFailedProvider()
+    public async Task SwitchAsync_InitializationFailureStopsDisposesAndKeepsFactoryRegistration()
     {
         var log = new List<string>();
         var provider = new TestProvider("first", log) { InitializeError = new InvalidOperationException("init") };
@@ -243,8 +566,27 @@ public sealed class ProviderManagerTests
         Assert.Equal("init", error.Message);
         Assert.Equal(["first.initialize", "first.stop", "first.dispose"], log);
         Assert.Null(manager.ActiveProvider);
-        Assert.Empty(manager.Providers);
+        Assert.Single(manager.Providers);
         Assert.Equal(1, provider.DisposeCount);
+    }
+
+    [Fact]
+    public async Task SwitchAsync_FailedCandidateCanBeRetriedThroughFactoryWithFreshInstance()
+    {
+        var failed = new TestProvider("first") { InitializeError = new InvalidOperationException("init") };
+        var recovered = new TestProvider("first");
+        var factoryCalls = 0;
+        await using var manager = new ProviderManager();
+        manager.Register(Descriptor(), "first", () => ++factoryCalls == 1 ? failed : recovered);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => manager.SwitchAsync("first", InitializationContext, CancellationToken.None));
+        await manager.SwitchAsync("first", InitializationContext, CancellationToken.None);
+
+        Assert.Equal(2, factoryCalls);
+        Assert.Equal(1, failed.DisposeCount);
+        Assert.Equal(1, recovered.StartCount);
+        Assert.Equal("first", manager.ActiveProvider?.ProviderInstanceId);
     }
 
     [Fact]
@@ -298,7 +640,7 @@ public sealed class ProviderManagerTests
     }
 
     [Fact]
-    public async Task StopAsync_CancellationKeepsCurrentProviderAndPropagatesCancellation()
+    public async Task StopAsync_CancellationFailsClosedAndDisposesCurrentProvider()
     {
         var provider = new TestProvider("first") { StopError = new OperationCanceledException() };
         await using var manager = CreateManager(provider);
@@ -306,8 +648,8 @@ public sealed class ProviderManagerTests
 
         await Assert.ThrowsAsync<OperationCanceledException>(() => manager.StopAsync(CancellationToken.None));
 
-        Assert.Equal("first", manager.ActiveProvider?.ProviderInstanceId);
-        provider.StopError = null;
+        Assert.Null(manager.ActiveProvider);
+        Assert.Equal(1, provider.DisposeCount);
     }
 
     [Fact]
@@ -330,7 +672,7 @@ public sealed class ProviderManagerTests
 
         await manager.StopAsync(CancellationToken.None);
 
-        Assert.Equal(["cancel", "first.stop", "changed:none"], log);
+        Assert.Equal(["cancel", "first.stop", "first.dispose", "changed:none"], log);
         Assert.Null(manager.ActiveProvider);
     }
 
@@ -347,7 +689,7 @@ public sealed class ProviderManagerTests
 
         Assert.Equal(1, first.StopCount);
         Assert.Equal(1, first.DisposeCount);
-        Assert.Equal(1, second.DisposeCount);
+        Assert.Equal(0, second.DisposeCount);
         await Assert.ThrowsAsync<ObjectDisposedException>(
             () => manager.SwitchAsync("second", InitializationContext, CancellationToken.None));
     }
@@ -357,7 +699,7 @@ public sealed class ProviderManagerTests
         var manager = new ProviderManager();
         foreach (var provider in providers)
         {
-            manager.Register(Descriptor(), provider);
+            manager.Register(Descriptor(), provider.ProviderInstanceId, () => provider);
         }
 
         return manager;
@@ -427,6 +769,7 @@ public sealed class ProviderManagerTests
         public Exception? InitializeError { get; set; }
         public Exception? StartError { get; set; }
         public Exception? StopError { get; set; }
+        public Exception? DisposeError { get; set; }
         public Action? DuringInitialize { get; set; }
         public Func<CancellationToken, Task>? BeforeStartAsync { get; set; }
         public Action? OnStarted { get; set; }
@@ -498,7 +841,7 @@ public sealed class ProviderManagerTests
         {
             DisposeCount++;
             _log?.Add($"{ProviderInstanceId}.dispose");
-            return ValueTask.CompletedTask;
+            return DisposeError is null ? ValueTask.CompletedTask : ValueTask.FromException(DisposeError);
         }
 
         internal void Emit(InteractionFrame frame) => FrameReceived?.Invoke(this, new InteractionFrameEventArgs(frame));
@@ -514,6 +857,12 @@ public sealed class ProviderManagerTests
             var handlers = StatusChanged;
             return () => handlers?.Invoke(this, new ProviderStatusChangedEventArgs(previous, current));
         }
+
+        internal Action CaptureFrameCallback(InteractionFrame frame)
+        {
+            var handlers = FrameReceived;
+            return () => handlers?.Invoke(this, new InteractionFrameEventArgs(frame));
+        }
     }
 
     private sealed class EmptyServices : IServiceProvider
@@ -521,5 +870,46 @@ public sealed class ProviderManagerTests
         internal static EmptyServices Instance { get; } = new();
 
         public object? GetService(Type serviceType) => null;
+    }
+
+    private sealed class ThrowingSubscriptionProvider(string providerInstanceId) : IInteractionProvider
+    {
+        private EventHandler<InteractionFrameEventArgs>? _frameReceived;
+
+        public string ProviderInstanceId { get; } = providerInstanceId;
+        public ProviderRuntimeStatus Status => ProviderRuntimeStatus.Created;
+        public int FrameSubscriberCount => _frameReceived?.GetInvocationList().Length ?? 0;
+        public int StopCount { get; private set; }
+        public int DisposeCount { get; private set; }
+
+        public event EventHandler<InteractionFrameEventArgs>? FrameReceived
+        {
+            add => _frameReceived += value;
+            remove => _frameReceived -= value;
+        }
+
+        public event EventHandler<ProviderStatusChangedEventArgs>? StatusChanged
+        {
+            add => throw new InvalidOperationException("subscribe");
+            remove { }
+        }
+
+        public Task InitializeAsync(
+            ProviderInitializationContext context,
+            CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task StopAsync(CancellationToken cancellationToken)
+        {
+            StopCount++;
+            return Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCount++;
+            return ValueTask.CompletedTask;
+        }
     }
 }

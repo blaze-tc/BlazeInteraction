@@ -7,7 +7,7 @@ Plan: `docs/superpowers/plans/2026-08-19-blaze-interaction-gate-a.md`
 | 0. Radar 1.2.10 baseline | Complete | pending | .NET 398/398; Unity EditMode 6/6; PlayMode 68/68 |
 | 1. Interaction contracts | Complete | e9c744b + c5491dd + 07bd238 + current JSON matching fix | Contracts 39/39; full solution 437/437; Radar .NET 398/398 |
 | 2. Provider API/catalog/loader | Complete | 27eb51c + hardening pending | Runtime 34/34; full solution 471/471; Radar .NET 398/398 |
-| 3. Provider manager | Complete | this commit | Runtime 50/50; full solution 487/487; Radar .NET 398/398 |
+| 3. Provider manager | Complete | c247463 + this commit | Runtime 61/61; full solution 498/498; Radar .NET 398/398 |
 | 4. Interaction IPC | Pending | pending | pending |
 | 5. Radar provider | Pending | pending | pending |
 | 6. Bridge/publish | Pending | pending | pending |
@@ -62,3 +62,9 @@ Plan: `docs/superpowers/plans/2026-08-19-blaze-interaction-gate-a.md`
 - Stale-callback GREEN: Runtime passed 50/50 after filtering status callbacks against the manager's current instance under the state lock.
 - Full solution: `dotnet test BlazeInteraction.sln -c Release --no-restore --nologo` passed 487/487 (89 Interaction plus 398 Radar tests).
 - Radar regression: `powershell -ExecutionPolicy Bypass -File scripts\test.ps1 -Configuration Release` passed 398/398.
+- Boundary-review RED: four focused tests failed against `c247463`: admitted frame/status callbacks did not delay Switch, a throwing Cancel subscriber aborted deactivation, and Stop failure restored the old provider to Running. Factory registration, diagnostics, and fault-state tests also failed to compile because those APIs did not exist.
+- Boundary-review GREEN: Runtime passed 60/60 after adding generation-scoped callback admission/drain, per-subscriber exception isolation with diagnostics, fail-closed Stop/Dispose behavior, factory-created fresh instances, disposal retry for unresolved resources, and faulted-manager switch rejection.
+- Boundary-review order evidence: successful replacement is `close admission -> await in-flight callbacks -> Cancel -> unsubscribe -> Stop -> Dispose -> create -> initialize -> start -> ProviderChanged`; captured callbacks from the retired generation cannot forward frames, status, or rejection events.
+- Subscription-cleanup RED: a focused custom-event test failed because a Status event add accessor throwing after the Frame subscription left one handler attached and skipped Stop/Dispose.
+- Subscription-cleanup GREEN: Runtime passed 61/61 after moving subscription into the activation cleanup boundary and isolating event remove accessor failures through diagnostics.
+- Boundary-review full verification: `dotnet test BlazeInteraction.sln -c Release --no-restore --nologo` passed 498/498 (100 Interaction plus 398 Radar tests), and a fresh `scripts/test.ps1 -Configuration Release` passed Radar 398/398.
