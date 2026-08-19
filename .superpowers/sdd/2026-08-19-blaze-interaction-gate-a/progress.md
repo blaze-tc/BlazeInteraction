@@ -5,7 +5,7 @@ Plan: `docs/superpowers/plans/2026-08-19-blaze-interaction-gate-a.md`
 | Task | Status | Commit | Verification |
 |---|---|---|---|
 | 0. Radar 1.2.10 baseline | Complete | pending | .NET 398/398; Unity EditMode 6/6; PlayMode 68/68 |
-| 1. Interaction contracts | Complete | e9c744b + current boundary fix | Contracts 27/27; full solution 425/425; Radar .NET 398/398 |
+| 1. Interaction contracts | Complete | e9c744b + c5491dd + current payload fix | Contracts 34/34; full solution 432/432; Radar .NET 398/398 |
 | 2. Provider API/catalog/loader | Pending | pending | pending |
 | 3. Provider manager | Pending | pending | pending |
 | 4. Interaction IPC | Pending | pending | pending |
@@ -32,3 +32,6 @@ Plan: `docs/superpowers/plans/2026-08-19-blaze-interaction-gate-a.md`
 - Review GREEN: the expanded Contracts suite passed 27/27 after freezing JSON options, snapshotting points, validating construction/JSON boundaries, and hardening typed extension parsing.
 - Full solution: `dotnet test BlazeInteraction.sln -c Release --nologo` passed 425/425 (27 Interaction Contracts plus 398 Radar tests).
 - Radar recheck: one full-script run exposed the pre-existing HelloAck/active-pipe timing race in `Server_PublishesOnlyAfterHelloAckIsWritten`; no Radar diff existed, the isolated test passed 10/10, and a fresh complete `scripts/test.ps1` rerun passed 398/398.
+- Payload review RED: the expanded 34-test suite failed exactly 5 new cases: null point at object/JSON boundaries and missing x, missing y, or both coordinates in `Vector2Data` JSON.
+- Payload review GREEN: Contracts passed 34/34 with null-element rejection and an explicit x/y converter; `(0,0)` and valid typed Hand tracking-point payloads remain accepted.
+- Payload full verification: `dotnet test BlazeInteraction.sln -c Release --nologo` passed 432/432, and a fresh complete `scripts/test.ps1` passed the Radar baseline 398/398.

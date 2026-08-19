@@ -31,6 +31,44 @@ public sealed class InteractionContractTests
     }
 
     [Fact]
+    public void InteractionFrameRejectsNullPointDuringObjectInitialization()
+    {
+        Assert.ThrowsAny<ArgumentException>(() => CreateFrame(
+            InteractionPhase.Move,
+            points: new InteractionPoint[] { null! }));
+    }
+
+    [Fact]
+    public void InteractionFrameJsonRejectsNullPoint()
+    {
+        var validJson = InteractionJson.Serialize(CreateFrame(InteractionPhase.Move));
+        var nullPointJson = validJson.Replace(
+            "\"points\":[{",
+            "\"points\":[null,{",
+            StringComparison.Ordinal);
+
+        Assert.Throws<JsonException>(() => InteractionJson.Deserialize<InteractionFrame>(nullPointJson));
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"x\":0}")]
+    [InlineData("{\"y\":0}")]
+    public void Vector2DataJsonRejectsMissingCoordinates(string json)
+    {
+        Assert.Throws<JsonException>(() => InteractionJson.Deserialize<Vector2Data>(json));
+    }
+
+    [Fact]
+    public void Vector2DataJsonAcceptsExplicitZeroCoordinates()
+    {
+        var position = InteractionJson.Deserialize<Vector2Data>("{\"x\":0,\"y\":0}");
+
+        Assert.Equal(0f, position.X);
+        Assert.Equal(0f, position.Y);
+    }
+
+    [Fact]
     public void ObjectInitializationRejectsMissingScopedIdentities()
     {
         Assert.ThrowsAny<ArgumentException>(() => new ProviderIdentity
@@ -257,6 +295,7 @@ public sealed class InteractionContractTests
     [InlineData("{}")]
     [InlineData("[]")]
     [InlineData("null")]
+    [InlineData("{\"handedness\":\"Right\"}")]
     [InlineData("{\"handedness\":\"Right\",\"trackingPoint\":null}")]
     [InlineData("{\"handedness\":\"Invalid\",\"trackingPoint\":\"PalmCenter\"}")]
     [InlineData("{\"handedness\":2,\"trackingPoint\":\"PalmCenter\"}")]

@@ -57,6 +57,7 @@ public sealed record InteractionSurface
     public required int Order { get; init; }
 }
 
+[JsonConverter(typeof(Vector2DataJsonConverter))]
 public sealed record Vector2Data
 {
     [JsonConstructor]
@@ -198,7 +199,13 @@ public sealed record InteractionFrame
         init
         {
             ArgumentNullException.ThrowIfNull(value);
-            _points = Array.AsReadOnly(value.ToArray());
+            var snapshot = value.ToArray();
+            if (snapshot.Any(static point => point is null))
+            {
+                throw new ArgumentException("The point collection cannot contain null elements.", nameof(value));
+            }
+
+            _points = Array.AsReadOnly(snapshot);
         }
     }
 }
@@ -290,5 +297,84 @@ internal static class InteractionContractGuard
         }
 
         return value;
+    }
+}
+
+internal sealed class Vector2DataJsonConverter : JsonConverter<Vector2Data>
+{
+    public override Vector2Data Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options)
+    {
+        if (reader.TokenType != JsonTokenType.StartObject)
+        {
+            throw new JsonException("A two-dimensional position must be a JSON object.");
+        }
+
+        var hasX = false;
+        var hasY = false;
+        var x = 0f;
+        var y = 0f;
+
+        while (reader.Read())
+        {
+            if (reader.TokenType == JsonTokenType.EndObject)
+            {
+                if (!hasX || !hasY)
+                {
+                    throw new JsonException("A two-dimensional position must explicitly contain both x and y.");
+                }
+
+                return new Vector2Data(x, y);
+            }
+
+            if (reader.TokenType != JsonTokenType.PropertyName)
+            {
+                throw new JsonException("A two-dimensional position contains an invalid JSON token.");
+            }
+
+            var propertyName = reader.GetString();
+            if (!reader.Read())
+            {
+                throw new JsonException("A two-dimensional position ended before its property value.");
+            }
+
+            switch (propertyName)
+            {
+                case "x":
+                    if (hasX || reader.TokenType != JsonTokenType.Number || !reader.TryGetSingle(out x))
+                    {
+                        throw new JsonException("The x coordinate must be one finite JSON number.");
+                    }
+
+                    hasX = true;
+                    break;
+                case "y":
+                    if (hasY || reader.TokenType != JsonTokenType.Number || !reader.TryGetSingle(out y))
+                    {
+                        throw new JsonException("The y coordinate must be one finite JSON number.");
+                    }
+
+                    hasY = true;
+                    break;
+                default:
+                    reader.Skip();
+                    break;
+            }
+        }
+
+        throw new JsonException("A two-dimensional position JSON object was not terminated.");
+    }
+
+    public override void Write(
+        Utf8JsonWriter writer,
+        Vector2Data value,
+        JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        writer.WriteNumber("x", value.X);
+        writer.WriteNumber("y", value.Y);
+        writer.WriteEndObject();
     }
 }
