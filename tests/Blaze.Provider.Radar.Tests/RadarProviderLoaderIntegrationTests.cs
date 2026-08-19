@@ -1,11 +1,53 @@
 using Blaze.Interaction.Contracts;
 using Blaze.Interaction.Provider.Abstractions;
 using Blaze.Interaction.Runtime;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
 
 namespace Blaze.Provider.Radar.Tests;
 
 public sealed class RadarProviderLoaderIntegrationTests
 {
+    [Fact]
+    public async Task DotnetPublishProducesAProviderOnlyTreeWithTheCanonicalRadarProfile()
+    {
+        using var output = new TemporaryDirectory("Blaze.Provider.Radar.Publish.Tests");
+        var repositoryRoot = FindRepositoryRoot();
+        var projectPath = Path.Combine(
+            repositoryRoot,
+            "providers",
+            "Radar",
+            "Blaze.Provider.Radar",
+            "Blaze.Provider.Radar.csproj");
+        var startInfo = new ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = repositoryRoot,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        };
+        foreach (var argument in new[]
+                 {
+                     "publish", projectPath, "-c", "Release", "--no-restore", "--nologo", "-o", output.Path
+                 })
+            startInfo.ArgumentList.Add(argument);
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Could not start dotnet publish.");
+        var standardOutput = process.StandardOutput.ReadToEndAsync();
+        var standardError = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(2));
+        var diagnostics = (await standardOutput) + Environment.NewLine + (await standardError);
+
+        Assert.True(process.ExitCode == 0, diagnostics);
+        Assert.Empty(Directory.EnumerateFiles(output.Path, "*.exe", SearchOption.AllDirectories));
+        Assert.Empty(Directory.EnumerateFiles(
+            output.Path,
+            "RadarBridge.runtimeconfig.json",
+            SearchOption.AllDirectories));
+        Assert.True(File.Exists(Path.Combine(output.Path, "profiles", "radar-default.json")));
+    }
+
     [Fact]
     public void BuildOutputContainsManifestButNotTheLegacyRadarExecutable()
     {
@@ -41,7 +83,7 @@ public sealed class RadarProviderLoaderIntegrationTests
     [Fact]
     public async Task LoaderCreatesAndRunsTheRealRadarProviderInsideItsIndependentLoadContext()
     {
-        using var fixture = new PublishedProviderFixture();
+        using var fixture = new PublishedProviderFixture(useEmptyRadarProfile: true);
         var entry = Assert.Single(new ProviderCatalog().Discover(fixture.Root));
         using var loaded = new ProviderLoader().Load(entry);
         var provider = loaded.Plugin.CreateProvider(
@@ -74,6 +116,19 @@ public sealed class RadarProviderLoaderIntegrationTests
         Assert.Equal(ProviderRuntimeStatus.Stopped, provider.Status);
     }
 
+    [Fact]
+    public void InitializedAndStoppedRadarProviderReleasesItsProviderPluginAndLoadContext()
+    {
+        using var fixture = new PublishedProviderFixture(useEmptyRadarProfile: true);
+
+        var references = CreateInitializeStopDisposeAndUnload(fixture.Root);
+        CollectUntilDead(references.Provider, references.Plugin, references.LoadContext);
+
+        Assert.False(references.Provider.IsAlive);
+        Assert.False(references.Plugin.IsAlive);
+        Assert.False(references.LoadContext.IsAlive);
+    }
+
     private static string ProviderBuildOutput()
     {
         var configuration = new DirectoryInfo(Path.GetDirectoryName(typeof(RadarPlugin).Assembly.Location)!)
@@ -89,6 +144,51 @@ public sealed class RadarProviderLoaderIntegrationTests
             "net8.0-windows");
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (WeakReference Provider, WeakReference Plugin, WeakReference LoadContext)
+        CreateInitializeStopDisposeAndUnload(string providersRoot)
+    {
+        var entry = Assert.Single(new ProviderCatalog().Discover(providersRoot));
+        var loaded = new ProviderLoader().Load(entry);
+        var plugin = loaded.Plugin;
+        var provider = plugin.CreateProvider(
+            new ProviderCreateContext(entry.ProviderDirectory, EmptyServiceProvider.Instance));
+        provider.InitializeAsync(
+            new ProviderInitializationContext(
+            [
+                new InteractionSurface
+                {
+                    SurfaceId = "main",
+                    Name = "Main",
+                    LogicalWidth = 1920,
+                    LogicalHeight = 1080,
+                    IsPrimary = true,
+                    Order = 0
+                }
+            ],
+            EmptyServiceProvider.Instance),
+            CancellationToken.None).GetAwaiter().GetResult();
+        provider.StopAsync(CancellationToken.None).GetAwaiter().GetResult();
+        provider.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        var references = (
+            new WeakReference(provider),
+            new WeakReference(plugin),
+            new WeakReference(loaded.LoadContext));
+        loaded.Dispose();
+        return references;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void CollectUntilDead(params WeakReference[] references)
+    {
+        for (var attempt = 0; attempt < 20 && references.Any(reference => reference.IsAlive); attempt++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+        }
+    }
+
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
@@ -99,13 +199,39 @@ public sealed class RadarProviderLoaderIntegrationTests
 
     private sealed class PublishedProviderFixture : IDisposable
     {
-        public PublishedProviderFixture()
+        public PublishedProviderFixture(bool useEmptyRadarProfile = false)
         {
             Root = Path.Combine(Path.GetTempPath(), "Blaze.Provider.Radar.Loader.Tests", Guid.NewGuid().ToString("N"));
             var radarDirectory = Path.Combine(Root, "Radar");
             Directory.CreateDirectory(radarDirectory);
-            foreach (var source in Directory.EnumerateFiles(ProviderBuildOutput()))
-                File.Copy(source, Path.Combine(radarDirectory, Path.GetFileName(source)));
+            foreach (var source in Directory.EnumerateFiles(ProviderBuildOutput(), "*", SearchOption.AllDirectories))
+            {
+                var relativePath = Path.GetRelativePath(ProviderBuildOutput(), source);
+                var destination = Path.Combine(radarDirectory, relativePath);
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                File.Copy(source, destination);
+            }
+            if (useEmptyRadarProfile)
+            {
+                var profilePath = Path.Combine(radarDirectory, "profiles", "radar-default.json");
+                Directory.CreateDirectory(Path.GetDirectoryName(profilePath)!);
+                File.WriteAllText(
+                    profilePath,
+                    """
+                    {
+                      "schemaVersion": 2,
+                      "ipc": {},
+                      "screens": [
+                        {
+                          "screenId": "main",
+                          "unityDisplayName": "Main",
+                          "isPrimary": true,
+                          "sensors": []
+                        }
+                      ]
+                    }
+                    """);
+            }
         }
 
         public string Root { get; }
@@ -116,9 +242,26 @@ public sealed class RadarProviderLoaderIntegrationTests
         }
     }
 
+    private sealed class TemporaryDirectory : IDisposable
+    {
+        public TemporaryDirectory(string category)
+        {
+            Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), category, Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Path);
+        }
+
+        public string Path { get; }
+
+        public void Dispose()
+        {
+            if (Directory.Exists(Path)) Directory.Delete(Path, recursive: true);
+        }
+    }
+
     private sealed class EmptyServiceProvider : IServiceProvider
     {
         public static EmptyServiceProvider Instance { get; } = new();
         public object? GetService(Type serviceType) => null;
     }
+
 }

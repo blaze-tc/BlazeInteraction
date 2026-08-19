@@ -17,10 +17,18 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Blaze.Provider.Radar.Tests" />
     <None Include="provider.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\..\config\default-profile.json"
+          Link="profiles\radar-default.json"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <Target Name="RemoveLegacyRadarHostFromProviderOutput" AfterTargets="Build">
     <Delete Files="$(TargetDir)RadarBridge.exe;$(TargetDir)RadarBridge.runtimeconfig.json" />
+  </Target>
+
+  <Target Name="RemoveLegacyRadarHostFromProviderPublish" AfterTargets="Publish">
+    <Delete Files="$(PublishDir)RadarBridge.exe;$(PublishDir)RadarBridge.runtimeconfig.json" />
   </Target>
 
 </Project>

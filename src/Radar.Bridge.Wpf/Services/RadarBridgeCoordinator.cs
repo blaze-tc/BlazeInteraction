@@ -561,7 +561,19 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     {
         if (_sendPointerBatchAsync is not null)
         {
-            var seamSent = await _sendPointerBatchAsync(batch.Payload, cancellationToken).ConfigureAwait(false);
+            bool seamSent;
+            try
+            {
+                seamSent = await _sendPointerBatchAsync(batch.Payload, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                await ReleaseTransitionAsync(batch, cancellationToken).ConfigureAwait(false);
+                var error = $"Interaction output failed: {exception.Message}";
+                SetUnityStatus(UnityStatus with { LastError = error });
+                PublishLog($"[GLOBAL/PROVIDER] {error}");
+                return;
+            }
             if (!seamSent)
             {
                 await ReleaseTransitionAsync(batch, cancellationToken).ConfigureAwait(false);
@@ -1263,10 +1275,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
 
     private static RadarAppConfiguration CloneConfiguration(RadarAppConfiguration source)
     {
-        var json = System.Text.Json.JsonSerializer.Serialize(source);
-        var clone = System.Text.Json.JsonSerializer.Deserialize<RadarAppConfiguration>(json) ?? throw new InvalidOperationException("Could not stage radar configuration.");
-        clone.PreservePersistenceDiagnosticsFrom(source);
-        return clone;
+        return RadarConfigurationStore.Clone(source);
     }
 
     private void EnsureConfigurationWritable()

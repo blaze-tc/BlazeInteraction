@@ -21,6 +21,27 @@ public sealed class RadarConfigurationTests
     }
 
     [Fact]
+    public void Clone_CreatesAnIndependentConfigurationWithTheSamePersistedValues()
+    {
+        var source = RadarAppConfiguration.CreateDefault();
+        source.Screens[0].UnityDisplayName = "Front";
+        source.Screens[0].Sensors[0].Device.DeviceModel = RadarModel.F20;
+        source.LoadWarnings.Add("diagnostic");
+
+        var clone = RadarConfigurationStore.Clone(source);
+
+        Assert.NotSame(source, clone);
+        Assert.NotSame(source.Screens[0], clone.Screens[0]);
+        Assert.NotSame(source.Screens[0].Sensors[0], clone.Screens[0].Sensors[0]);
+        Assert.Equal("Front", clone.Screens[0].UnityDisplayName);
+        Assert.Equal(RadarModel.F20, clone.Screens[0].Sensors[0].Device.DeviceModel);
+        Assert.Equal(["diagnostic"], clone.LoadWarnings);
+
+        clone.Screens[0].UnityDisplayName = "Changed";
+        Assert.Equal("Front", source.Screens[0].UnityDisplayName);
+    }
+
+    [Fact]
     public void Validator_ClampsMaximumDistanceToSelectedModel()
     {
         var f10 = RadarAppConfiguration.CreateDefault();

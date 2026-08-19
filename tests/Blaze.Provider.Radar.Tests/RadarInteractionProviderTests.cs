@@ -188,6 +188,72 @@ public sealed class RadarInteractionProviderTests
         await provider.DisposeAsync();
     }
 
+    [Fact]
+    public async Task ConcurrentDisposeCallsWaitForTheSameSingleCleanup()
+    {
+        var runtime = new FakeRadarProviderRuntime();
+        runtime.BlockStop();
+        var provider = CreateProvider(runtime);
+        await provider.InitializeAsync(InitializationContext(Surface("front", true, 0)), CancellationToken.None);
+        await provider.StartAsync(CancellationToken.None);
+
+        var first = provider.DisposeAsync().AsTask();
+        await runtime.StopEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var second = provider.DisposeAsync().AsTask();
+
+        Assert.False(second.IsCompleted);
+        runtime.ReleaseStop();
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal(1, runtime.StopCallCount);
+        Assert.Equal(1, runtime.DisposeCallCount);
+        Assert.Equal(ProviderRuntimeStatus.Stopped, provider.Status);
+    }
+
+    [Fact]
+    public async Task ConcurrentDisposeCallsObserveTheSameCleanupFailure()
+    {
+        var cleanupFailure = new IOException("dispose failed");
+        var runtime = new FakeRadarProviderRuntime { DisposeException = cleanupFailure };
+        runtime.BlockStop();
+        var provider = CreateProvider(runtime);
+        await provider.InitializeAsync(InitializationContext(Surface("front", true, 0)), CancellationToken.None);
+        await provider.StartAsync(CancellationToken.None);
+
+        var first = provider.DisposeAsync().AsTask();
+        await runtime.StopEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var second = provider.DisposeAsync().AsTask();
+        Assert.False(second.IsCompleted);
+        runtime.ReleaseStop();
+
+        var firstFailure = await Record.ExceptionAsync(() => first);
+        var secondFailure = await Record.ExceptionAsync(() => second);
+        Assert.Same(cleanupFailure, firstFailure);
+        Assert.Same(firstFailure, secondFailure);
+        Assert.Equal(1, runtime.StopCallCount);
+        Assert.Equal(1, runtime.DisposeCallCount);
+        Assert.Equal(ProviderRuntimeStatus.Faulted, provider.Status);
+    }
+
+    [Fact]
+    public async Task StopRacingDisposeCompletesOneStopAndOneDisposeWithoutSemaphoreTeardownFaults()
+    {
+        var runtime = new FakeRadarProviderRuntime();
+        runtime.BlockStop();
+        var provider = CreateProvider(runtime);
+        await provider.InitializeAsync(InitializationContext(Surface("front", true, 0)), CancellationToken.None);
+        await provider.StartAsync(CancellationToken.None);
+
+        var stop = provider.StopAsync(CancellationToken.None);
+        await runtime.StopEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var dispose = provider.DisposeAsync().AsTask();
+        runtime.ReleaseStop();
+
+        await Task.WhenAll(stop, dispose).WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal(1, runtime.StopCallCount);
+        Assert.Equal(1, runtime.DisposeCallCount);
+        Assert.Equal(ProviderRuntimeStatus.Stopped, provider.Status);
+    }
+
     private static RadarInteractionProvider CreateProvider(FakeRadarProviderRuntime runtime) => new(
         "radar-instance-a",
         (_, publish, _) =>
@@ -219,12 +285,15 @@ public sealed class RadarInteractionProviderTests
     {
         public Func<PointerBatchPayload, CancellationToken, Task<bool>> Publish { get; set; } = null!;
         public Exception? StartException { get; init; }
+        public Exception? DisposeException { get; init; }
         public int StartCallCount { get; private set; }
         public int StopCallCount { get; private set; }
         public int DisposeCallCount { get; private set; }
+        public TaskCompletionSource StopEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public CancellationToken SimulationToken { get; private set; }
         public (string ScreenId, string SensorId, string Path, double Speed, bool Loop, CancellationToken Token) ReplayRequest { get; private set; }
         public List<string> ReplayOperations { get; } = [];
+        private TaskCompletionSource? _stopRelease;
 
         public Task<bool> PublishAsync(PointerBatchPayload batch) => Publish(batch, CancellationToken.None);
 
@@ -234,11 +303,17 @@ public sealed class RadarInteractionProviderTests
             return StartException is null ? Task.CompletedTask : Task.FromException(StartException);
         }
 
-        public Task StopAsync(CancellationToken cancellationToken)
+        public async Task StopAsync(CancellationToken cancellationToken)
         {
             StopCallCount++;
-            return Task.CompletedTask;
+            StopEntered.TrySetResult();
+            if (_stopRelease is not null)
+                await _stopRelease.Task.WaitAsync(cancellationToken);
         }
+
+        public void BlockStop() => _stopRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void ReleaseStop() => _stopRelease?.TrySetResult();
 
         public Task StartAllSimulationAsync(CancellationToken cancellationToken)
         {
@@ -267,7 +342,9 @@ public sealed class RadarInteractionProviderTests
         public ValueTask DisposeAsync()
         {
             DisposeCallCount++;
-            return ValueTask.CompletedTask;
+            return DisposeException is null
+                ? ValueTask.CompletedTask
+                : ValueTask.FromException(DisposeException);
         }
     }
 

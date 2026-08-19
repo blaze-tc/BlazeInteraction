@@ -31,7 +31,9 @@ public sealed class RadarInteractionProvider : IInteractionProvider
     private readonly RadarProviderRuntimeFactory _runtimeFactory;
     private readonly RadarFrameAdapter _adapter;
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
+    private readonly object _disposeGate = new();
     private IRadarProviderRuntime? _runtime;
+    private Lazy<Task>? _disposeOperation;
     private int _status = (int)ProviderRuntimeStatus.Created;
     private int _disposed;
 
@@ -202,9 +204,22 @@ public sealed class RadarInteractionProvider : IInteractionProvider
 
     public Task StopReplayAsync(string screenId, string sensorId) => RunningRuntime().StopReplayAsync(screenId, sensorId);
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        Lazy<Task> operation;
+        lock (_disposeGate)
+        {
+            operation = _disposeOperation ??= new Lazy<Task>(
+                DisposeCoreAsync,
+                LazyThreadSafetyMode.ExecutionAndPublication);
+        }
+
+        return new ValueTask(operation.Value);
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        Volatile.Write(ref _disposed, 1);
         Exception? failure = null;
         await _lifecycle.WaitAsync().ConfigureAwait(false);
         try
@@ -243,7 +258,6 @@ public sealed class RadarInteractionProvider : IInteractionProvider
         finally
         {
             _lifecycle.Release();
-            _lifecycle.Dispose();
         }
 
         if (failure is not null) throw failure;
@@ -457,7 +471,7 @@ public sealed class RadarInteractionProvider : IInteractionProvider
             string providerDirectory,
             CancellationToken cancellationToken)
         {
-            var profilePath = Path.Combine(providerDirectory, "profiles", "default-profile.json");
+            var profilePath = Path.Combine(providerDirectory, "profiles", "radar-default.json");
             return File.Exists(profilePath)
                 ? await RadarConfigurationStore.LoadAsync(profilePath, cancellationToken).ConfigureAwait(false)
                 : RadarAppConfiguration.CreateDefault();

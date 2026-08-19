@@ -90,6 +90,61 @@ public sealed class RadarBridgeCoordinatorTests
     }
 
     [Fact]
+    public async Task Coordinator_ProviderOutputFailureReleasesTransitionAndSchedulerRetriesIt()
+    {
+        var configuration = new RadarAppConfiguration
+        {
+            Screens = [ScreenConfiguration("front", "f1", 1920, 1080)]
+        };
+        configuration.Screens[0].Tracking.ConfirmFrames = 1;
+        var factory = new FakePipelineFactory();
+        var firstFailure = new TaskCompletionSource<PointerBatchPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var retryDelivered = new TaskCompletionSource<PointerBatchPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var logs = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var transitionAttempts = 0;
+        await using var coordinator = new RadarBridgeCoordinator(
+            configuration,
+            NullLogger<RadarBridgeCoordinator>.Instance,
+            factory,
+            sendPointerBatchAsync: (batch, _) =>
+            {
+                var isTransition = batch.Screens.Any(frame =>
+                    frame.Screen.ScreenId == "front"
+                    && frame.Pointers.Any(pointer => pointer.Phase == RadarPointerPhase.Up));
+                if (!isTransition) return Task.FromResult(true);
+
+                if (Interlocked.Increment(ref transitionAttempts) == 1)
+                {
+                    firstFailure.TrySetResult(batch);
+                    throw new IOException("interaction sink failed");
+                }
+
+                retryDelivered.TrySetResult(batch);
+                return Task.FromResult(true);
+            },
+            enableLegacyIpc: false);
+        coordinator.LogReceived += logs.Enqueue;
+        await coordinator.ApplyUnityTopologyAsync(Hello(Screen("front", "Front", true, 1920, 1080, 0)));
+        factory["front", "f1"].Publish(Detection("f1", 400, 300));
+        Assert.Equal(
+            RadarPointerPhase.Down,
+            Assert.Single(coordinator.TickForTest(DateTimeOffset.UnixEpoch.AddSeconds(1)).Screens.Single().Pointers).Phase);
+        await coordinator.ApplyUnityTopologyAsync(Hello(Screen("left", "Left", true, 1920, 1080, 0)));
+
+        await coordinator.StartInfrastructureAsync();
+
+        var failed = await firstFailure.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var retried = await retryDelivered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal(RadarPointerPhase.Up, Assert.Single(failed.Screens.Single(frame => frame.Screen.ScreenId == "front").Pointers).Phase);
+        Assert.Equal(RadarPointerPhase.Up, Assert.Single(retried.Screens.Single(frame => frame.Screen.ScreenId == "front").Pointers).Phase);
+        Assert.Equal(2, Volatile.Read(ref transitionAttempts));
+        Assert.Contains(logs, message => message.Contains("interaction output failed", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("interaction sink failed", coordinator.UnityStatus.LastError, StringComparison.OrdinalIgnoreCase);
+
+        await coordinator.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(2));
+    }
+
+    [Fact]
     public async Task Coordinator_PublishesAllEnabledScreensAndMergesFrontOverlap()
     {
         var factory = new FakePipelineFactory();

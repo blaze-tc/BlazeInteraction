@@ -8,6 +8,7 @@ namespace Yuexin.Radar.Configuration;
 public static class RadarConfigurationStore
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
+    private static readonly RadarConfigurationJsonSerializerContext JsonContext = new(JsonOptions);
     private static readonly object SaveLocksGate = new();
     private static readonly Dictionary<string, SaveLockEntry> SaveLocks = new(StringComparer.OrdinalIgnoreCase);
 
@@ -95,7 +96,7 @@ public static class RadarConfigurationStore
             {
                 var directory = Path.GetDirectoryName(targetPath)!;
                 Directory.CreateDirectory(directory);
-                var json = JsonSerializer.Serialize(configuration, JsonOptions);
+                var json = JsonSerializer.Serialize(configuration, JsonContext.RadarAppConfiguration);
                 var temporaryPath = Path.Combine(directory, $".{Path.GetFileName(targetPath)}.{Guid.NewGuid():N}.tmp");
                 try
                 {
@@ -120,6 +121,16 @@ public static class RadarConfigurationStore
 
     public static string GetDefaultUserConfigurationPath() => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Yuexin", "RadarBridge", "config.json");
+
+    public static RadarAppConfiguration Clone(RadarAppConfiguration source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(source, JsonContext.RadarAppConfiguration);
+        var clone = JsonSerializer.Deserialize(bytes, JsonContext.RadarAppConfiguration)
+            ?? throw new InvalidOperationException("Could not clone the Radar configuration.");
+        clone.PreservePersistenceDiagnosticsFrom(source);
+        return clone;
+    }
 
     private static SaveLockEntry RentSaveLock(string targetPath)
     {
@@ -163,7 +174,7 @@ public static class RadarConfigurationStore
     {
         try
         {
-            var configuration = JsonSerializer.Deserialize<RadarAppConfiguration>(GetJsonBytes(bytes), JsonOptions) ?? RadarAppConfiguration.CreateDefault();
+            var configuration = JsonSerializer.Deserialize(GetJsonBytes(bytes), JsonContext.RadarAppConfiguration) ?? RadarAppConfiguration.CreateDefault();
             return NormalizeLoadedConfiguration(configuration);
         }
         catch (JsonException exception)
@@ -176,7 +187,7 @@ public static class RadarConfigurationStore
     {
         try
         {
-            var legacy = JsonSerializer.Deserialize<LegacyRadarAppConfiguration>(GetJsonBytes(bytes), JsonOptions) ?? new LegacyRadarAppConfiguration();
+            var legacy = JsonSerializer.Deserialize(GetJsonBytes(bytes), JsonContext.LegacyRadarAppConfiguration) ?? new LegacyRadarAppConfiguration();
             if (!TryValidateLegacySections(legacy, out var diagnostic)) return CreateDiagnosticConfiguration(diagnostic);
             return NormalizeLoadedConfiguration(MigrateSchemaOne(legacy));
         }
