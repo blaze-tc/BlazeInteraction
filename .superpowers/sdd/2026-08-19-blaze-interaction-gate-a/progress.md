@@ -6,7 +6,7 @@ Plan: `docs/superpowers/plans/2026-08-19-blaze-interaction-gate-a.md`
 |---|---|---|---|
 | 0. Radar 1.2.10 baseline | Complete | pending | .NET 398/398; Unity EditMode 6/6; PlayMode 68/68 |
 | 1. Interaction contracts | Complete | e9c744b + c5491dd + 07bd238 + current JSON matching fix | Contracts 39/39; full solution 437/437; Radar .NET 398/398 |
-| 2. Provider API/catalog/loader | Pending | pending | pending |
+| 2. Provider API/catalog/loader | Complete | pending (this commit) | Runtime 14/14; full solution 451/451; Radar .NET 398/398 |
 | 3. Provider manager | Pending | pending | pending |
 | 4. Interaction IPC | Pending | pending | pending |
 | 5. Radar provider | Pending | pending | pending |
@@ -37,3 +37,13 @@ Plan: `docs/superpowers/plans/2026-08-19-blaze-interaction-gate-a.md`
 - Payload full verification: `dotnet test BlazeInteraction.sln -c Release --nologo` passed 432/432, and a fresh complete `scripts/test.ps1` passed the Radar baseline 398/398.
 - JSON matching RED: the expanded 39-test suite failed exactly 4 cases for PascalCase/mixed-case coordinates and x/X or y/Y duplicate detection; exact matching with case-insensitivity disabled already passed.
 - JSON matching GREEN: Contracts passed 39/39 after honoring `JsonSerializerOptions.PropertyNameCaseInsensitive`; full solution passed 437/437 and a fresh Radar script passed 398/398.
+
+## Task 2 evidence
+
+- RED: `dotnet test tests\Blaze.Interaction.Runtime.Tests\Blaze.Interaction.Runtime.Tests.csproj -c Release --nologo` exited 1 because the Provider Abstractions and Runtime projects and requested loader APIs did not exist.
+- GREEN: the same targeted command passed 14/14 after adding provider-neutral lifecycle interfaces, resilient manifest discovery, typed load failures, and one collectible `AssemblyLoadContext` plus `AssemblyDependencyResolver` per provider.
+- Isolation fixtures: two providers loaded `Blaze.TestProviders.SharedDependency` versions 1.0.0.0 and 2.0.0.0 concurrently from different collectible contexts; Contracts and Provider Abstractions resolved from `AssemblyLoadContext.Default`.
+- Native resolution: the provider-local `native/<rid>` probe was exercised through the real unmanaged-load override and selected the fixture-local DLL path.
+- Clean-run test-fixture correction: the first clean solution run exposed a parallel xUnit temporary-directory cleanup race, not a loader assertion failure; process-unique roots removed the race and the Runtime suite returned to 14/14.
+- Full solution: `dotnet test BlazeInteraction.sln -c Release --nologo` passed 451/451 (53 Interaction plus 398 Radar tests).
+- Radar regression: `powershell -ExecutionPolicy Bypass -File scripts\test.ps1 -Configuration Release` passed 398/398.
