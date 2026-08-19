@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Blaze.Provider.Radar</AssemblyName>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\src\Blaze.Interaction.Contracts\Blaze.Interaction.Contracts.csproj" />
+    <ProjectReference Include="..\..\..\src\Blaze.Interaction.Provider.Abstractions\Blaze.Interaction.Provider.Abstractions.csproj" />
+    <ProjectReference Include="..\..\..\src\Radar.Bridge.Wpf\Radar.Bridge.Wpf.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Blaze.Provider.Radar.Tests" />
+    <None Include="provider.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <Target Name="RemoveLegacyRadarHostFromProviderOutput" AfterTargets="Build">
+    <Delete Files="$(TargetDir)RadarBridge.exe;$(TargetDir)RadarBridge.runtimeconfig.json" />
+  </Target>
+
+</Project>

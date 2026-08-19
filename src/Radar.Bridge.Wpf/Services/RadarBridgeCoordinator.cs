@@ -18,6 +18,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private readonly Func<RadarAppConfiguration, CancellationToken, Task> _persistConfigurationAsync;
     private readonly Func<PointerBatchPayload, CancellationToken, Task<bool>>? _sendPointerBatchAsync;
     private readonly int? _expectedUnityProcessId;
+    private readonly bool _enableLegacyIpc;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
     private readonly SemaphoreSlim _topologyLock = new(1, 1);
@@ -48,16 +49,20 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         string? configurationPath = null,
         Func<RadarAppConfiguration, CancellationToken, Task>? persistConfigurationAsync = null,
         Func<PointerBatchPayload, CancellationToken, Task<bool>>? sendPointerBatchAsync = null,
-        int? expectedUnityProcessId = null)
+        int? expectedUnityProcessId = null,
+        bool enableLegacyIpc = true)
     {
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _pipelineFactory = pipelineFactory ?? throw new ArgumentNullException(nameof(pipelineFactory));
         _configurationPath = configurationPath;
         _persistConfigurationAsync = persistConfigurationAsync ?? PersistWithStoreAsync;
+        if (!enableLegacyIpc && sendPointerBatchAsync is null)
+            throw new ArgumentException("Provider mode requires an interaction output callback.", nameof(sendPointerBatchAsync));
         _sendPointerBatchAsync = sendPointerBatchAsync;
         if (expectedUnityProcessId is <= 0) throw new ArgumentOutOfRangeException(nameof(expectedUnityProcessId));
         _expectedUnityProcessId = expectedUnityProcessId;
+        _enableLegacyIpc = enableLegacyIpc;
     }
 
     public event Action<RadarSensorRuntimeSnapshot>? SensorSnapshotUpdated;
@@ -78,22 +83,28 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         {
             ThrowIfDisposed();
             if (Volatile.Read(ref _started) != 0) return;
-            var server = new RadarPipeServer(new RadarPipeServerOptions
+            if (_enableLegacyIpc)
             {
-                PipeName = _configuration.Ipc.PipeName,
-                HeartbeatTimeout = TimeSpan.FromSeconds(3),
-                ExpectedClientProcessId = _expectedUnityProcessId,
-                AuthenticateHelloAsync = AuthenticateHelloAsync
-            });
-            server.ClientConnected += OnUnityConnected;
-            server.ClientDisconnected += OnUnityDisconnected;
-            server.ClientError += OnPipeError;
-            server.MessageReceived += OnPipeMessage;
-            _pipeServer = server;
-            _pipeTask = server.RunAsync(_lifetime.Token);
+                var server = new RadarPipeServer(new RadarPipeServerOptions
+                {
+                    PipeName = _configuration.Ipc.PipeName,
+                    HeartbeatTimeout = TimeSpan.FromSeconds(3),
+                    ExpectedClientProcessId = _expectedUnityProcessId,
+                    AuthenticateHelloAsync = AuthenticateHelloAsync
+                });
+                server.ClientConnected += OnUnityConnected;
+                server.ClientDisconnected += OnUnityDisconnected;
+                server.ClientError += OnPipeError;
+                server.MessageReceived += OnPipeMessage;
+                _pipeServer = server;
+                _pipeTask = server.RunAsync(_lifetime.Token);
+            }
             _schedulerTask = SchedulerAsync(_lifetime.Token);
             Volatile.Write(ref _started, 1);
-            PublishLog($"[GLOBAL/IPC] server started: {_configuration.Ipc.PipeName} / protocol v{IpcProtocolVersion.Current}");
+            if (_enableLegacyIpc)
+                PublishLog($"[GLOBAL/IPC] server started: {_configuration.Ipc.PipeName} / protocol v{IpcProtocolVersion.Current}");
+            else
+                PublishLog("[GLOBAL/PROVIDER] interaction output scheduler started without legacy Radar IPC.");
         }
         catch
         {

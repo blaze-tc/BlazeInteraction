@@ -44,6 +44,52 @@ public sealed class RadarBridgeCoordinatorTests
     }
 
     [Fact]
+    public async Task Coordinator_ProviderModeStartsOutputSchedulerWithoutOpeningLegacyRadarPipe()
+    {
+        var configuration = new RadarAppConfiguration
+        {
+            Screens = [ScreenConfiguration("front", "f1", 1920, 1080)]
+        };
+        configuration.Ipc.PipeName = "RadarControl.ProviderMode.Tests." + Guid.NewGuid().ToString("N");
+        var factory = new FakePipelineFactory();
+        var firstBatch = new TaskCompletionSource<PointerBatchPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var coordinator = new RadarBridgeCoordinator(
+            configuration,
+            NullLogger<RadarBridgeCoordinator>.Instance,
+            factory,
+            sendPointerBatchAsync: (batch, _) =>
+            {
+                firstBatch.TrySetResult(batch);
+                return Task.FromResult(true);
+            },
+            enableLegacyIpc: false);
+        await coordinator.ApplyUnityTopologyAsync(Hello(Screen("front", "Front", true, 1920, 1080, 0)));
+
+        await coordinator.StartInfrastructureAsync();
+
+        var batch = await firstBatch.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal("front", Assert.Single(batch.Screens).Screen.ScreenId);
+        Assert.False(coordinator.UnityStatus.IsConnected);
+        await using var client = new NamedPipeClientStream(
+            ".",
+            configuration.Ipc.PipeName,
+            PipeDirection.InOut,
+            PipeOptions.Asynchronous);
+        using var connectTimeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.ConnectAsync(connectTimeout.Token));
+    }
+
+    [Fact]
+    public void Coordinator_ProviderModeRequiresAnExplicitInteractionOutputSeam()
+    {
+        Assert.Throws<ArgumentException>(() => new RadarBridgeCoordinator(
+            new RadarAppConfiguration(),
+            NullLogger<RadarBridgeCoordinator>.Instance,
+            new FakePipelineFactory(),
+            enableLegacyIpc: false));
+    }
+
+    [Fact]
     public async Task Coordinator_PublishesAllEnabledScreensAndMergesFrontOverlap()
     {
         var factory = new FakePipelineFactory();
