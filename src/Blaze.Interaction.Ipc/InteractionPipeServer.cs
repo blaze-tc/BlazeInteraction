@@ -1,4 +1,8 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using System.IO.Pipes;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 using Blaze.Interaction.Contracts;
 
 namespace Blaze.Interaction.Ipc;
@@ -11,9 +15,24 @@ public sealed class InteractionPipeServerOptions
 
     public int ControlQueueCapacity { get; init; } = 64;
 
+    public TimeSpan HandshakeTimeout { get; init; } = TimeSpan.FromSeconds(5);
+
+    public TimeSpan HeartbeatTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
+    public TimeSpan SendTimeout { get; init; } = TimeSpan.FromSeconds(2);
+
+    public int? ExpectedClientProcessId { get; init; }
+
+    public Func<NamedPipeServerStream, InteractionPipeClientIdentity>? ResolveClientIdentity { get; init; }
+
+    internal Func<NamedPipeServerStream, Stream> CreateAuthenticatedSessionStream { get; init; } =
+        static pipe => pipe;
+
     public Func<HelloPayload, CancellationToken, ValueTask<HelloAckPayload>> CreateHelloAckAsync { get; init; } =
         static (_, _) => ValueTask.FromResult(new HelloAckPayload("1.0.0", null, []));
 }
+
+public sealed record InteractionPipeClientIdentity(int ProcessId, int SessionId);
 
 public sealed class InteractionClientConnectedEventArgs(HelloPayload hello) : EventArgs
 {
@@ -48,7 +67,19 @@ public sealed class InteractionPipeServer : IAsyncDisposable
             throw new ArgumentOutOfRangeException(nameof(options), "The control queue capacity must be positive.");
         }
 
+        if (_options.ExpectedClientProcessId is <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options),
+                "The expected client process ID must be positive when supplied.");
+        }
+
+        ValidateTimeout(_options.HandshakeTimeout, nameof(_options.HandshakeTimeout));
+        ValidateTimeout(_options.HeartbeatTimeout, nameof(_options.HeartbeatTimeout));
+        ValidateTimeout(_options.SendTimeout, nameof(_options.SendTimeout));
+
         ArgumentNullException.ThrowIfNull(_options.CreateHelloAckAsync);
+        ArgumentNullException.ThrowIfNull(_options.CreateAuthenticatedSessionStream);
     }
 
     public event EventHandler<InteractionClientConnectedEventArgs>? ClientConnected;
@@ -177,18 +208,25 @@ public sealed class InteractionPipeServer : IAsyncDisposable
             PipeDirection.InOut,
             1,
             PipeTransmissionMode.Byte,
-            PipeOptions.Asynchronous);
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
     }
 
     private async Task HandleClientAsync(NamedPipeServerStream pipe, CancellationToken serverCancellation)
     {
         InteractionEnvelope first;
+        using var handshakeCancellation = CancellationTokenSource.CreateLinkedTokenSource(serverCancellation);
+        handshakeCancellation.CancelAfter(_options.HandshakeTimeout);
         try
         {
             first = await InteractionIpcStream.ReadAsync(
                 pipe,
-                serverCancellation,
+                handshakeCancellation.Token,
                 _options.MaximumPayloadLength).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (
+            handshakeCancellation.IsCancellationRequested && !serverCancellation.IsCancellationRequested)
+        {
+            return;
         }
         catch (EndOfStreamException)
         {
@@ -247,6 +285,35 @@ public sealed class InteractionPipeServer : IAsyncDisposable
             return;
         }
 
+        InteractionPipeClientIdentity clientIdentity;
+        try
+        {
+            clientIdentity = (_options.ResolveClientIdentity ?? ResolveClientIdentity)(pipe);
+        }
+        catch (Exception exception) when (exception is
+            Win32Exception or InvalidDataException or PlatformNotSupportedException)
+        {
+            await TryWriteErrorAsync(
+                pipe,
+                first.Sequence,
+                "client_identity_unverified",
+                "The named-pipe client identity could not be verified.",
+                serverCancellation).ConfigureAwait(false);
+            return;
+        }
+
+        var identityError = ValidateClientIdentity(hello, clientIdentity);
+        if (identityError is not null)
+        {
+            await TryWriteErrorAsync(
+                pipe,
+                first.Sequence,
+                identityError.Value.Code,
+                identityError.Value.Message,
+                serverCancellation).ConfigureAwait(false);
+            return;
+        }
+
         HelloAckPayload acknowledgement;
         try
         {
@@ -273,11 +340,16 @@ public sealed class InteractionPipeServer : IAsyncDisposable
             InteractionEnvelope.Create(InteractionMessageType.HelloAck, first.Sequence, acknowledgement),
             serverCancellation).ConfigureAwait(false);
 
+        var sessionStream = _options.CreateAuthenticatedSessionStream(pipe)
+            ?? throw new InvalidOperationException("The authenticated session stream factory returned null.");
         await using var session = new InteractionPipeSession(
-            pipe,
+            sessionStream,
             _options.ControlQueueCapacity,
             _options.MaximumPayloadLength,
-            serverCancellation);
+            serverCancellation,
+            _options.HeartbeatTimeout,
+            _options.SendTimeout,
+            pipe.Dispose);
         lock (_sessionLock)
         {
             _session = session;
@@ -340,16 +412,115 @@ public sealed class InteractionPipeServer : IAsyncDisposable
             return ("invalid_hello", "Hello requires a Unity PID, Unity version, SDK version, and surface list.");
         }
 
-        if (hello.Surfaces.Count == 0 ||
+        if (hello.Surfaces.Count == 0 || hello.Surfaces.Any(static surface => surface is null))
+        {
+            return ("invalid_surface_topology", "Surface topology must contain non-null surface definitions.");
+        }
+
+        if (hello.Surfaces.Any(static surface =>
+                string.IsNullOrWhiteSpace(surface.SurfaceId) ||
+                string.IsNullOrWhiteSpace(surface.Name) ||
+                surface.LogicalWidth <= 0 ||
+                surface.LogicalHeight <= 0 ||
+                surface.Order < 0) ||
             hello.Surfaces.GroupBy(static surface => surface.SurfaceId, StringComparer.Ordinal)
+                .Any(static group => group.Count() > 1) ||
+            hello.Surfaces.GroupBy(static surface => surface.Order)
                 .Any(static group => group.Count() > 1) ||
             hello.Surfaces.Count(static surface => surface.IsPrimary) != 1)
         {
-            return ("invalid_surface_topology", "Surface IDs must be unique and exactly one surface must be primary.");
+            return (
+                "invalid_surface_topology",
+                "Surfaces must be valid, IDs and orders must be unique, and exactly one surface must be primary.");
         }
 
         return null;
     }
+
+    private static void ValidateTimeout(TimeSpan timeout, string propertyName)
+    {
+        if (timeout <= TimeSpan.Zero || timeout == Timeout.InfiniteTimeSpan)
+        {
+            throw new ArgumentOutOfRangeException(
+                propertyName,
+                timeout,
+                "The timeout must be positive and finite.");
+        }
+    }
+
+    private (string Code, string Message)? ValidateClientIdentity(
+        HelloPayload hello,
+        InteractionPipeClientIdentity identity)
+    {
+        if (hello.UnityPid != identity.ProcessId)
+        {
+            return (
+                "client_identity_mismatch",
+                $"Hello PID {hello.UnityPid} does not match verified pipe client PID {identity.ProcessId}.");
+        }
+
+        using var currentProcess = Process.GetCurrentProcess();
+        if (identity.SessionId != currentProcess.SessionId)
+        {
+            return (
+                "client_session_mismatch",
+                $"Pipe client session {identity.SessionId} does not match Bridge session {currentProcess.SessionId}.");
+        }
+
+        if (_options.ExpectedClientProcessId is int expectedProcessId &&
+            identity.ProcessId != expectedProcessId)
+        {
+            return (
+                "unexpected_client_process",
+                $"Verified pipe client PID {identity.ProcessId} does not match expected PID {expectedProcessId}.");
+        }
+
+        return null;
+    }
+
+    private static InteractionPipeClientIdentity ResolveClientIdentity(NamedPipeServerStream pipe)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException(
+                "Secure Interaction named-pipe authentication requires Windows.");
+        }
+
+        if (!GetNamedPipeClientProcessId(pipe.SafePipeHandle, out var clientProcessId))
+        {
+            throw new Win32Exception(
+                Marshal.GetLastWin32Error(),
+                "Could not resolve the named-pipe client process ID.");
+        }
+
+        if (!GetNamedPipeClientSessionId(pipe.SafePipeHandle, out var clientSessionId))
+        {
+            throw new Win32Exception(
+                Marshal.GetLastWin32Error(),
+                "Could not resolve the named-pipe client session ID.");
+        }
+
+        if (clientProcessId > int.MaxValue || clientSessionId > int.MaxValue)
+        {
+            throw new InvalidDataException("The named-pipe client identity is outside the supported range.");
+        }
+
+        return new InteractionPipeClientIdentity(
+            checked((int)clientProcessId),
+            checked((int)clientSessionId));
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetNamedPipeClientProcessId(
+        SafePipeHandle pipe,
+        out uint clientProcessId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetNamedPipeClientSessionId(
+        SafePipeHandle pipe,
+        out uint clientSessionId);
 
     private static async ValueTask TryWriteErrorAsync(
         Stream stream,
@@ -378,7 +549,11 @@ internal sealed class InteractionPipeSession : IAsyncDisposable
 {
     private readonly Stream _stream;
     private readonly int _maximumPayloadLength;
+    private readonly TimeSpan _heartbeatTimeout;
+    private readonly TimeSpan _sendTimeout;
+    private readonly Action? _abortConnection;
     private readonly CancellationTokenSource _cancellation;
+    private readonly CancellationTokenRegistration _cancellationRegistration;
     private int _active = 1;
     private int _disposed;
 
@@ -386,12 +561,21 @@ internal sealed class InteractionPipeSession : IAsyncDisposable
         Stream stream,
         int controlQueueCapacity,
         int maximumPayloadLength,
-        CancellationToken serverCancellation)
+        CancellationToken serverCancellation,
+        TimeSpan? heartbeatTimeout = null,
+        TimeSpan? sendTimeout = null,
+        Action? abortConnection = null)
     {
         _stream = stream;
         _maximumPayloadLength = maximumPayloadLength;
+        _heartbeatTimeout = heartbeatTimeout ?? TimeSpan.FromSeconds(10);
+        _sendTimeout = sendTimeout ?? TimeSpan.FromSeconds(2);
+        _abortConnection = abortConnection;
         _cancellation = CancellationTokenSource.CreateLinkedTokenSource(serverCancellation);
         Outbound = new InteractionOutboundQueue(controlQueueCapacity);
+        _cancellationRegistration = _cancellation.Token.Register(
+            static state => ((InteractionPipeSession)state!).Deactivate(),
+            this);
     }
 
     internal InteractionOutboundQueue Outbound { get; }
@@ -402,6 +586,7 @@ internal sealed class InteractionPipeSession : IAsyncDisposable
     {
         var reader = ReadLoopAsync(_cancellation.Token);
         var writer = WriteLoopAsync(_cancellation.Token);
+        ObserveFault(reader);
         var completed = await Task.WhenAny(reader, writer).ConfigureAwait(false);
         if (ReferenceEquals(completed, reader))
         {
@@ -436,7 +621,16 @@ internal sealed class InteractionPipeSession : IAsyncDisposable
             Deactivate();
         }
 
-        return await reader.ConfigureAwait(false);
+        return InteractionPipeSessionOutcome.SendTimeout;
+    }
+
+    private static void ObserveFault(Task task)
+    {
+        _ = task.ContinueWith(
+            static faulted => _ = faulted.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     internal void Deactivate()
@@ -446,8 +640,9 @@ internal sealed class InteractionPipeSession : IAsyncDisposable
             return;
         }
 
-        _cancellation.Cancel();
         Outbound.Complete();
+        _abortConnection?.Invoke();
+        _cancellation.Cancel();
     }
 
     public async ValueTask DisposeAsync()
@@ -459,25 +654,40 @@ internal sealed class InteractionPipeSession : IAsyncDisposable
 
         Deactivate();
         await Outbound.DisposeAsync().ConfigureAwait(false);
+        _cancellationRegistration.Dispose();
         _cancellation.Dispose();
     }
 
     private async Task<InteractionPipeSessionOutcome> ReadLoopAsync(
         CancellationToken cancellationToken)
     {
+        var lastValidMessageTimestamp = Stopwatch.GetTimestamp();
         while (!cancellationToken.IsCancellationRequested)
         {
+            var remainingHeartbeat = _heartbeatTimeout -
+                Stopwatch.GetElapsedTime(lastValidMessageTimestamp);
+            if (remainingHeartbeat <= TimeSpan.Zero)
+            {
+                return InteractionPipeSessionOutcome.HeartbeatTimeout;
+            }
+
+            using var readCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            readCancellation.CancelAfter(remainingHeartbeat);
             InteractionEnvelope message;
             try
             {
                 message = await InteractionIpcStream.ReadAsync(
                     _stream,
-                    cancellationToken,
+                    readCancellation.Token,
                     _maximumPayloadLength).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 return InteractionPipeSessionOutcome.Cancelled;
+            }
+            catch (OperationCanceledException) when (readCancellation.IsCancellationRequested)
+            {
+                return InteractionPipeSessionOutcome.HeartbeatTimeout;
             }
             catch (EndOfStreamException)
             {
@@ -522,6 +732,20 @@ internal sealed class InteractionPipeSession : IAsyncDisposable
                             message.Sequence,
                             new PongPayload(ping.TimestampUnixMs)),
                         cancellationToken).ConfigureAwait(false);
+                    lastValidMessageTimestamp = Stopwatch.GetTimestamp();
+                    break;
+
+                case InteractionMessageType.Pong:
+                    try
+                    {
+                        _ = message.DeserializePayload<PongPayload>();
+                    }
+                    catch (InvalidDataException)
+                    {
+                        return InteractionPipeSessionOutcome.ProtocolError;
+                    }
+
+                    lastValidMessageTimestamp = Stopwatch.GetTimestamp();
                     break;
 
                 case InteractionMessageType.Shutdown:
@@ -548,7 +772,20 @@ internal sealed class InteractionPipeSession : IAsyncDisposable
         while (!cancellationToken.IsCancellationRequested)
         {
             var message = await Outbound.DequeueAsync(cancellationToken).ConfigureAwait(false);
-            await InteractionIpcStream.WriteAsync(_stream, message, cancellationToken).ConfigureAwait(false);
+            using var sendCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            sendCancellation.CancelAfter(_sendTimeout);
+            try
+            {
+                await InteractionIpcStream.WriteAsync(
+                    _stream,
+                    message,
+                    sendCancellation.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (
+                sendCancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
         }
     }
 }
@@ -558,17 +795,23 @@ internal enum InteractionPipeSessionOutcome
     Disconnected = 0,
     Shutdown = 1,
     ProtocolError = 2,
-    Cancelled = 3
+    Cancelled = 3,
+    HeartbeatTimeout = 4,
+    SendTimeout = 5
 }
 
 internal sealed class InteractionOutboundQueue : IAsyncDisposable
 {
+    private const int MaximumControlBurstWhileFramePending = 8;
     private readonly object _sync = new();
     private readonly Queue<InteractionEnvelope> _controls = new();
     private readonly SemaphoreSlim _controlSlots;
     private readonly SemaphoreSlim _available = new(0);
     private readonly CancellationTokenSource _completion = new();
     private InteractionEnvelope? _latestFrame;
+    private TaskCompletionSource? _pendingEnqueuesDrained;
+    private int _controlBurstWhileFramePending;
+    private int _pendingEnqueues;
     private bool _completed;
     private int _disposed;
 
@@ -587,22 +830,46 @@ internal sealed class InteractionOutboundQueue : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(message);
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken,
-            _completion.Token);
-        await _controlSlots.WaitAsync(linked.Token).ConfigureAwait(false);
         lock (_sync)
         {
             if (_completed)
             {
-                _controlSlots.Release();
                 throw new OperationCanceledException(_completion.Token);
             }
 
-            _controls.Enqueue(message);
+            _pendingEnqueues++;
         }
 
-        _available.Release();
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            _completion.Token);
+        try
+        {
+            await _controlSlots.WaitAsync(linked.Token).ConfigureAwait(false);
+            lock (_sync)
+            {
+                if (_completed)
+                {
+                    _controlSlots.Release();
+                    throw new OperationCanceledException(_completion.Token);
+                }
+
+                _controls.Enqueue(message);
+            }
+
+            _available.Release();
+        }
+        finally
+        {
+            lock (_sync)
+            {
+                _pendingEnqueues--;
+                if (_completed && _pendingEnqueues == 0)
+                {
+                    _pendingEnqueuesDrained?.TrySetResult();
+                }
+            }
+        }
     }
 
     internal bool PublishLatestFrame(InteractionEnvelope message)
@@ -642,9 +909,15 @@ internal sealed class InteractionOutboundQueue : IAsyncDisposable
         await _available.WaitAsync(linked.Token).ConfigureAwait(false);
         lock (_sync)
         {
-            if (_controls.Count > 0)
+            var framePending = _latestFrame is not null;
+            if (_controls.Count > 0 &&
+                (!framePending ||
+                 _controlBurstWhileFramePending < MaximumControlBurstWhileFramePending))
             {
                 var control = _controls.Dequeue();
+                _controlBurstWhileFramePending = framePending
+                    ? _controlBurstWhileFramePending + 1
+                    : 0;
                 _controlSlots.Release();
                 return control;
             }
@@ -653,6 +926,7 @@ internal sealed class InteractionOutboundQueue : IAsyncDisposable
             {
                 var frame = _latestFrame;
                 _latestFrame = null;
+                _controlBurstWhileFramePending = 0;
                 return frame;
             }
         }
@@ -670,22 +944,33 @@ internal sealed class InteractionOutboundQueue : IAsyncDisposable
             }
 
             _completed = true;
+            if (_pendingEnqueues > 0)
+            {
+                _pendingEnqueuesDrained = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+            }
         }
 
         _completion.Cancel();
     }
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
         {
-            return ValueTask.CompletedTask;
+            return;
         }
 
         Complete();
+        Task pendingEnqueues;
+        lock (_sync)
+        {
+            pendingEnqueues = _pendingEnqueuesDrained?.Task ?? Task.CompletedTask;
+        }
+
+        await pendingEnqueues.ConfigureAwait(false);
         _completion.Dispose();
         _controlSlots.Dispose();
         _available.Dispose();
-        return ValueTask.CompletedTask;
     }
 }

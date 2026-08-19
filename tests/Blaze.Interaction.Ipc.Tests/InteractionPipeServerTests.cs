@@ -60,6 +60,71 @@ public sealed class InteractionPipeServerTests
     }
 
     [Fact]
+    public Task Server_RejectsClaimedPidThatDoesNotMatchActualPipeClient()
+    {
+        return AssertInvalidHelloIsIsolatedAsync(
+            Hello() with { UnityPid = Environment.ProcessId + 1 },
+            "client_identity_mismatch");
+    }
+
+    [Fact]
+    public async Task Server_RejectsActualClientWhenExpectedPidDiffers()
+    {
+        var pipeName = NewPipeName();
+        var authenticationCalls = 0;
+        await using var server = new InteractionPipeServer(new InteractionPipeServerOptions
+        {
+            PipeName = pipeName,
+            ExpectedClientProcessId = Environment.ProcessId + 1,
+            CreateHelloAckAsync = (_, _) =>
+            {
+                Interlocked.Increment(ref authenticationCalls);
+                return ValueTask.FromResult(Ack());
+            }
+        });
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var stopServer = new CancellationTokenSource();
+        var run = server.RunAsync(stopServer.Token);
+        await using var client = new NamedPipeClientStream(".", pipeName,
+            PipeDirection.InOut, PipeOptions.Asynchronous);
+        await client.ConnectAsync(timeout.Token);
+        await InteractionIpcStream.WriteAsync(client,
+            InteractionEnvelope.Create(InteractionMessageType.Hello, 1, Hello()), timeout.Token);
+
+        var error = await InteractionIpcStream.ReadAsync(client, timeout.Token);
+
+        Assert.Equal("unexpected_client_process", error.DeserializePayload<ErrorPayload>().Code);
+        Assert.Equal(0, authenticationCalls);
+        stopServer.Cancel();
+        await run.WaitAsync(timeout.Token);
+    }
+
+    [Fact]
+    public async Task Server_AcceptsActualClientWhenExpectedPidMatches()
+    {
+        var pipeName = NewPipeName();
+        await using var server = new InteractionPipeServer(new InteractionPipeServerOptions
+        {
+            PipeName = pipeName,
+            ExpectedClientProcessId = Environment.ProcessId,
+            CreateHelloAckAsync = (_, _) => ValueTask.FromResult(Ack())
+        });
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var stopServer = new CancellationTokenSource();
+        var run = server.RunAsync(stopServer.Token);
+        await using var client = new NamedPipeClientStream(".", pipeName,
+            PipeDirection.InOut, PipeOptions.Asynchronous);
+        await client.ConnectAsync(timeout.Token);
+        await InteractionIpcStream.WriteAsync(client,
+            InteractionEnvelope.Create(InteractionMessageType.Hello, 1, Hello()), timeout.Token);
+
+        Assert.Equal(InteractionMessageType.HelloAck,
+            (await InteractionIpcStream.ReadAsync(client, timeout.Token)).MessageType);
+        stopServer.Cancel();
+        await run.WaitAsync(timeout.Token);
+    }
+
+    [Fact]
     public async Task Server_RejectsNonHelloFirstMessage()
     {
         await using var fixture = await ServerFixture.StartAsync();
@@ -90,6 +155,29 @@ public sealed class InteractionPipeServerTests
 
         Assert.Equal("invalid_surface_topology", error.DeserializePayload<ErrorPayload>().Code);
         Assert.Equal(0, authenticationCalls);
+    }
+
+    [Fact]
+    public Task Server_IsolatesNullSurfaceElementAndAcceptsNextClient()
+    {
+        return AssertInvalidHelloIsIsolatedAsync(
+            Hello() with { Surfaces = [null!] },
+            "invalid_surface_topology");
+    }
+
+    [Fact]
+    public Task Server_RejectsDuplicateSurfaceOrderAndAcceptsNextClient()
+    {
+        return AssertInvalidHelloIsIsolatedAsync(
+            Hello() with
+            {
+                Surfaces =
+                [
+                    Surface("FRONT"),
+                    Surface("RIGHT") with { IsPrimary = false }
+                ]
+            },
+            "invalid_surface_topology");
     }
 
     [Theory]
@@ -220,6 +308,127 @@ public sealed class InteractionPipeServerTests
     }
 
     [Fact]
+    public async Task Server_HandshakeTimeoutReleasesClientThatNeverSendsHello()
+    {
+        await using var timeoutServer = await TimeoutServerFixture.StartAsync(
+            handshakeTimeout: TimeSpan.FromMilliseconds(100));
+        await using var silent = await timeoutServer.ConnectAsync();
+
+        await Task.Delay(150, timeoutServer.Token);
+        await using var next = await timeoutServer.ConnectAndSendHelloAsync();
+
+        Assert.Equal(InteractionMessageType.HelloAck,
+            (await InteractionIpcStream.ReadAsync(next, timeoutServer.Token)).MessageType);
+        Assert.False(timeoutServer.RunTask.IsCompleted);
+    }
+
+    [Fact]
+    public async Task Server_HeartbeatTimeoutDisconnectsInactiveClientAndAllowsReconnect()
+    {
+        await using var timeoutServer = await TimeoutServerFixture.StartAsync(
+            heartbeatTimeout: TimeSpan.FromMilliseconds(100));
+        await using (var inactive = await timeoutServer.ConnectAndSendHelloAsync())
+        {
+            _ = await InteractionIpcStream.ReadAsync(inactive, timeoutServer.Token);
+            using var publishCancellation = CancellationTokenSource.CreateLinkedTokenSource(timeoutServer.Token);
+            var publishLoop = Task.Run(async () =>
+            {
+                var sequence = 1L;
+                while (!publishCancellation.Token.IsCancellationRequested)
+                {
+                    await timeoutServer.Server.PublishFrameAsync(
+                        Frame(sequence++),
+                        publishCancellation.Token);
+                    await Task.Delay(10, publishCancellation.Token);
+                }
+            }, publishCancellation.Token);
+            await WaitUntilAsync(() => !timeoutServer.Server.IsClientConnected, timeoutServer.Token);
+            publishCancellation.Cancel();
+            try
+            {
+                await publishLoop;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        await using var next = await timeoutServer.ConnectAndSendHelloAsync();
+        Assert.Equal(InteractionMessageType.HelloAck,
+            (await InteractionIpcStream.ReadAsync(next, timeoutServer.Token)).MessageType);
+        Assert.False(timeoutServer.RunTask.IsCompleted);
+    }
+
+    [Fact]
+    public async Task Server_ValidPingRefreshesHeartbeatAndReturnsPong()
+    {
+        await using var timeoutServer = await TimeoutServerFixture.StartAsync(
+            heartbeatTimeout: TimeSpan.FromMilliseconds(180));
+        await using var client = await timeoutServer.ConnectAndSendHelloAsync();
+        _ = await InteractionIpcStream.ReadAsync(client, timeoutServer.Token);
+        await Task.Delay(100, timeoutServer.Token);
+        await InteractionIpcStream.WriteAsync(client,
+            InteractionEnvelope.Create(InteractionMessageType.Ping, 7, new PingPayload(77)),
+            timeoutServer.Token);
+
+        var pong = await InteractionIpcStream.ReadAsync(client, timeoutServer.Token);
+        await Task.Delay(100, timeoutServer.Token);
+
+        Assert.Equal(InteractionMessageType.Pong, pong.MessageType);
+        Assert.Equal(77, pong.DeserializePayload<PongPayload>().TimestampUnixMs);
+        Assert.True(timeoutServer.Server.IsClientConnected);
+    }
+
+    [Fact]
+    public async Task Server_SendTimeoutReleasesBlockedControlSendAndAllowsReconnect()
+    {
+        await using var timeoutServer = await TimeoutServerFixture.StartAsync(
+            sendTimeout: TimeSpan.FromMilliseconds(100),
+            controlQueueCapacity: 1,
+            stallAuthenticatedWrites: true);
+        await using var stalled = await timeoutServer.ConnectAndSendHelloAsync();
+        _ = await InteractionIpcStream.ReadAsync(stalled, timeoutServer.Token);
+        var hugeStatus = InteractionEnvelope.Create(
+            InteractionMessageType.Status,
+            1,
+            new StatusPayload(
+                "large",
+                "Running",
+                new string('x', 2 * 1024 * 1024),
+                null,
+                1));
+        var sends = Enumerable.Range(0, 8)
+            .Select(_ => timeoutServer.Server.SendAsync(hugeStatus, timeoutServer.Token).AsTask())
+            .ToArray();
+        await Task.Delay(25, timeoutServer.Token);
+
+        Assert.Contains(sends, static send => !send.IsCompleted);
+        var results = await Task.WhenAll(sends).WaitAsync(timeoutServer.Token);
+        await WaitUntilAsync(() => !timeoutServer.Server.IsClientConnected, timeoutServer.Token);
+
+        Assert.Contains(false, results);
+        await using var next = await timeoutServer.ConnectAndSendHelloAsync();
+        Assert.Equal(InteractionMessageType.HelloAck,
+            (await InteractionIpcStream.ReadAsync(next, timeoutServer.Token)).MessageType);
+        Assert.False(timeoutServer.RunTask.IsCompleted);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Server_RejectsNonPositiveOrInfiniteTimeouts(int milliseconds)
+    {
+        var timeout = TimeSpan.FromMilliseconds(milliseconds);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => new InteractionPipeServer(
+            new InteractionPipeServerOptions { HandshakeTimeout = timeout }));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new InteractionPipeServer(
+            new InteractionPipeServerOptions { HeartbeatTimeout = timeout }));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new InteractionPipeServer(
+            new InteractionPipeServerOptions { SendTimeout = timeout }));
+    }
+
+    [Fact]
     public async Task Server_DisposeWhileClientIsConnectedStopsRunCleanly()
     {
         var pipeName = NewPipeName();
@@ -310,6 +519,31 @@ public sealed class InteractionPipeServerTests
     }
 
     [Fact]
+    public async Task OutboundQueue_DeliversPendingFrameWithinBoundedControlBurst()
+    {
+        await using var queue = new InteractionOutboundQueue(controlCapacity: 1);
+        Assert.True(queue.PublishLatestFrame(FrameEnvelope(99)));
+        await queue.EnqueueControlAsync(ControlEnvelope(0));
+        InteractionEnvelope? observedFrame = null;
+
+        for (var attempt = 0; attempt < 9; attempt++)
+        {
+            var message = await queue.DequeueAsync();
+            if (message.MessageType == InteractionMessageType.InteractionFrame)
+            {
+                observedFrame = message;
+                break;
+            }
+
+            Assert.Equal(attempt, message.Sequence);
+            await queue.EnqueueControlAsync(ControlEnvelope(attempt + 1));
+        }
+
+        Assert.NotNull(observedFrame);
+        Assert.Equal(99, observedFrame.DeserializePayload<InteractionFrame>().Sequence);
+    }
+
+    [Fact]
     public Task Session_PropagatesInvalidDataWriterFault()
     {
         return AssertWriterFaultPropagatesAsync(
@@ -356,6 +590,12 @@ public sealed class InteractionPipeServerTests
 
     private static InteractionEnvelope FrameEnvelope(long sequence) =>
         InteractionEnvelope.Create(InteractionMessageType.InteractionFrame, sequence, Frame(sequence));
+
+    private static InteractionEnvelope ControlEnvelope(long sequence) =>
+        InteractionEnvelope.Create(
+            InteractionMessageType.Status,
+            sequence,
+            new StatusPayload("ready", "Ready", "Ready.", null, sequence));
 
     private static string NewPipeName() => "BlazeInteraction.Tests." + Guid.NewGuid().ToString("N");
 
@@ -423,6 +663,51 @@ public sealed class InteractionPipeServerTests
         }
     }
 
+    private static async Task AssertInvalidHelloIsIsolatedAsync(
+        HelloPayload invalidHello,
+        string expectedErrorCode)
+    {
+        var pipeName = NewPipeName();
+        await using var server = new InteractionPipeServer(new InteractionPipeServerOptions
+        {
+            PipeName = pipeName,
+            CreateHelloAckAsync = (_, _) => ValueTask.FromResult(Ack())
+        });
+        var connectedCount = 0;
+        server.ClientConnected += (_, _) => Interlocked.Increment(ref connectedCount);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var stopServer = new CancellationTokenSource();
+        var run = server.RunAsync(stopServer.Token);
+        try
+        {
+            await using (var first = new NamedPipeClientStream(".", pipeName,
+                PipeDirection.InOut, PipeOptions.Asynchronous))
+            {
+                await first.ConnectAsync(timeout.Token);
+                await InteractionIpcStream.WriteAsync(first,
+                    InteractionEnvelope.Create(InteractionMessageType.Hello, 1, invalidHello), timeout.Token);
+                var response = await InteractionIpcStream.ReadAsync(first, timeout.Token);
+                Assert.Equal(InteractionMessageType.Error, response.MessageType);
+                Assert.Equal(expectedErrorCode, response.DeserializePayload<ErrorPayload>().Code);
+                Assert.Equal(0, connectedCount);
+            }
+
+            Assert.False(run.IsFaulted, run.Exception?.ToString());
+            await using var second = new NamedPipeClientStream(".", pipeName,
+                PipeDirection.InOut, PipeOptions.Asynchronous);
+            await second.ConnectAsync(timeout.Token);
+            await InteractionIpcStream.WriteAsync(second,
+                InteractionEnvelope.Create(InteractionMessageType.Hello, 2, Hello()), timeout.Token);
+            Assert.Equal(InteractionMessageType.HelloAck,
+                (await InteractionIpcStream.ReadAsync(second, timeout.Token)).MessageType);
+        }
+        finally
+        {
+            stopServer.Cancel();
+            await run.WaitAsync(timeout.Token);
+        }
+    }
+
     private static async Task WriteRawFrameAsync(
         Stream stream,
         byte[] payload,
@@ -483,6 +768,31 @@ public sealed class InteractionPipeServerTests
         }
     }
 
+    private sealed class StallingWriteDuplexStream(Stream inner) : Stream
+    {
+        public override bool CanRead => inner.CanRead;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override Task FlushAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, count);
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default) => inner.ReadAsync(buffer, cancellationToken);
+
+        public override async ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+        }
+    }
+
     private sealed class ServerFixture : IAsyncDisposable
     {
         private readonly CancellationTokenSource _cancellation = new(TimeSpan.FromSeconds(10));
@@ -537,6 +847,84 @@ public sealed class InteractionPipeServerTests
             await _runTask;
             await Server.DisposeAsync();
             _cancellation.Dispose();
+        }
+    }
+
+    private sealed class TimeoutServerFixture : IAsyncDisposable
+    {
+        private readonly CancellationTokenSource _timeout = new(TimeSpan.FromSeconds(5));
+        private readonly CancellationTokenSource _stopServer = new();
+
+        private TimeoutServerFixture(InteractionPipeServer server, string pipeName)
+        {
+            Server = server;
+            PipeName = pipeName;
+            RunTask = server.RunAsync(_stopServer.Token);
+        }
+
+        public InteractionPipeServer Server { get; }
+
+        public string PipeName { get; }
+
+        public Task RunTask { get; }
+
+        public CancellationToken Token => _timeout.Token;
+
+        public static Task<TimeoutServerFixture> StartAsync(
+            TimeSpan? handshakeTimeout = null,
+            TimeSpan? heartbeatTimeout = null,
+            TimeSpan? sendTimeout = null,
+            int controlQueueCapacity = 8,
+            bool stallAuthenticatedWrites = false)
+        {
+            var pipeName = NewPipeName();
+            var server = new InteractionPipeServer(new InteractionPipeServerOptions
+            {
+                PipeName = pipeName,
+                HandshakeTimeout = handshakeTimeout ?? TimeSpan.FromSeconds(2),
+                HeartbeatTimeout = heartbeatTimeout ?? TimeSpan.FromSeconds(2),
+                SendTimeout = sendTimeout ?? TimeSpan.FromSeconds(2),
+                ControlQueueCapacity = controlQueueCapacity,
+                CreateAuthenticatedSessionStream = stallAuthenticatedWrites
+                    ? static pipe => new StallingWriteDuplexStream(pipe)
+                    : static pipe => pipe,
+                CreateHelloAckAsync = (_, _) => ValueTask.FromResult(Ack())
+            });
+            return Task.FromResult(new TimeoutServerFixture(server, pipeName));
+        }
+
+        public async Task<NamedPipeClientStream> ConnectAsync()
+        {
+            var client = new NamedPipeClientStream(".", PipeName,
+                PipeDirection.InOut, PipeOptions.Asynchronous);
+            await client.ConnectAsync(Token);
+            return client;
+        }
+
+        public async Task<NamedPipeClientStream> ConnectAndSendHelloAsync()
+        {
+            var client = await ConnectAsync();
+            await InteractionIpcStream.WriteAsync(client,
+                InteractionEnvelope.Create(InteractionMessageType.Hello, 1, Hello()), Token);
+            return client;
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            _stopServer.Cancel();
+            try
+            {
+                await RunTask.WaitAsync(TimeSpan.FromSeconds(1));
+            }
+            catch (TimeoutException exception)
+            {
+                throw new InvalidOperationException(
+                    $"IPC server did not stop after cancellation. Connected={Server.IsClientConnected}, RunStatus={RunTask.Status}.",
+                    exception);
+            }
+            await Server.DisposeAsync();
+            _stopServer.Dispose();
+            _timeout.Dispose();
         }
     }
 }
