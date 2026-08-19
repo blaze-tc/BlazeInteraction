@@ -51,7 +51,7 @@ public sealed class RadarRecordingWriter : IAsyncDisposable
                 throw new InvalidOperationException("The recording is already initialized.");
             }
 
-            var headerBytes = JsonSerializer.SerializeToUtf8Bytes(header, RadarRecordingJson.Options);
+            var headerBytes = JsonSerializer.SerializeToUtf8Bytes(header, RadarRecordingJson.Context.RadarRecordingHeader);
             var length = new byte[sizeof(int)];
             BinaryPrimitives.WriteInt32LittleEndian(length, headerBytes.Length);
             await _stream.WriteAsync(Magic, cancellationToken).ConfigureAwait(false);
@@ -159,7 +159,7 @@ public sealed class RadarRecordingReader : IAsyncDisposable
 
         var headerBytes = new byte[length];
         await ReadExactlyAsync(headerBytes, cancellationToken).ConfigureAwait(false);
-        var header = JsonSerializer.Deserialize<RadarRecordingHeader>(headerBytes, RadarRecordingJson.Options)
+        var header = JsonSerializer.Deserialize(headerBytes, RadarRecordingJson.Context.RadarRecordingHeader)
             ?? throw new InvalidDataException("The recording header is empty.");
         _headerRead = true;
         return header;
@@ -230,6 +230,7 @@ public sealed class RadarRecordingReader : IAsyncDisposable
 internal static class RadarRecordingJson
 {
     internal static readonly JsonSerializerOptions Options = CreateOptions();
+    internal static readonly RadarRecordingJsonSerializerContext Context = new(Options);
 
     private static JsonSerializerOptions CreateOptions()
     {

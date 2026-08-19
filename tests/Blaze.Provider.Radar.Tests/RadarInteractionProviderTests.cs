@@ -235,6 +235,94 @@ public sealed class RadarInteractionProviderTests
     }
 
     [Fact]
+    public async Task ConcurrentDisposeCallsShareBothStopAndDisposeCleanupFailures()
+    {
+        var stopFailure = new IOException("stop failed");
+        var disposeFailure = new InvalidOperationException("dispose failed");
+        var runtime = new FakeRadarProviderRuntime
+        {
+            StopException = stopFailure,
+            DisposeException = disposeFailure
+        };
+        runtime.BlockStop();
+        var provider = CreateProvider(runtime);
+        await provider.InitializeAsync(InitializationContext(Surface("front", true, 0)), CancellationToken.None);
+        await provider.StartAsync(CancellationToken.None);
+
+        var first = provider.DisposeAsync().AsTask();
+        await runtime.StopEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var second = provider.DisposeAsync().AsTask();
+        runtime.ReleaseStop();
+
+        var firstFailure = await Record.ExceptionAsync(() => first);
+        var secondFailure = await Record.ExceptionAsync(() => second);
+        var aggregate = Assert.IsType<AggregateException>(firstFailure);
+        Assert.Equal([stopFailure, disposeFailure], aggregate.InnerExceptions);
+        Assert.Same(firstFailure, secondFailure);
+        Assert.Equal(1, runtime.StopCallCount);
+        Assert.Equal(1, runtime.DisposeCallCount);
+        Assert.Equal(ProviderRuntimeStatus.Faulted, provider.Status);
+    }
+
+    [Fact]
+    public async Task StopStartedAfterDisposeWaitsForAndSharesItsCleanupFailure()
+    {
+        var cleanupFailure = new IOException("stop failed");
+        var runtime = new FakeRadarProviderRuntime { StopException = cleanupFailure };
+        runtime.BlockStop();
+        var provider = CreateProvider(runtime);
+        await provider.InitializeAsync(InitializationContext(Surface("front", true, 0)), CancellationToken.None);
+        await provider.StartAsync(CancellationToken.None);
+
+        var dispose = provider.DisposeAsync().AsTask();
+        await runtime.StopEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var stop = provider.StopAsync(CancellationToken.None);
+
+        Assert.False(stop.IsCompleted);
+        runtime.ReleaseStop();
+        var disposeFailure = await Record.ExceptionAsync(() => dispose);
+        var stopFailure = await Record.ExceptionAsync(() => stop);
+        Assert.Same(cleanupFailure, disposeFailure);
+        Assert.Same(disposeFailure, stopFailure);
+        Assert.Equal(1, runtime.StopCallCount);
+        Assert.Equal(1, runtime.DisposeCallCount);
+        Assert.Equal(ProviderRuntimeStatus.Faulted, provider.Status);
+    }
+
+    [Fact]
+    public async Task SynchronousStatusHandlerDisposeReentryFailsFastWithoutPoisoningLaterContinuations()
+    {
+        var runtime = new FakeRadarProviderRuntime();
+        var provider = CreateProvider(runtime);
+        await provider.InitializeAsync(InitializationContext(Surface("front", true, 0)), CancellationToken.None);
+        await provider.StartAsync(CancellationToken.None);
+        var continueAfterHandler = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Exception? reentryFailure = null;
+        Task? continuation = null;
+        provider.StatusChanged += (_, change) =>
+        {
+            if (change.Status != ProviderRuntimeStatus.Stopping) return;
+#pragma warning disable xUnit1031 // This regression test intentionally exercises synchronous event-handler reentry.
+            reentryFailure = Record.Exception(() => provider.DisposeAsync().GetAwaiter().GetResult());
+#pragma warning restore xUnit1031
+            continuation = Task.Run(async () =>
+            {
+                await continueAfterHandler.Task;
+                await provider.DisposeAsync();
+                await provider.StopAsync(CancellationToken.None);
+            });
+        };
+
+        await provider.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1));
+        var invalidOperation = Assert.IsType<InvalidOperationException>(reentryFailure);
+        Assert.Contains("StatusChanged", invalidOperation.Message, StringComparison.Ordinal);
+        continueAfterHandler.SetResult();
+        Assert.NotNull(continuation);
+        await continuation.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal(ProviderRuntimeStatus.Stopped, provider.Status);
+    }
+
+    [Fact]
     public async Task StopRacingDisposeCompletesOneStopAndOneDisposeWithoutSemaphoreTeardownFaults()
     {
         var runtime = new FakeRadarProviderRuntime();
@@ -285,6 +373,7 @@ public sealed class RadarInteractionProviderTests
     {
         public Func<PointerBatchPayload, CancellationToken, Task<bool>> Publish { get; set; } = null!;
         public Exception? StartException { get; init; }
+        public Exception? StopException { get; init; }
         public Exception? DisposeException { get; init; }
         public int StartCallCount { get; private set; }
         public int StopCallCount { get; private set; }
@@ -309,6 +398,8 @@ public sealed class RadarInteractionProviderTests
             StopEntered.TrySetResult();
             if (_stopRelease is not null)
                 await _stopRelease.Task.WaitAsync(cancellationToken);
+            if (StopException is not null)
+                throw StopException;
         }
 
         public void BlockStop() => _stopRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

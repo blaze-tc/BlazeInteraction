@@ -3,6 +3,8 @@ using Blaze.Interaction.Provider.Abstractions;
 using Blaze.Interaction.Runtime;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using Yuexin.Radar.Contracts;
+using Yuexin.Radar.Device;
 
 namespace Blaze.Provider.Radar.Tests;
 
@@ -121,7 +123,36 @@ public sealed class RadarProviderLoaderIntegrationTests
     {
         using var fixture = new PublishedProviderFixture(useEmptyRadarProfile: true);
 
-        var references = CreateInitializeStopDisposeAndUnload(fixture.Root);
+        var references = CreateInitializeStopDisposeAndUnload(fixture.Root, startProvider: false);
+        CollectUntilDead(references.Provider, references.Plugin, references.LoadContext);
+
+        Assert.False(references.Provider.IsAlive);
+        Assert.False(references.Plugin.IsAlive);
+        Assert.False(references.LoadContext.IsAlive);
+    }
+
+    [Fact]
+    public void RunningSimulationRadarProviderReleasesItsProviderPluginAndLoadContext()
+    {
+        using var fixture = new PublishedProviderFixture(useSimulationRadarProfile: true);
+
+        var references = CreateInitializeStopDisposeAndUnload(fixture.Root, startProvider: true);
+        CollectUntilDead(references.Provider, references.Plugin, references.LoadContext);
+
+        Assert.False(references.Provider.IsAlive);
+        Assert.False(references.Plugin.IsAlive);
+        Assert.False(references.LoadContext.IsAlive);
+    }
+
+    [Fact]
+    public void RunningReplayRadarProviderReleasesItsProviderPluginAndLoadContext()
+    {
+        using var fixture = new PublishedProviderFixture(useReplayRadarProfile: true);
+
+        var references = CreateInitializeStopDisposeAndUnload(
+            fixture.Root,
+            startProvider: true,
+            allowReplayHeaderRead: true);
         CollectUntilDead(references.Provider, references.Plugin, references.LoadContext);
 
         Assert.False(references.Provider.IsAlive);
@@ -146,7 +177,10 @@ public sealed class RadarProviderLoaderIntegrationTests
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static (WeakReference Provider, WeakReference Plugin, WeakReference LoadContext)
-        CreateInitializeStopDisposeAndUnload(string providersRoot)
+        CreateInitializeStopDisposeAndUnload(
+            string providersRoot,
+            bool startProvider,
+            bool allowReplayHeaderRead = false)
     {
         var entry = Assert.Single(new ProviderCatalog().Discover(providersRoot));
         var loaded = new ProviderLoader().Load(entry);
@@ -168,6 +202,10 @@ public sealed class RadarProviderLoaderIntegrationTests
             ],
             EmptyServiceProvider.Instance),
             CancellationToken.None).GetAwaiter().GetResult();
+        if (startProvider)
+            provider.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
+        if (allowReplayHeaderRead)
+            Thread.Sleep(TimeSpan.FromMilliseconds(250));
         provider.StopAsync(CancellationToken.None).GetAwaiter().GetResult();
         provider.DisposeAsync().AsTask().GetAwaiter().GetResult();
         var references = (
@@ -199,8 +237,13 @@ public sealed class RadarProviderLoaderIntegrationTests
 
     private sealed class PublishedProviderFixture : IDisposable
     {
-        public PublishedProviderFixture(bool useEmptyRadarProfile = false)
+        public PublishedProviderFixture(
+            bool useEmptyRadarProfile = false,
+            bool useSimulationRadarProfile = false,
+            bool useReplayRadarProfile = false)
         {
+            if (new[] { useEmptyRadarProfile, useSimulationRadarProfile, useReplayRadarProfile }.Count(value => value) > 1)
+                throw new ArgumentException("Only one test Radar profile may be selected.");
             Root = Path.Combine(Path.GetTempPath(), "Blaze.Provider.Radar.Loader.Tests", Guid.NewGuid().ToString("N"));
             var radarDirectory = Path.Combine(Root, "Radar");
             Directory.CreateDirectory(radarDirectory);
@@ -232,9 +275,105 @@ public sealed class RadarProviderLoaderIntegrationTests
                     }
                     """);
             }
+            else if (useSimulationRadarProfile)
+            {
+                var profilePath = Path.Combine(radarDirectory, "profiles", "radar-default.json");
+                Directory.CreateDirectory(Path.GetDirectoryName(profilePath)!);
+                File.WriteAllText(
+                    profilePath,
+                    """
+                    {
+                      "schemaVersion": 2,
+                      "ipc": {},
+                      "screens": [
+                        {
+                          "screenId": "main",
+                          "unityDisplayName": "Main",
+                          "isPrimary": true,
+                          "sensors": [
+                            {
+                              "sensorId": "sensor-1",
+                              "enabled": true,
+                              "sourceMode": "simulation",
+                              "range": {
+                                "activePolygon": [
+                                  { "x": -2.5, "y": 2.5 },
+                                  { "x": 2.5, "y": 2.5 },
+                                  { "x": 2.5, "y": -2.5 },
+                                  { "x": -2.5, "y": -2.5 }
+                                ]
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                    """);
+            }
+            else if (useReplayRadarProfile)
+            {
+                var replayPath = Path.Combine(radarDirectory, "test-data", "minimal.radarrec");
+                Directory.CreateDirectory(Path.GetDirectoryName(replayPath)!);
+                CreateMinimalRecording(replayPath);
+                var profilePath = Path.Combine(radarDirectory, "profiles", "radar-default.json");
+                Directory.CreateDirectory(Path.GetDirectoryName(profilePath)!);
+                var escapedReplayPath = replayPath.Replace("\\", "\\\\", StringComparison.Ordinal);
+                File.WriteAllText(
+                    profilePath,
+                    """
+                    {
+                      "schemaVersion": 2,
+                      "ipc": {},
+                      "screens": [
+                        {
+                          "screenId": "main",
+                          "unityDisplayName": "Main",
+                          "isPrimary": true,
+                          "sensors": [
+                            {
+                              "sensorId": "sensor-1",
+                              "enabled": true,
+                              "sourceMode": "replay",
+                              "replayFilePath": "__REPLAY_FILE__",
+                              "replaySpeed": 1.0,
+                              "replayLoop": false,
+                              "range": {
+                                "activePolygon": [
+                                  { "x": -2.5, "y": 2.5 },
+                                  { "x": 2.5, "y": 2.5 },
+                                  { "x": 2.5, "y": -2.5 },
+                                  { "x": -2.5, "y": -2.5 }
+                                ]
+                              }
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                    """.Replace("__REPLAY_FILE__", escapedReplayPath, StringComparison.Ordinal));
+            }
         }
 
         public string Root { get; }
+
+        private static void CreateMinimalRecording(string path)
+        {
+            using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            var writer = new RadarRecordingWriter(stream, leaveOpen: true);
+#pragma warning disable xUnit1031 // Fixture construction intentionally bridges the async recording API.
+            writer.InitializeAsync(new RadarRecordingHeader(
+                    RadarModel.F10,
+                    "{\"sourceMode\":\"replay\"}",
+                    "test-firmware",
+                    DateTimeOffset.FromUnixTimeMilliseconds(1_000)))
+                .AsTask().GetAwaiter().GetResult();
+            writer.WriteConnectionStateAsync(
+                    RadarConnectionState.Connected,
+                    DateTimeOffset.FromUnixTimeMilliseconds(1_010))
+                .AsTask().GetAwaiter().GetResult();
+            writer.DisposeAsync().AsTask().GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
+        }
 
         public void Dispose()
         {

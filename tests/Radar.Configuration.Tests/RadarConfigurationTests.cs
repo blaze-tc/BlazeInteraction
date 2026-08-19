@@ -1,5 +1,6 @@
 using Yuexin.Radar.Configuration;
 using Yuexin.Radar.Contracts;
+using System.Text.Json;
 
 namespace Yuexin.Radar.Configuration.Tests;
 
@@ -39,6 +40,68 @@ public sealed class RadarConfigurationTests
 
         clone.Screens[0].UnityDisplayName = "Changed";
         Assert.Equal("Front", source.Screens[0].UnityDisplayName);
+    }
+
+    [Fact]
+    public void Clone_RadarSensorCreatesAnIndependentNestedCopy()
+    {
+        var source = RadarAppConfiguration.CreateDefault().Screens[0].Sensors[0];
+        source.SourceMode = RadarSensorSourceMode.Simulation;
+        source.Device.DeviceModel = RadarModel.F20;
+        source.Range.MaskedPolygons = [[new RadarPoint2(-1f, 1f), new RadarPoint2(1f, 1f), new RadarPoint2(0f, -1f)]];
+
+        var clone = RadarConfigurationStore.Clone(source);
+
+        Assert.NotSame(source, clone);
+        Assert.NotSame(source.Device, clone.Device);
+        Assert.NotSame(source.Range, clone.Range);
+        Assert.NotSame(source.Range.MaskedPolygons[0], clone.Range.MaskedPolygons[0]);
+        Assert.Equal(RadarSensorSourceMode.Simulation, clone.SourceMode);
+        Assert.Equal(RadarModel.F20, clone.Device.DeviceModel);
+        Assert.Equal(new RadarPoint2(-1f, 1f), clone.Range.MaskedPolygons[0][0]);
+
+        clone.Device.DeviceModel = RadarModel.F10;
+        clone.Range.MaskedPolygons[0][0] = new RadarPoint2(9f, 9f);
+        Assert.Equal(RadarModel.F20, source.Device.DeviceModel);
+        Assert.Equal(new RadarPoint2(-1f, 1f), source.Range.MaskedPolygons[0][0]);
+    }
+
+    [Fact]
+    public void Clone_RadarScreenCreatesAnIndependentNestedCopy()
+    {
+        var source = RadarAppConfiguration.CreateDefault().Screens[0];
+        source.UnityDisplayName = "Projection Wall";
+        source.Sensors[0].SourceMode = RadarSensorSourceMode.Simulation;
+
+        var clone = RadarConfigurationStore.Clone(source);
+
+        Assert.NotSame(source, clone);
+        Assert.NotSame(source.Tracking, clone.Tracking);
+        Assert.NotSame(source.Sensors, clone.Sensors);
+        Assert.NotSame(source.Sensors[0], clone.Sensors[0]);
+        Assert.Equal("Projection Wall", clone.UnityDisplayName);
+        Assert.Equal(RadarSensorSourceMode.Simulation, clone.Sensors[0].SourceMode);
+
+        clone.UnityDisplayName = "Changed";
+        clone.Sensors[0].SourceMode = RadarSensorSourceMode.Real;
+        Assert.Equal("Projection Wall", source.UnityDisplayName);
+        Assert.Equal(RadarSensorSourceMode.Simulation, source.Sensors[0].SourceMode);
+    }
+
+    [Fact]
+    public void Serialize_RadarSensorKeepsTheExistingCamelCaseEnumShape()
+    {
+        var sensor = RadarAppConfiguration.CreateDefault().Screens[0].Sensors[0];
+        sensor.SourceMode = RadarSensorSourceMode.Simulation;
+        sensor.Device.DeviceModel = RadarModel.F20;
+
+        using var document = JsonDocument.Parse(RadarConfigurationStore.Serialize(sensor));
+        var root = document.RootElement;
+
+        Assert.Equal("simulation", root.GetProperty("sourceMode").GetString());
+        Assert.Equal("F20", root.GetProperty("device").GetProperty("deviceModel").GetString());
+        Assert.True(root.TryGetProperty("outputRectPixels", out _));
+        Assert.False(root.TryGetProperty("SourceMode", out _));
     }
 
     [Fact]

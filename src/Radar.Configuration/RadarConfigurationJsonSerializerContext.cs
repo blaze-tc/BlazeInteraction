@@ -8,5 +8,7 @@ namespace Yuexin.Radar.Configuration;
     PropertyNameCaseInsensitive = true,
     WriteIndented = true)]
 [JsonSerializable(typeof(RadarAppConfiguration))]
+[JsonSerializable(typeof(RadarScreenConfiguration))]
+[JsonSerializable(typeof(RadarSensorConfiguration))]
 [JsonSerializable(typeof(LegacyRadarAppConfiguration))]
 internal sealed partial class RadarConfigurationJsonSerializerContext : JsonSerializerContext;

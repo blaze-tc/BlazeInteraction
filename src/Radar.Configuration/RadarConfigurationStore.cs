@@ -132,6 +132,28 @@ public static class RadarConfigurationStore
         return clone;
     }
 
+    public static RadarSensorConfiguration Clone(RadarSensorConfiguration source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(source, JsonContext.RadarSensorConfiguration);
+        return JsonSerializer.Deserialize(bytes, JsonContext.RadarSensorConfiguration)
+            ?? throw new InvalidOperationException("Could not clone the Radar sensor configuration.");
+    }
+
+    public static RadarScreenConfiguration Clone(RadarScreenConfiguration source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(source, JsonContext.RadarScreenConfiguration);
+        return JsonSerializer.Deserialize(bytes, JsonContext.RadarScreenConfiguration)
+            ?? throw new InvalidOperationException("Could not clone the Radar screen configuration.");
+    }
+
+    public static string Serialize(RadarSensorConfiguration source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        return JsonSerializer.Serialize(source, JsonContext.RadarSensorConfiguration);
+    }
+
     private static SaveLockEntry RentSaveLock(string targetPath)
     {
         lock (SaveLocksGate)

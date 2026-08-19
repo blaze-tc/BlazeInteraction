@@ -28,12 +28,13 @@ internal delegate Task<IRadarProviderRuntime> RadarProviderRuntimeFactory(
 
 public sealed class RadarInteractionProvider : IInteractionProvider
 {
+    private static readonly AsyncLocal<StatusDispatchToken?> CurrentStatusDispatch = new();
     private readonly RadarProviderRuntimeFactory _runtimeFactory;
     private readonly RadarFrameAdapter _adapter;
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private readonly object _disposeGate = new();
     private IRadarProviderRuntime? _runtime;
-    private Lazy<Task>? _disposeOperation;
+    private Task? _disposeOperation;
     private int _status = (int)ProviderRuntimeStatus.Created;
     private int _disposed;
 
@@ -150,36 +151,51 @@ public sealed class RadarInteractionProvider : IInteractionProvider
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        if (Volatile.Read(ref _disposed) != 0) return;
+        ThrowIfStatusChangedCallbackReentry();
+        var disposal = Volatile.Read(ref _disposeOperation);
+        if (disposal is not null)
+        {
+            await disposal.ConfigureAwait(false);
+            return;
+        }
+
         await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
+        Task? disposalStartedWhileWaiting = null;
         try
         {
-            if (Status == ProviderRuntimeStatus.Stopped) return;
-            if (Status == ProviderRuntimeStatus.Created)
+            disposalStartedWhileWaiting = Volatile.Read(ref _disposeOperation);
+            if (disposalStartedWhileWaiting is null)
             {
-                TransitionTo(ProviderRuntimeStatus.Stopped);
-                return;
-            }
+                if (Status == ProviderRuntimeStatus.Stopped) return;
+                if (Status == ProviderRuntimeStatus.Created)
+                {
+                    TransitionTo(ProviderRuntimeStatus.Stopped);
+                    return;
+                }
 
-            var runtime = _runtime;
-            TransitionTo(ProviderRuntimeStatus.Stopping);
-            try
-            {
-                if (runtime is not null)
-                    await runtime.StopAsync(cancellationToken).ConfigureAwait(false);
-                TransitionTo(ProviderRuntimeStatus.Stopped);
-            }
-            catch (Exception exception)
-            {
-                await DisposeRuntimeAfterFailureAsync().ConfigureAwait(false);
-                TransitionTo(ProviderRuntimeStatus.Faulted, exception);
-                throw;
+                var runtime = _runtime;
+                TransitionTo(ProviderRuntimeStatus.Stopping);
+                try
+                {
+                    if (runtime is not null)
+                        await runtime.StopAsync(cancellationToken).ConfigureAwait(false);
+                    TransitionTo(ProviderRuntimeStatus.Stopped);
+                }
+                catch (Exception exception)
+                {
+                    await DisposeRuntimeAfterFailureAsync().ConfigureAwait(false);
+                    TransitionTo(ProviderRuntimeStatus.Faulted, exception);
+                    throw;
+                }
             }
         }
         finally
         {
             _lifecycle.Release();
         }
+
+        if (disposalStartedWhileWaiting is not null)
+            await disposalStartedWhileWaiting.ConfigureAwait(false);
     }
 
     public Task StartAllSimulationAsync(CancellationToken cancellationToken = default) =>
@@ -206,21 +222,43 @@ public sealed class RadarInteractionProvider : IInteractionProvider
 
     public ValueTask DisposeAsync()
     {
-        Lazy<Task> operation;
+        ThrowIfStatusChangedCallbackReentry();
+        Task operation;
+        TaskCompletionSource? completion = null;
         lock (_disposeGate)
         {
-            operation = _disposeOperation ??= new Lazy<Task>(
-                DisposeCoreAsync,
-                LazyThreadSafetyMode.ExecutionAndPublication);
+            if (_disposeOperation is null)
+            {
+                completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _disposeOperation = completion.Task;
+            }
+
+            operation = _disposeOperation;
         }
 
-        return new ValueTask(operation.Value);
+        if (completion is not null)
+            _ = CompleteDisposeAsync(completion);
+
+        return new ValueTask(operation);
+    }
+
+    private async Task CompleteDisposeAsync(TaskCompletionSource completion)
+    {
+        try
+        {
+            await DisposeCoreAsync().ConfigureAwait(false);
+            completion.TrySetResult();
+        }
+        catch (Exception exception)
+        {
+            completion.TrySetException(exception);
+        }
     }
 
     private async Task DisposeCoreAsync()
     {
         Volatile.Write(ref _disposed, 1);
-        Exception? failure = null;
+        List<Exception>? failures = null;
         await _lifecycle.WaitAsync().ConfigureAwait(false);
         try
         {
@@ -236,7 +274,7 @@ public sealed class RadarInteractionProvider : IInteractionProvider
                     }
                     catch (Exception exception)
                     {
-                        failure = exception;
+                        (failures ??= []).Add(exception);
                     }
                 }
 
@@ -244,23 +282,29 @@ public sealed class RadarInteractionProvider : IInteractionProvider
                 {
                     await runtime.DisposeAsync().ConfigureAwait(false);
                 }
-                catch (Exception exception) when (failure is null)
+                catch (Exception exception)
                 {
-                    failure = exception;
+                    (failures ??= []).Add(exception);
                 }
             }
 
+            var failure = failures switch
+            {
+                null or { Count: 0 } => null,
+                { Count: 1 } => failures[0],
+                _ => new AggregateException("Multiple failures occurred while stopping and disposing the Radar runtime.", failures)
+            };
             if (failure is null)
                 TransitionTo(ProviderRuntimeStatus.Stopped);
             else
                 TransitionTo(ProviderRuntimeStatus.Faulted, failure);
+
+            if (failure is not null) throw failure;
         }
         finally
         {
             _lifecycle.Release();
         }
-
-        if (failure is not null) throw failure;
     }
 
     private Task<bool> PublishPointerBatchAsync(
@@ -324,7 +368,31 @@ public sealed class RadarInteractionProvider : IInteractionProvider
     {
         var previous = (ProviderRuntimeStatus)Interlocked.Exchange(ref _status, (int)status);
         if (previous == status && error is null) return;
-        InvokeSafely(StatusChanged, new ProviderStatusChangedEventArgs(previous, status, error));
+        InvokeStatusChangedSafely(new ProviderStatusChangedEventArgs(previous, status, error));
+    }
+
+    private void InvokeStatusChangedSafely(ProviderStatusChangedEventArgs arguments)
+    {
+        var handlers = StatusChanged;
+        if (handlers is null) return;
+        foreach (EventHandler<ProviderStatusChangedEventArgs> handler in handlers.GetInvocationList())
+        {
+            var previous = CurrentStatusDispatch.Value;
+            var token = new StatusDispatchToken(this);
+            CurrentStatusDispatch.Value = token;
+            try
+            {
+                handler(null, arguments);
+            }
+            catch
+            {
+            }
+            finally
+            {
+                token.Deactivate();
+                CurrentStatusDispatch.Value = previous;
+            }
+        }
     }
 
     private static void InvokeSafely<TEventArgs>(EventHandler<TEventArgs>? handlers, TEventArgs arguments)
@@ -344,6 +412,25 @@ public sealed class RadarInteractionProvider : IInteractionProvider
     }
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
+    private void ThrowIfStatusChangedCallbackReentry()
+    {
+        if (CurrentStatusDispatch.Value?.IsActiveFor(this) == true)
+            throw new InvalidOperationException("Radar provider lifecycle operations cannot be invoked synchronously from a StatusChanged callback.");
+    }
+
+    private sealed class StatusDispatchToken(RadarInteractionProvider provider)
+    {
+        private readonly WeakReference<RadarInteractionProvider> _provider = new(provider);
+        private int _active = 1;
+
+        public bool IsActiveFor(RadarInteractionProvider provider) =>
+            Volatile.Read(ref _active) != 0 &&
+            _provider.TryGetTarget(out var target) &&
+            ReferenceEquals(target, provider);
+
+        public void Deactivate() => Volatile.Write(ref _active, 0);
+    }
 
     private sealed class RadarCoordinatorRuntime : IRadarProviderRuntime
     {

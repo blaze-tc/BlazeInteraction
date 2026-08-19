@@ -44,7 +44,7 @@ public sealed class ScreenItemViewModel : ObservableObject, System.ComponentMode
     public RadarScreenRuntimeSnapshot? LatestSnapshot { get => _latestSnapshot; private set => SetProperty(ref _latestSnapshot, value); }
     public int OnlineSensorCount => Sensors.Count(sensor => sensor.RuntimeState == Services.RadarSensorRuntimeState.Running);
     public int FusedTargetCount { get; private set; }
-    public bool HasValidationErrors => !ValidateCopy(new RadarAppConfiguration { Screens = [_configuration] });
+    public bool HasValidationErrors => !ValidateCopy(_configuration);
     public string Error => string.Empty;
     public string this[string columnName] => columnName switch
     {
@@ -88,10 +88,9 @@ public sealed class ScreenItemViewModel : ObservableObject, System.ComponentMode
     {
         if (e.PropertyName is nameof(SensorItemViewModel.RuntimeState) or nameof(SensorItemViewModel.HasValidationErrors)) NotifySensorChanges();
     }
-    private static bool ValidateCopy(RadarAppConfiguration configuration)
+    private static bool ValidateCopy(RadarScreenConfiguration configuration)
     {
-        var json = System.Text.Json.JsonSerializer.Serialize(configuration);
-        var copy = System.Text.Json.JsonSerializer.Deserialize<RadarAppConfiguration>(json) ?? throw new InvalidOperationException("Could not clone configuration for validation.");
+        var copy = new RadarAppConfiguration { Screens = [RadarConfigurationStore.Clone(configuration)] };
         return ConfigurationValidator.ValidateAndNormalize(copy).IsValid;
     }
 

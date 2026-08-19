@@ -74,7 +74,7 @@ public sealed class SensorItemViewModel : ObservableObject, System.ComponentMode
     public long DroppedInputFrameCount => Snapshot?.DroppedInputFrameCount ?? 0;
     public string CalibrationStatus { get => _calibrationStatus; set => SetProperty(ref _calibrationStatus, value); }
     public string CalibrationStep { get => _calibrationStep; set => SetProperty(ref _calibrationStep, value); }
-    public bool HasValidationErrors => !ValidateCopy(new RadarAppConfiguration { Screens = [new RadarScreenConfiguration { IsAssociated = false, Sensors = [_configuration] }] });
+    public bool HasValidationErrors => !ValidateCopy(_configuration);
     public string Error => string.Empty;
     public string this[string columnName] => columnName switch
     {
@@ -149,10 +149,19 @@ public sealed class SensorItemViewModel : ObservableObject, System.ComponentMode
         point = new Point2(cluster.CenterX, cluster.CenterY);
         return true;
     }
-    private static bool ValidateCopy(RadarAppConfiguration configuration)
+    private static bool ValidateCopy(RadarSensorConfiguration configuration)
     {
-        var json = System.Text.Json.JsonSerializer.Serialize(configuration);
-        var copy = System.Text.Json.JsonSerializer.Deserialize<RadarAppConfiguration>(json) ?? throw new InvalidOperationException("Could not clone configuration for validation.");
+        var copy = new RadarAppConfiguration
+        {
+            Screens =
+            [
+                new RadarScreenConfiguration
+                {
+                    IsAssociated = false,
+                    Sensors = [RadarConfigurationStore.Clone(configuration)]
+                }
+            ]
+        };
         return ConfigurationValidator.ValidateAndNormalize(copy).IsValid;
     }
 

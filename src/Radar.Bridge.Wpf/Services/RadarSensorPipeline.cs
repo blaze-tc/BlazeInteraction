@@ -1,4 +1,3 @@
-using System.Text.Json;
 using System.Threading.Channels;
 using System.IO;
 using Microsoft.Extensions.Logging;
@@ -1022,7 +1021,7 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
                 },
                 calibration!,
                 mapper,
-                JsonSerializer.Serialize(sensor));
+                RadarConfigurationStore.Serialize(sensor));
         }
 
         private static bool IsConfigurationId(string? value) =>
