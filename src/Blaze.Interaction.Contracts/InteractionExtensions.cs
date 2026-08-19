@@ -51,11 +51,32 @@ public sealed class InteractionExtensions : IReadOnlyDictionary<string, JsonElem
     }
 }
 
-public sealed record RadarInteractionExtension(string SensorId);
+public sealed record RadarInteractionExtension
+{
+    [JsonConstructor]
+    public RadarInteractionExtension(string sensorId)
+    {
+        SensorId = InteractionContractGuard.NotBlank(sensorId, nameof(sensorId));
+    }
 
-public sealed record HandInteractionExtension(
-    InteractionHandedness Handedness,
-    string TrackingPoint);
+    public string SensorId { get; }
+}
+
+public sealed record HandInteractionExtension
+{
+    [JsonConstructor]
+    public HandInteractionExtension(
+        InteractionHandedness handedness,
+        string trackingPoint)
+    {
+        Handedness = InteractionContractGuard.Defined(handedness, nameof(handedness));
+        TrackingPoint = InteractionContractGuard.NotBlank(trackingPoint, nameof(trackingPoint));
+    }
+
+    public InteractionHandedness Handedness { get; }
+
+    public string TrackingPoint { get; }
+}
 
 public static class InteractionPointExtensionHelpers
 {
@@ -93,6 +114,10 @@ public static class InteractionPointExtensionHelpers
             return extension is not null;
         }
         catch (JsonException)
+        {
+            return false;
+        }
+        catch (ArgumentException)
         {
             return false;
         }

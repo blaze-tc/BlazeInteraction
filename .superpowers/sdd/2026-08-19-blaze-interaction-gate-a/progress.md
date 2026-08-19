@@ -5,7 +5,7 @@ Plan: `docs/superpowers/plans/2026-08-19-blaze-interaction-gate-a.md`
 | Task | Status | Commit | Verification |
 |---|---|---|---|
 | 0. Radar 1.2.10 baseline | Complete | pending | .NET 398/398; Unity EditMode 6/6; PlayMode 68/68 |
-| 1. Interaction contracts | Complete | pending | Contracts 9/9; Radar .NET 398/398 |
+| 1. Interaction contracts | Complete | e9c744b + current boundary fix | Contracts 27/27; full solution 425/425; Radar .NET 398/398 |
 | 2. Provider API/catalog/loader | Pending | pending | pending |
 | 3. Provider manager | Pending | pending | pending |
 | 4. Interaction IPC | Pending | pending | pending |
@@ -28,3 +28,7 @@ Plan: `docs/superpowers/plans/2026-08-19-blaze-interaction-gate-a.md`
 - RED: `dotnet test tests\Blaze.Interaction.Contracts.Tests\Blaze.Interaction.Contracts.Tests.csproj -c Release --nologo` exited 1 because the Contracts project and required interaction types did not exist.
 - GREEN: the same targeted command passed 9/9 after adding the provider-neutral contracts, raw/typed extension model, and deterministic JSON codec.
 - Radar regression: `powershell -ExecutionPolicy Bypass -File scripts\test.ps1 -Configuration Release` passed 398/398 (17 Protocol, 15 Device, 24 IPC, 61 Processing, 47 Configuration, 134 Bridge WPF, 97 Unity compatibility, 3 end-to-end).
+- Review RED: the expanded 27-test boundary suite failed 11 tests against `e9c744b`, covering mutable JSON options, aliased point collections, invalid identities/values/enums, and malformed typed extensions.
+- Review GREEN: the expanded Contracts suite passed 27/27 after freezing JSON options, snapshotting points, validating construction/JSON boundaries, and hardening typed extension parsing.
+- Full solution: `dotnet test BlazeInteraction.sln -c Release --nologo` passed 425/425 (27 Interaction Contracts plus 398 Radar tests).
+- Radar recheck: one full-script run exposed the pre-existing HelloAck/active-pipe timing race in `Server_PublishesOnlyAfterHelloAckIsWritten`; no Radar diff existed, the isolated test passed 10/10, and a fresh complete `scripts/test.ps1` rerun passed 398/398.

@@ -1,10 +1,103 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Blaze.Interaction.Contracts;
 
 namespace Blaze.Interaction.Contracts.Tests;
 
 public sealed class InteractionContractTests
 {
+    [Fact]
+    public void SharedJsonOptionsAreReadOnlyBeforeFirstSerialization()
+    {
+        var options = InteractionJson.Options;
+
+        Assert.True(options.IsReadOnly);
+        Assert.Throws<InvalidOperationException>(() => options.PropertyNamingPolicy = null);
+        Assert.Throws<InvalidOperationException>(() => options.Converters.Add(new JsonStringEnumConverter()));
+    }
+
+    [Fact]
+    public void InteractionFrameSnapshotsItsPointCollection()
+    {
+        var original = new List<InteractionPoint> { CreatePoint(InteractionPhase.Move) };
+        var frame = CreateFrame(InteractionPhase.Move, points: original);
+
+        original.Clear();
+
+        Assert.Single(frame.Points);
+        var exposed = Assert.IsAssignableFrom<IList<InteractionPoint>>(frame.Points);
+        Assert.Throws<NotSupportedException>(() => exposed.Clear());
+        Assert.Single(frame.Points);
+    }
+
+    [Fact]
+    public void ObjectInitializationRejectsMissingScopedIdentities()
+    {
+        Assert.ThrowsAny<ArgumentException>(() => new ProviderIdentity
+        {
+            ProviderId = " ",
+            ProviderInstanceId = "radar-main"
+        });
+        Assert.ThrowsAny<ArgumentException>(() => CreateSurface() with { SurfaceId = "" });
+        Assert.ThrowsAny<ArgumentException>(() => CreatePoint(InteractionPhase.Move) with { ProviderId = null! });
+        Assert.ThrowsAny<ArgumentException>(() => CreatePoint(InteractionPhase.Move) with { ProviderInstanceId = "\t" });
+        Assert.ThrowsAny<ArgumentException>(() => CreatePoint(InteractionPhase.Move) with { SourceId = "" });
+        Assert.ThrowsAny<ArgumentException>(() => CreatePoint(InteractionPhase.Move) with { SurfaceId = " " });
+        Assert.ThrowsAny<ArgumentException>(() => CreateFrame(InteractionPhase.Move) with { ProviderId = "" });
+        Assert.ThrowsAny<ArgumentException>(() => CreateFrame(InteractionPhase.Move) with { ProviderInstanceId = null! });
+        Assert.ThrowsAny<ArgumentException>(() => CreateFrame(InteractionPhase.Move) with { SurfaceId = " " });
+    }
+
+    [Fact]
+    public void ObjectInitializationRejectsInvalidSurfacesPositionsAndMeasurements()
+    {
+        Assert.ThrowsAny<ArgumentException>(() => CreateSurface() with { Name = " " });
+        Assert.ThrowsAny<ArgumentException>(() => CreateSurface() with { LogicalWidth = 0 });
+        Assert.ThrowsAny<ArgumentException>(() => CreateSurface() with { LogicalHeight = -1 });
+        Assert.ThrowsAny<ArgumentException>(() => new Vector2Data(float.NaN, 0f));
+        Assert.ThrowsAny<ArgumentException>(() => new Vector2Data(0f, float.PositiveInfinity));
+        Assert.ThrowsAny<ArgumentException>(() => CreatePoint(InteractionPhase.Move) with { NormalizedPosition = null! });
+        Assert.ThrowsAny<ArgumentException>(() => CreatePoint(InteractionPhase.Move) with { PixelPosition = null! });
+        Assert.ThrowsAny<ArgumentException>(() => CreatePoint(InteractionPhase.Move) with
+        {
+            NormalizedPosition = new Vector2Data(-0.01f, 0.5f)
+        });
+        Assert.ThrowsAny<ArgumentException>(() => CreatePoint(InteractionPhase.Move) with
+        {
+            NormalizedPosition = new Vector2Data(0.5f, 1.01f)
+        });
+        Assert.ThrowsAny<ArgumentException>(() => CreatePoint(InteractionPhase.Move) with { Confidence = float.NaN });
+        Assert.ThrowsAny<ArgumentException>(() => CreatePoint(InteractionPhase.Move) with { Confidence = -0.01f });
+        Assert.ThrowsAny<ArgumentException>(() => CreatePoint(InteractionPhase.Move) with { Confidence = 1.01f });
+        Assert.ThrowsAny<ArgumentException>(() => CreateFrame(InteractionPhase.Move) with { Points = null! });
+    }
+
+    [Fact]
+    public void ObjectInitializationRejectsUndefinedEnumValues()
+    {
+        Assert.ThrowsAny<ArgumentException>(() => CreatePoint((InteractionPhase)99));
+        Assert.ThrowsAny<ArgumentException>(() => new HandInteractionExtension(
+            (InteractionHandedness)99,
+            "PalmCenter"));
+    }
+
+    [Fact]
+    public void JsonDeserializationRejectsBlankIdentityAndNumericEnums()
+    {
+        var validJson = InteractionJson.Serialize(CreateFrame(InteractionPhase.Move));
+        var blankIdentityJson = validJson.Replace(
+            "\"sourceId\":\"F1\"",
+            "\"sourceId\":\" \"",
+            StringComparison.Ordinal);
+        var numericPhaseJson = validJson.Replace(
+            "\"phase\":\"Move\"",
+            "\"phase\":2",
+            StringComparison.Ordinal);
+
+        Assert.Throws<JsonException>(() => InteractionJson.Deserialize<InteractionFrame>(blankIdentityJson));
+        Assert.Throws<JsonException>(() => InteractionJson.Deserialize<InteractionFrame>(numericPhaseJson));
+    }
+
     [Fact]
     public void InteractionFrameJsonCarriesAllScopedIdentitiesAndCoordinates()
     {
@@ -146,9 +239,56 @@ public sealed class InteractionContractTests
         Assert.Equal("PalmCenter", hand.TrackingPoint);
     }
 
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("[]")]
+    [InlineData("null")]
+    [InlineData("{\"sensorId\":null}")]
+    [InlineData("{\"sensorId\":\" \"}")]
+    public void RadarTypedHelperRejectsMalformedRadarExtension(string rawJson)
+    {
+        var point = CreatePointWithRawExtension("radar", rawJson);
+
+        Assert.False(point.TryGetRadarExtension(out var radar));
+        Assert.Null(radar);
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("[]")]
+    [InlineData("null")]
+    [InlineData("{\"handedness\":\"Right\",\"trackingPoint\":null}")]
+    [InlineData("{\"handedness\":\"Invalid\",\"trackingPoint\":\"PalmCenter\"}")]
+    [InlineData("{\"handedness\":2,\"trackingPoint\":\"PalmCenter\"}")]
+    public void HandTypedHelperRejectsMalformedHandExtension(string rawJson)
+    {
+        var point = CreatePointWithRawExtension("hand", rawJson);
+
+        Assert.False(point.TryGetHandExtension(out var hand));
+        Assert.Null(hand);
+    }
+
+    [Fact]
+    public void ExtensionsRemainSerializableAfterSourceJsonDocumentIsDisposed()
+    {
+        InteractionExtensions extensions;
+        using (var document = JsonDocument.Parse("{\"radar\":{\"sensorId\":\"F1\"}}"))
+        {
+            extensions = new InteractionExtensions(new Dictionary<string, JsonElement>
+            {
+                ["radar"] = document.RootElement.GetProperty("radar")
+            });
+        }
+
+        var json = InteractionJson.Serialize(CreateFrame(InteractionPhase.Move, extensions));
+
+        Assert.Contains("\"radar\":{\"sensorId\":\"F1\"}", json, StringComparison.Ordinal);
+    }
+
     private static InteractionFrame CreateFrame(
         InteractionPhase phase,
-        InteractionExtensions? extensions = null)
+        InteractionExtensions? extensions = null,
+        IReadOnlyList<InteractionPoint>? points = null)
     {
         return new InteractionFrame
         {
@@ -157,24 +297,52 @@ public sealed class InteractionContractTests
             SurfaceId = "FRONT",
             Sequence = 42,
             TimestampUnixMs = 1_720_000_000_000,
-            Points =
-            [
-                new InteractionPoint
-                {
-                    Id = 7,
-                    SurfaceId = "FRONT",
-                    ProviderId = "blaze.radar.f10f20",
-                    ProviderInstanceId = "radar-main",
-                    SourceId = "F1",
-                    Phase = phase,
-                    NormalizedPosition = new Vector2Data(0.25f, 0.75f),
-                    PixelPosition = new Vector2Data(480f, 810f),
-                    Confidence = 0.9f,
-                    TimestampUnixMs = 1_720_000_000_000,
-                    Extensions = extensions
-                }
-            ]
+            Points = points ?? [CreatePoint(phase, extensions)]
         };
+    }
+
+    private static InteractionPoint CreatePoint(
+        InteractionPhase phase,
+        InteractionExtensions? extensions = null)
+    {
+        return new InteractionPoint
+        {
+            Id = 7,
+            SurfaceId = "FRONT",
+            ProviderId = "blaze.radar.f10f20",
+            ProviderInstanceId = "radar-main",
+            SourceId = "F1",
+            Phase = phase,
+            NormalizedPosition = new Vector2Data(0.25f, 0.75f),
+            PixelPosition = new Vector2Data(480f, 810f),
+            Confidence = 0.9f,
+            TimestampUnixMs = 1_720_000_000_000,
+            Extensions = extensions
+        };
+    }
+
+    private static InteractionSurface CreateSurface()
+    {
+        return new InteractionSurface
+        {
+            SurfaceId = "FRONT",
+            Name = "Front",
+            LogicalWidth = 1920,
+            LogicalHeight = 1080,
+            IsPrimary = true,
+            Order = 0
+        };
+    }
+
+    private static InteractionPoint CreatePointWithRawExtension(string key, string rawJson)
+    {
+        using var document = JsonDocument.Parse(rawJson);
+        return CreatePoint(
+            InteractionPhase.Hover,
+            new InteractionExtensions(new Dictionary<string, JsonElement>
+            {
+                [key] = document.RootElement
+            }));
     }
 
     private sealed record InteractionTopology
