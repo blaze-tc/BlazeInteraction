@@ -111,6 +111,104 @@ public sealed class ProviderManagerTests
     }
 
     [Fact]
+    public async Task FrameReceived_AsyncContinuationMayStopAfterHandlerAndEmitReturn()
+    {
+        var provider = new TestProvider("first");
+        var manager = CreateManager(provider);
+        var releaseContinuation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var emitHasReturned = false;
+        Task<bool>? continuation = null;
+        await manager.SwitchAsync("first", InitializationContext, CancellationToken.None);
+        manager.FrameReceived += (_, _) =>
+            continuation = StopAfterReleaseAsync(releaseContinuation.Task, manager, () => emitHasReturned);
+
+        provider.Emit(Frame("first", "FRONT", 1, Point("first", "FRONT", 1, InteractionPhase.Down)));
+        emitHasReturned = true;
+        Assert.NotNull(continuation);
+        Assert.False(continuation.IsCompleted);
+
+        releaseContinuation.SetResult();
+        var observedEmitReturn = await continuation.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(observedEmitReturn);
+        Assert.Null(manager.ActiveProvider);
+        Assert.Equal(1, provider.StopCount);
+        await manager.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task ProviderFrame_NestedEmitIsDeferredUntilCurrentFrameReachesEverySubscriber()
+    {
+        var provider = new TestProvider("first");
+        await using var manager = CreateManager(provider);
+        var firstConsumer = new List<InteractionPhase>();
+        var secondConsumer = new List<InteractionPhase>();
+        var callbackDepth = 0;
+        var maximumCallbackDepth = 0;
+        manager.FrameReceived += (_, args) =>
+        {
+            callbackDepth++;
+            maximumCallbackDepth = Math.Max(maximumCallbackDepth, callbackDepth);
+            try
+            {
+                firstConsumer.Add(args.Frame.Points.Single().Phase);
+                if (args.Frame.Sequence == 1)
+                {
+                    provider.Emit(
+                        Frame("first", "FRONT", 2, Point("first", "FRONT", 7, InteractionPhase.Up)));
+                }
+            }
+            finally
+            {
+                callbackDepth--;
+            }
+        };
+        manager.FrameReceived += (_, args) =>
+            secondConsumer.Add(args.Frame.Points.Single().Phase);
+        await manager.SwitchAsync("first", InitializationContext, CancellationToken.None);
+
+        provider.Emit(Frame("first", "FRONT", 1, Point("first", "FRONT", 7, InteractionPhase.Down)));
+        await manager.StopAsync(CancellationToken.None);
+
+        Assert.Equal(1, maximumCallbackDepth);
+        Assert.Equal([InteractionPhase.Down, InteractionPhase.Up], firstConsumer);
+        Assert.Equal([InteractionPhase.Down, InteractionPhase.Up], secondConsumer);
+    }
+
+    [Fact]
+    public async Task ProviderFrame_NestedBurstBeyondCapacityIsRejectedWithoutUnboundedBuffering()
+    {
+        var provider = new TestProvider("first");
+        await using var manager = CreateManager(provider);
+        var publishedCount = 0;
+        var rejections = new List<ProviderFrameRejectedEventArgs>();
+        var diagnostics = new List<ProviderManagerDiagnosticEventArgs>();
+        manager.FrameReceived += (_, args) =>
+        {
+            if (args.Frame.Sequence == 1)
+            {
+                for (var sequence = 2; sequence <= 130; sequence++)
+                {
+                    provider.Emit(
+                        Frame("first", "FRONT", sequence, Point("first", "FRONT", 7, InteractionPhase.Move)));
+                }
+            }
+        };
+        manager.FrameReceived += (_, _) => publishedCount++;
+        manager.FrameRejected += (_, args) => rejections.Add(args);
+        manager.Diagnostic += (_, args) => diagnostics.Add(args);
+        await manager.SwitchAsync("first", InitializationContext, CancellationToken.None);
+
+        provider.Emit(Frame("first", "FRONT", 1, Point("first", "FRONT", 7, InteractionPhase.Down)));
+
+        Assert.True(publishedCount < 130);
+        Assert.Contains(rejections, item => item.Message.Contains("capacity", StringComparison.OrdinalIgnoreCase));
+        Assert.All(rejections, item => Assert.Equal(ProviderFrameRejectionReason.CapacityExceeded, item.Reason));
+        Assert.Contains(diagnostics, item => item.Operation == "FrameQueueCapacityExceeded");
+        await manager.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task ProviderFrame_NonIncreasingSequenceIsRejectedWithoutReactivatingEndedPoint()
     {
         var provider = new TestProvider("first");
@@ -911,6 +1009,17 @@ public sealed class ProviderManagerTests
 
         await task;
         return true;
+    }
+
+    private static async Task<bool> StopAfterReleaseAsync(
+        Task release,
+        ProviderManager manager,
+        Func<bool> emitHasReturned)
+    {
+        await release;
+        var observedEmitReturn = emitHasReturned();
+        await manager.StopAsync(CancellationToken.None);
+        return observedEmitReturn;
     }
 
     private static ProviderDescriptor Descriptor() => new(

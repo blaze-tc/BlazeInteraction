@@ -7,7 +7,8 @@ public enum ProviderFrameRejectionReason
 {
     InvalidLifecycle = 0,
     IdentityMismatch = 1,
-    NonIncreasingSequence = 2
+    NonIncreasingSequence = 2,
+    CapacityExceeded = 3
 }
 
 public sealed class ProviderManagerStatusChangedEventArgs : EventArgs
@@ -82,9 +83,11 @@ public sealed class ProviderManagerDiagnosticEventArgs : EventArgs
 
 public sealed class ProviderManager : IAsyncDisposable
 {
+    private const int FrameQueueCapacity = 64;
+
     private readonly object _stateGate = new();
     private readonly object _disposeGate = new();
-    private readonly AsyncLocal<int> _eventDispatchDepth = new();
+    private readonly AsyncLocal<EventDispatchState?> _eventDispatchState = new();
     private readonly Dictionary<string, ProviderRegistration> _registrations = new(StringComparer.Ordinal);
     private readonly List<PendingCleanup> _pendingCleanup = [];
     private readonly SemaphoreSlim _transitionGate = new(1, 1);
@@ -558,59 +561,140 @@ public sealed class ProviderManager : IAsyncDisposable
             return;
         }
 
-        try
+        var item = new FrameDispatchItem(frame);
+        bool dispatch;
+        bool nested;
+        bool capacityExceeded;
+        lock (session.FrameDispatchGate)
         {
-            lock (session.FrameDispatchGate)
+            capacityExceeded = session.FrameQueue.Count >= FrameQueueCapacity;
+            if (capacityExceeded)
             {
-                ManagerLifecycle lifecycle;
-                bool isCurrent;
-                lock (_stateGate)
+                dispatch = false;
+                nested = false;
+            }
+            else
+            {
+                session.FrameQueue.Enqueue(item);
+                dispatch = !session.FrameDispatcherActive;
+                if (dispatch)
                 {
-                    lifecycle = _lifecycle;
-                    isCurrent = ReferenceEquals(_current, session) && _generation == session.Generation;
+                    session.FrameDispatcherActive = true;
+                    session.FrameDispatcherThreadId = Environment.CurrentManagedThreadId;
                 }
 
-                if (!isCurrent || lifecycle != ManagerLifecycle.Running)
-                {
-                    PublishFrameRejected(
-                        new ProviderFrameRejectedEventArgs(
-                            frame,
-                            ProviderFrameRejectionReason.InvalidLifecycle,
-                            "The provider emitted a frame outside its active running lifecycle."),
-                        session.Identity);
-                    return;
-                }
-
-                if (!HasExpectedIdentity(session.Identity, frame))
-                {
-                    PublishFrameRejected(
-                        new ProviderFrameRejectedEventArgs(
-                            frame,
-                            ProviderFrameRejectionReason.IdentityMismatch,
-                            "The frame identity does not match the active provider and surface."),
-                        session.Identity);
-                    return;
-                }
-
-                if (!session.TryAdvanceSequence(frame.SurfaceId, frame.Sequence))
-                {
-                    PublishFrameRejected(
-                        new ProviderFrameRejectedEventArgs(
-                            frame,
-                            ProviderFrameRejectionReason.NonIncreasingSequence,
-                            "The frame sequence must increase monotonically for each provider instance and surface."),
-                        session.Identity);
-                    return;
-                }
-
-                _activePoints.Apply(frame);
-                InvokeSubscribers(FrameReceived, new InteractionFrameEventArgs(frame), nameof(FrameReceived), session.Identity);
+                nested = !dispatch && session.FrameDispatcherThreadId == Environment.CurrentManagedThreadId;
             }
         }
-        finally
+
+        if (capacityExceeded)
         {
-            session.Callbacks.Exit();
+            var exception = new InvalidOperationException(
+                $"The provider frame queue exceeded its capacity of {FrameQueueCapacity}.");
+            try
+            {
+                PublishFrameRejected(
+                    new ProviderFrameRejectedEventArgs(
+                        frame,
+                        ProviderFrameRejectionReason.CapacityExceeded,
+                        exception.Message),
+                    session.Identity);
+                PublishDiagnostic("FrameQueueCapacityExceeded", exception, session.Identity);
+            }
+            finally
+            {
+                session.Callbacks.Exit();
+            }
+
+            return;
         }
+
+        if (dispatch)
+        {
+            DrainFrameQueue(session);
+        }
+        else if (!nested)
+        {
+            item.Completion.Task.GetAwaiter().GetResult();
+        }
+    }
+
+    private void DrainFrameQueue(ActiveSession session)
+    {
+        while (true)
+        {
+            FrameDispatchItem item;
+            lock (session.FrameDispatchGate)
+            {
+                if (!session.FrameQueue.TryDequeue(out item!))
+                {
+                    session.FrameDispatcherActive = false;
+                    session.FrameDispatcherThreadId = 0;
+                    return;
+                }
+            }
+
+            try
+            {
+                ProcessAdmittedFrame(session, item.Frame);
+            }
+            catch (Exception exception)
+            {
+                PublishDiagnostic("DispatchFrame", exception, session.Identity);
+            }
+            finally
+            {
+                session.Callbacks.Exit();
+                item.Completion.TrySetResult();
+            }
+        }
+    }
+
+    private void ProcessAdmittedFrame(ActiveSession session, InteractionFrame frame)
+    {
+        ManagerLifecycle lifecycle;
+        bool isCurrent;
+        lock (_stateGate)
+        {
+            lifecycle = _lifecycle;
+            isCurrent = ReferenceEquals(_current, session) && _generation == session.Generation;
+        }
+
+        if (!isCurrent || lifecycle != ManagerLifecycle.Running)
+        {
+            PublishFrameRejected(
+                new ProviderFrameRejectedEventArgs(
+                    frame,
+                    ProviderFrameRejectionReason.InvalidLifecycle,
+                    "The provider emitted a frame outside its active running lifecycle."),
+                session.Identity);
+            return;
+        }
+
+        if (!HasExpectedIdentity(session.Identity, frame))
+        {
+            PublishFrameRejected(
+                new ProviderFrameRejectedEventArgs(
+                    frame,
+                    ProviderFrameRejectionReason.IdentityMismatch,
+                    "The frame identity does not match the active provider and surface."),
+                session.Identity);
+            return;
+        }
+
+        if (!session.TryAdvanceSequence(frame.SurfaceId, frame.Sequence))
+        {
+            PublishFrameRejected(
+                new ProviderFrameRejectedEventArgs(
+                    frame,
+                    ProviderFrameRejectionReason.NonIncreasingSequence,
+                    "The frame sequence must increase monotonically for each provider instance and surface."),
+                session.Identity);
+            return;
+        }
+
+        _activePoints.Apply(frame);
+        InvokeSubscribers(FrameReceived, new InteractionFrameEventArgs(frame), nameof(FrameReceived), session.Identity);
     }
 
     private void HandleStatus(ActiveSession session, ProviderStatusChangedEventArgs status)
@@ -817,7 +901,7 @@ public sealed class ProviderManager : IAsyncDisposable
 
     private void ThrowIfLifecycleReentry(string operation)
     {
-        if (_eventDispatchDepth.Value > 0)
+        if (_eventDispatchState.Value?.HasActiveDispatch == true)
         {
             throw new InvalidOperationException(
                 $"{operation} cannot be called synchronously from a ProviderManager outbound event handler.");
@@ -826,8 +910,10 @@ public sealed class ProviderManager : IAsyncDisposable
 
     private IDisposable EnterEventDispatch()
     {
-        _eventDispatchDepth.Value++;
-        return new EventDispatchScope(this);
+        var previous = _eventDispatchState.Value;
+        var current = new EventDispatchState(previous);
+        _eventDispatchState.Value = current;
+        return new EventDispatchScope(this, current, previous);
     }
 
     private sealed record ProviderRegistration(
@@ -859,6 +945,9 @@ public sealed class ProviderManager : IAsyncDisposable
         internal IInteractionProvider Provider { get; }
         internal long Generation { get; }
         internal object FrameDispatchGate { get; } = new();
+        internal Queue<FrameDispatchItem> FrameQueue { get; } = new();
+        internal bool FrameDispatcherActive { get; set; }
+        internal int FrameDispatcherThreadId { get; set; }
         internal CallbackAdmissionGate Callbacks { get; } = new();
         internal EventHandler<InteractionFrameEventArgs> FrameHandler { get; }
         internal EventHandler<ProviderStatusChangedEventArgs> StatusHandler { get; }
@@ -875,16 +964,41 @@ public sealed class ProviderManager : IAsyncDisposable
         }
     }
 
-    private sealed class EventDispatchScope(ProviderManager owner) : IDisposable
+    private sealed class FrameDispatchItem(InteractionFrame frame)
+    {
+        internal InteractionFrame Frame { get; } = frame;
+        internal TaskCompletionSource Completion { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private sealed class EventDispatchState(EventDispatchState? parent)
+    {
+        private int _active = 1;
+
+        internal bool HasActiveDispatch => Volatile.Read(ref _active) != 0 || parent?.HasActiveDispatch == true;
+
+        internal void Deactivate() => Interlocked.Exchange(ref _active, 0);
+    }
+
+    private sealed class EventDispatchScope(
+        ProviderManager owner,
+        EventDispatchState current,
+        EventDispatchState? previous) : IDisposable
     {
         private ProviderManager? _owner = owner;
 
         public void Dispose()
         {
-            var current = Interlocked.Exchange(ref _owner, null);
-            if (current is not null)
+            var ownerInstance = Interlocked.Exchange(ref _owner, null);
+            if (ownerInstance is null)
             {
-                current._eventDispatchDepth.Value--;
+                return;
+            }
+
+            current.Deactivate();
+            if (ReferenceEquals(ownerInstance._eventDispatchState.Value, current))
+            {
+                ownerInstance._eventDispatchState.Value = previous;
             }
         }
     }
