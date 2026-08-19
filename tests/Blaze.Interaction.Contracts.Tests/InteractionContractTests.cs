@@ -69,6 +69,47 @@ public sealed class InteractionContractTests
     }
 
     [Fact]
+    public void Vector2DataJsonAcceptsPascalCaseCoordinatesWhenCaseInsensitive()
+    {
+        var position = InteractionJson.Deserialize<Vector2Data>("{\"X\":1.25,\"Y\":2.5}");
+
+        Assert.Equal(1.25f, position.X);
+        Assert.Equal(2.5f, position.Y);
+    }
+
+    [Fact]
+    public void Vector2DataJsonAcceptsMixedCaseCoordinatesWhenCaseInsensitive()
+    {
+        var position = InteractionJson.Deserialize<Vector2Data>("{\"X\":3.5,\"y\":4.75}");
+
+        Assert.Equal(3.5f, position.X);
+        Assert.Equal(4.75f, position.Y);
+    }
+
+    [Theory]
+    [InlineData("{\"x\":1,\"X\":2,\"y\":3}")]
+    [InlineData("{\"x\":1,\"y\":2,\"Y\":3}")]
+    public void Vector2DataJsonRejectsCaseVariantDuplicatesWhenCaseInsensitive(string json)
+    {
+        Assert.Throws<JsonException>(() => InteractionJson.Deserialize<Vector2Data>(json));
+    }
+
+    [Fact]
+    public void Vector2DataJsonKeepsExactPropertyMatchingWhenCaseInsensitiveIsDisabled()
+    {
+        var options = new JsonSerializerOptions(InteractionJson.Options)
+        {
+            PropertyNameCaseInsensitive = false
+        };
+
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<Vector2Data>("{\"X\":1,\"Y\":2}", options));
+        var position = JsonSerializer.Deserialize<Vector2Data>("{\"x\":1,\"y\":2}", options);
+        Assert.NotNull(position);
+        Assert.Equal(1f, position.X);
+        Assert.Equal(2f, position.Y);
+    }
+
+    [Fact]
     public void ObjectInitializationRejectsMissingScopedIdentities()
     {
         Assert.ThrowsAny<ArgumentException>(() => new ProviderIdentity

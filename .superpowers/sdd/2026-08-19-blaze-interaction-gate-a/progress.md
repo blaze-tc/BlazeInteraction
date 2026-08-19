@@ -5,7 +5,7 @@ Plan: `docs/superpowers/plans/2026-08-19-blaze-interaction-gate-a.md`
 | Task | Status | Commit | Verification |
 |---|---|---|---|
 | 0. Radar 1.2.10 baseline | Complete | pending | .NET 398/398; Unity EditMode 6/6; PlayMode 68/68 |
-| 1. Interaction contracts | Complete | e9c744b + c5491dd + current payload fix | Contracts 34/34; full solution 432/432; Radar .NET 398/398 |
+| 1. Interaction contracts | Complete | e9c744b + c5491dd + 07bd238 + current JSON matching fix | Contracts 39/39; full solution 437/437; Radar .NET 398/398 |
 | 2. Provider API/catalog/loader | Pending | pending | pending |
 | 3. Provider manager | Pending | pending | pending |
 | 4. Interaction IPC | Pending | pending | pending |
@@ -35,3 +35,5 @@ Plan: `docs/superpowers/plans/2026-08-19-blaze-interaction-gate-a.md`
 - Payload review RED: the expanded 34-test suite failed exactly 5 new cases: null point at object/JSON boundaries and missing x, missing y, or both coordinates in `Vector2Data` JSON.
 - Payload review GREEN: Contracts passed 34/34 with null-element rejection and an explicit x/y converter; `(0,0)` and valid typed Hand tracking-point payloads remain accepted.
 - Payload full verification: `dotnet test BlazeInteraction.sln -c Release --nologo` passed 432/432, and a fresh complete `scripts/test.ps1` passed the Radar baseline 398/398.
+- JSON matching RED: the expanded 39-test suite failed exactly 4 cases for PascalCase/mixed-case coordinates and x/X or y/Y duplicate detection; exact matching with case-insensitivity disabled already passed.
+- JSON matching GREEN: Contracts passed 39/39 after honoring `JsonSerializerOptions.PropertyNameCaseInsensitive`; full solution passed 437/437 and a fresh Radar script passed 398/398.

@@ -316,6 +316,9 @@ internal sealed class Vector2DataJsonConverter : JsonConverter<Vector2Data>
         var hasY = false;
         var x = 0f;
         var y = 0f;
+        var propertyComparison = options.PropertyNameCaseInsensitive
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
 
         while (reader.Read())
         {
@@ -340,27 +343,27 @@ internal sealed class Vector2DataJsonConverter : JsonConverter<Vector2Data>
                 throw new JsonException("A two-dimensional position ended before its property value.");
             }
 
-            switch (propertyName)
+            if (string.Equals(propertyName, "x", propertyComparison))
             {
-                case "x":
-                    if (hasX || reader.TokenType != JsonTokenType.Number || !reader.TryGetSingle(out x))
-                    {
-                        throw new JsonException("The x coordinate must be one finite JSON number.");
-                    }
+                if (hasX || reader.TokenType != JsonTokenType.Number || !reader.TryGetSingle(out x))
+                {
+                    throw new JsonException("The x coordinate must be one finite JSON number.");
+                }
 
-                    hasX = true;
-                    break;
-                case "y":
-                    if (hasY || reader.TokenType != JsonTokenType.Number || !reader.TryGetSingle(out y))
-                    {
-                        throw new JsonException("The y coordinate must be one finite JSON number.");
-                    }
+                hasX = true;
+            }
+            else if (string.Equals(propertyName, "y", propertyComparison))
+            {
+                if (hasY || reader.TokenType != JsonTokenType.Number || !reader.TryGetSingle(out y))
+                {
+                    throw new JsonException("The y coordinate must be one finite JSON number.");
+                }
 
-                    hasY = true;
-                    break;
-                default:
-                    reader.Skip();
-                    break;
+                hasY = true;
+            }
+            else
+            {
+                reader.Skip();
             }
         }
 
