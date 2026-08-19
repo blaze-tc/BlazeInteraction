@@ -4,12 +4,14 @@ namespace Blaze.Interaction.Runtime.Tests;
 
 internal sealed class ProviderTestDirectory : IDisposable
 {
-    private static readonly string SessionRoot = CreateSessionRoot();
     private readonly string _root;
 
     public ProviderTestDirectory()
     {
-        _root = Path.Combine(SessionRoot, Guid.NewGuid().ToString("N"));
+        _root = Path.Combine(
+            Path.GetTempPath(),
+            "blaze-provider-tests",
+            Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_root);
     }
 
@@ -31,14 +33,7 @@ internal sealed class ProviderTestDirectory : IDisposable
         string id = "blaze.test.valid")
     {
         var directory = AddEmptyProvider(directoryName);
-        var output = Path.Combine(
-            FindRepositoryRoot(),
-            "tests",
-            "TestProviders",
-            fixtureProjectName,
-            "bin",
-            "Release",
-            "net8.0");
+        var output = GetFixtureOutput(fixtureProjectName);
 
         Assert.True(Directory.Exists(output), $"Fixture output does not exist: {output}");
         foreach (var file in Directory.EnumerateFiles(output))
@@ -48,6 +43,20 @@ internal sealed class ProviderTestDirectory : IDisposable
 
         WriteManifest(directory, entryAssembly, entryType, providerApiVersion, id);
         return directory;
+    }
+
+    public static string GetFixtureOutput(string fixtureProjectName)
+    {
+        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent?.Name
+            ?? throw new InvalidOperationException("Could not determine the active test build configuration.");
+        return Path.Combine(
+            FindRepositoryRoot(),
+            "tests",
+            "TestProviders",
+            fixtureProjectName,
+            "bin",
+            configuration,
+            "net8.0");
     }
 
     public static void WriteManifest(
@@ -75,38 +84,7 @@ internal sealed class ProviderTestDirectory : IDisposable
 
     public void Dispose()
     {
-        try
-        {
-            Directory.Delete(_root, recursive: true);
-        }
-        catch (Exception exception) when (exception is UnauthorizedAccessException
-                                           or IOException)
-        {
-            // Collectible AssemblyLoadContext releases mapped DLLs only after its
-            // last managed reference leaves the test method. Process-exit cleanup
-            // retries this process-unique directory after all tests have ended.
-        }
-    }
-
-    private static string CreateSessionRoot()
-    {
-        var root = Path.Combine(
-            Path.GetTempPath(),
-            "blaze-provider-tests",
-            $"{Environment.ProcessId}-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(root);
-        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
-        {
-            try
-            {
-                Directory.Delete(root, recursive: true);
-            }
-            catch
-            {
-                // The operating system will reclaim the process's mapped files.
-            }
-        };
-        return root;
+        Directory.Delete(_root, recursive: true);
     }
 
     private static string FindRepositoryRoot()

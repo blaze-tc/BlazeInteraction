@@ -33,8 +33,7 @@ public sealed record ProviderManifest
             throw new FormatException("Provider version must be a valid dotted version.");
         }
 
-        if (Path.IsPathRooted(EntryAssembly)
-            || !string.Equals(Path.GetFileName(EntryAssembly), EntryAssembly, StringComparison.Ordinal))
+        if (!ProviderPathSecurity.IsSimpleFileName(EntryAssembly))
         {
             throw new FormatException("Entry assembly must be a file name inside the provider directory.");
         }
@@ -48,6 +47,11 @@ public sealed record ProviderManifest
         if (Capabilities.Any(string.IsNullOrWhiteSpace))
         {
             throw new FormatException("Provider capabilities cannot contain empty values.");
+        }
+
+        if (Capabilities.Distinct(StringComparer.OrdinalIgnoreCase).Count() != Capabilities.Count)
+        {
+            throw new FormatException("Provider capabilities cannot contain duplicates.");
         }
     }
 

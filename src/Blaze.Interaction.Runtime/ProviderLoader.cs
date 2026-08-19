@@ -10,7 +10,8 @@ public enum ProviderLoadFailure
     AssemblyLoadFailed = 2,
     MissingEntryType = 3,
     InvalidPluginType = 4,
-    ActivationFailed = 5
+    ActivationFailed = 5,
+    DescriptorMismatch = 6
 }
 
 public sealed class ProviderLoadException : Exception
@@ -27,7 +28,7 @@ public sealed class ProviderLoadException : Exception
 public sealed class LoadedProvider : IDisposable
 {
     private IInteractionProviderPlugin? _plugin;
-    private bool _disposed;
+    private ProviderLoadContext? _loadContext;
 
     internal LoadedProvider(
         ProviderManifest manifest,
@@ -36,26 +37,27 @@ public sealed class LoadedProvider : IDisposable
     {
         Manifest = manifest;
         _plugin = plugin;
-        LoadContext = loadContext;
+        _loadContext = loadContext;
     }
 
     public ProviderManifest Manifest { get; }
 
-    public IInteractionProviderPlugin Plugin => _plugin
+    public IInteractionProviderPlugin Plugin => Volatile.Read(ref _plugin)
         ?? throw new ObjectDisposedException(nameof(LoadedProvider));
 
-    public ProviderLoadContext LoadContext { get; }
+    public ProviderLoadContext LoadContext => Volatile.Read(ref _loadContext)
+        ?? throw new ObjectDisposedException(nameof(LoadedProvider));
 
     public void Dispose()
     {
-        if (_disposed)
+        Interlocked.Exchange(ref _plugin, null);
+        var loadContext = Interlocked.Exchange(ref _loadContext, null);
+        if (loadContext is null)
         {
             return;
         }
 
-        _disposed = true;
-        _plugin = null;
-        LoadContext.Unload();
+        loadContext.Unload();
     }
 }
 
@@ -81,7 +83,34 @@ public sealed class ProviderLoader
         }
 
         var manifest = entry.Manifest;
-        var assemblyPath = Path.GetFullPath(Path.Combine(entry.ProviderDirectory, manifest.EntryAssembly));
+        string providerDirectory;
+        string assemblyPath;
+        try
+        {
+            manifest.Validate();
+            if (manifest.ProviderApiVersion != ProviderApi.CurrentMajorVersion
+                || !ProviderPathSecurity.TryGetSafeProviderRoot(entry.ProviderDirectory, out providerDirectory))
+            {
+                throw new FormatException();
+            }
+
+            var candidatePath = Path.Combine(providerDirectory, manifest.EntryAssembly);
+            if (!ProviderPathSecurity.TryResolveContainedFile(providerDirectory, candidatePath, out assemblyPath))
+            {
+                throw new FormatException();
+            }
+        }
+        catch (Exception exception) when (exception is ArgumentException
+                                          or FormatException
+                                          or IOException
+                                          or UnauthorizedAccessException
+                                          or NotSupportedException)
+        {
+            throw new ProviderLoadException(
+                ProviderLoadFailure.InvalidCatalogEntry,
+                "The provider catalog entry failed security validation.");
+        }
+
         if (!File.Exists(assemblyPath))
         {
             throw new ProviderLoadException(
@@ -95,7 +124,7 @@ public sealed class ProviderLoader
             Assembly assembly;
             try
             {
-                assembly = context.LoadFromAssemblyPath(assemblyPath);
+                assembly = context.LoadProviderAssembly(assemblyPath);
             }
             catch (Exception exception) when (exception is BadImageFormatException
                                               or FileLoadException
@@ -139,12 +168,48 @@ public sealed class ProviderLoader
                     exception);
             }
 
+            try
+            {
+                ValidateDescriptor(manifest, plugin.Descriptor);
+            }
+            catch (ProviderLoadException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                throw new ProviderLoadException(
+                    ProviderLoadFailure.DescriptorMismatch,
+                    "The provider plugin descriptor could not be validated.",
+                    exception);
+            }
+
             return new LoadedProvider(manifest, plugin, context);
         }
         catch
         {
             context.Unload();
             throw;
+        }
+    }
+
+    private static void ValidateDescriptor(ProviderManifest manifest, ProviderDescriptor descriptor)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
+        var manifestVersion = Version.Parse(manifest.Version);
+        var manifestCapabilities = manifest.Capabilities.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var descriptorCapabilities = descriptor.Capabilities.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (!string.Equals(manifest.Id, descriptor.Id, StringComparison.Ordinal)
+            || !string.Equals(manifest.DisplayName, descriptor.DisplayName, StringComparison.Ordinal)
+            || manifestVersion != descriptor.Version
+            || !string.Equals(manifest.Category, descriptor.Category, StringComparison.Ordinal)
+            || manifest.Capabilities.Count != descriptor.Capabilities.Count
+            || !manifestCapabilities.SetEquals(descriptorCapabilities))
+        {
+            throw new ProviderLoadException(
+                ProviderLoadFailure.DescriptorMismatch,
+                "The provider plugin descriptor does not match its manifest.");
         }
     }
 
@@ -162,9 +227,13 @@ public sealed class ProviderLoader
             {
                 results.Add(new ProviderLoadResult(entry, null, exception.Failure, exception.Message));
             }
-            catch (Exception exception)
+            catch (Exception)
             {
-                results.Add(new ProviderLoadResult(entry, null, ProviderLoadFailure.AssemblyLoadFailed, exception.Message));
+                results.Add(new ProviderLoadResult(
+                    entry,
+                    null,
+                    ProviderLoadFailure.AssemblyLoadFailed,
+                    "Provider loading failed unexpectedly."));
             }
         }
 

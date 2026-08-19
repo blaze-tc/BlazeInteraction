@@ -6,7 +6,12 @@ namespace Blaze.Interaction.TestProviders;
 
 public sealed class DependencyV2Plugin : IInteractionProviderPlugin
 {
-    public ProviderDescriptor Descriptor { get; } = new("blaze.test.dependency-v2", "Dependency V2", new Version(2, 0), "Test", []);
+    public ProviderDescriptor Descriptor { get; } = new(
+        "blaze.test.dependency-v2",
+        "Valid test provider",
+        new Version(1, 2, 3),
+        "Test",
+        ["interaction-point", "diagnostics"]);
     public IProviderSettingsViewFactory? SettingsViewFactory => null;
     public IInteractionProvider CreateProvider(ProviderCreateContext context) => throw new NotSupportedException();
     public string GetDependencyVersion() => DependencyVersion.Value;

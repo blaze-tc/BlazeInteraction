@@ -37,11 +37,28 @@ public class ProviderLoadContext : AssemblyLoadContext
         {
             var shared = Default.Assemblies.FirstOrDefault(
                 assembly => string.Equals(assembly.GetName().Name, assemblyName.Name, StringComparison.OrdinalIgnoreCase));
-            return shared ?? Default.LoadFromAssemblyName(assemblyName);
+            shared ??= Default.LoadFromAssemblyName(assemblyName);
+            if (!HasExactIdentity(assemblyName, shared.GetName()))
+            {
+                throw new FileLoadException(
+                    $"Shared contract assembly identity mismatch for '{assemblyName.Name}'.");
+            }
+
+            return shared;
         }
 
         var assemblyPath = _resolver.ResolveAssemblyToPath(assemblyName);
-        return assemblyPath is null ? null : LoadFromAssemblyPath(assemblyPath);
+        if (assemblyPath is null)
+        {
+            return null;
+        }
+
+        if (!ProviderPathSecurity.TryResolveContainedFile(_providerDirectory, assemblyPath, out var resolvedPath))
+        {
+            throw new FileLoadException("A managed provider dependency resolved outside its provider directory.");
+        }
+
+        return LoadManagedAssembly(resolvedPath);
     }
 
     protected override nint LoadUnmanagedDll(string unmanagedDllName)
@@ -57,10 +74,20 @@ public class ProviderLoadContext : AssemblyLoadContext
             return null;
         }
 
+        if (!ProviderPathSecurity.IsSimpleFileName(unmanagedDllName))
+        {
+            throw new FileLoadException("An unmanaged library request must be a simple provider-local file name.");
+        }
+
         var resolved = _resolver.ResolveUnmanagedDllToPath(unmanagedDllName);
         if (resolved is not null)
         {
-            return resolved;
+            if (!ProviderPathSecurity.TryResolveContainedFile(_providerDirectory, resolved, out var resolvedPath))
+            {
+                throw new FileLoadException("An unmanaged provider dependency resolved outside its provider directory.");
+            }
+
+            return resolvedPath;
         }
 
         foreach (var fileName in CandidateFileNames(unmanagedDllName))
@@ -72,14 +99,41 @@ public class ProviderLoadContext : AssemblyLoadContext
                 Path.Combine(_providerDirectory, fileName)
             };
 
-            var candidate = candidates.FirstOrDefault(File.Exists);
-            if (candidate is not null)
+            foreach (var candidate in candidates.Where(File.Exists))
             {
-                return Path.GetFullPath(candidate);
+                if (!ProviderPathSecurity.TryResolveContainedFile(_providerDirectory, candidate, out var resolvedCandidate))
+                {
+                    throw new FileLoadException("An unmanaged provider dependency resolved outside its provider directory.");
+                }
+
+                return resolvedCandidate;
             }
         }
 
         return null;
+    }
+
+    internal Assembly LoadProviderAssembly(string assemblyPath)
+    {
+        return LoadManagedAssembly(assemblyPath);
+    }
+
+    private Assembly LoadManagedAssembly(string assemblyPath)
+    {
+        using var assemblyStream = new FileStream(
+            assemblyPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read | FileShare.Delete);
+        return LoadFromStream(assemblyStream);
+    }
+
+    private static bool HasExactIdentity(AssemblyName requested, AssemblyName actual)
+    {
+        return string.Equals(requested.Name, actual.Name, StringComparison.OrdinalIgnoreCase)
+            && requested.Version == actual.Version
+            && string.Equals(requested.CultureName ?? string.Empty, actual.CultureName ?? string.Empty, StringComparison.OrdinalIgnoreCase)
+            && (requested.GetPublicKeyToken() ?? []).SequenceEqual(actual.GetPublicKeyToken() ?? []);
     }
 
     private static string CreateName(string mainAssemblyPath)
