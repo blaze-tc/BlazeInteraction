@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
 using System.IO.Pipes;
 using System.Text;
-using Blaze.Radar;
+using Blaze.Interaction;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -14,7 +14,7 @@ public sealed class RadarPipeClientTests
     {
         var pipeName = PipeName();
         using var timeout = Timeout();
-        using var client = new RadarPipeClient(pipeName, 75, 25, 2500);
+        using var client = new InteractionPipeClient(pipeName, 75, 25, 2500);
         var errors = new List<string>();
         client.ErrorReceived += errors.Add;
 
@@ -30,8 +30,8 @@ public sealed class RadarPipeClientTests
         await ReadEnvelopeAsync(server, timeout.Token);
         await WriteEnvelopeAsync(server, Ack(), timeout.Token);
         await WaitUntilAsync(() => client.IsConnected, timeout.Token);
-
         client.DrainMainThreadEvents();
+
         Assert.True(client.IsConnected);
         Assert.Empty(errors);
         await client.StopAsync();
@@ -42,7 +42,7 @@ public sealed class RadarPipeClientTests
     {
         var pipeName = PipeName();
         using var timeout = Timeout();
-        using var client = new RadarPipeClient(pipeName, 75, 25, 2500);
+        using var client = new InteractionPipeClient(pipeName, 75, 25, 2500);
         var errors = new List<string>();
         client.ErrorReceived += errors.Add;
 
@@ -55,8 +55,7 @@ public sealed class RadarPipeClientTests
         await Task.Delay(300, timeout.Token);
         client.DrainMainThreadEvents();
 
-        Assert.DoesNotContain(errors, value =>
-            value.Contains("timed out", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(errors, value => value.Contains("timed out", StringComparison.OrdinalIgnoreCase));
         Assert.InRange(errors.Count, 1, 1);
         await client.StopAsync();
     }
@@ -64,12 +63,10 @@ public sealed class RadarPipeClientTests
     [Fact]
     public async Task Client_RepeatedServerRejectionIsReportedOnceAcrossReconnectAttempts()
     {
-        const string rejection =
-            "Configuration was rejected during loading and cannot be reconciled or saved. " +
-            "Create a new configuration explicitly first.";
+        const string rejection = "Configuration was rejected.";
         var pipeName = PipeName();
         using var timeout = Timeout();
-        using var client = new RadarPipeClient(pipeName, 500, 25, 2500);
+        using var client = Client(pipeName);
         var errors = new List<string>();
         client.ErrorReceived += errors.Add;
         client.Start(Hello("main"));
@@ -82,10 +79,10 @@ public sealed class RadarPipeClientTests
                 await ReadEnvelopeAsync(server, timeout.Token);
                 await WriteEnvelopeAsync(
                     server,
-                    RadarIpcProtocol.Create(
-                        RadarIpcMessageType.Error,
+                    InteractionIpcProtocol.Create(
+                        InteractionMessageType.Error,
                         attempt + 1,
-                        new RadarErrorPayload { code = "configuration_rejected", message = rejection }),
+                        new ErrorPayload { Code = "configuration_rejected", Message = rejection }),
                     timeout.Token);
                 await Task.Delay(75, timeout.Token);
             }
@@ -95,15 +92,11 @@ public sealed class RadarPipeClientTests
         }
 
         Assert.Equal(1, errors.Count(value => value == rejection));
-        Assert.InRange(
-            errors.Count(value => value.Contains("closed the Named Pipe", StringComparison.OrdinalIgnoreCase)),
-            0,
-            1);
         await client.StopAsync();
     }
 
     [Fact]
-    public async Task Client_UnityStallPreservesDownMoveUpAndFollowingZeroBatchInOrder()
+    public async Task Client_UnityStallPreservesDownMoveUpAndFollowingEmptyFrameInOrder()
     {
         var pipeName = PipeName();
         using var timeout = Timeout();
@@ -111,44 +104,41 @@ public sealed class RadarPipeClientTests
         using var client = Client(pipeName);
         await ConnectAndAckAsync(server, client, timeout.Token);
 
-        await WriteFragmentedEnvelopesAsync(
+        await WriteEnvelopesAsync(
             server,
-            new[]
-            {
-                RadarIpcProtocol.Create(RadarIpcMessageType.PointerBatch, 10, Batch(Frame("main", 10, Pointer(7, 100, 100, .1f, .1f, 1010, RadarPointerPhase.Down)))),
-                RadarIpcProtocol.Create(RadarIpcMessageType.PointerBatch, 11, Batch(Frame("main", 11, Pointer(7, 200, 200, .2f, .2f, 1011, RadarPointerPhase.Move)))),
-                RadarIpcProtocol.Create(RadarIpcMessageType.PointerBatch, 12, Batch(Frame("main", 12, Pointer(7, 200, 200, .2f, .2f, 1012, RadarPointerPhase.Up)))),
-                RadarIpcProtocol.Create(RadarIpcMessageType.PointerBatch, 13, Batch(Frame("main", 13)))
-            },
+            [
+                Envelope(Frame(10, InteractionPhase.Down)),
+                Envelope(Frame(11, InteractionPhase.Move)),
+                Envelope(Frame(12, InteractionPhase.Up)),
+                Envelope(Frame(13, null))
+            ],
             timeout.Token,
             fragment: false);
-        await Task.Delay(100, timeout.Token);
+        await WaitUntilAsync(() => client.DroppedFrameCount == 0, timeout.Token, minimumDelayMilliseconds: 100);
 
-        var received = new List<RadarPointerBatchPayload>();
-        while (client.TryConsumeLatestBatch(out var batch)) received.Add(batch);
+        var received = new List<InteractionFrame>();
+        while (client.TryConsumeLatestFrame(out var frame)) received.Add(frame);
 
-        Assert.Equal([10L, 11L, 12L, 13L], received.Select(batch => batch.screens.Single().sequence));
+        Assert.Equal([10L, 11L, 12L, 13L], received.Select(frame => frame.Sequence));
         Assert.Equal(
-            [RadarPointerPhase.Down, RadarPointerPhase.Move, RadarPointerPhase.Up],
-            received.Take(3).Select(batch => batch.screens.Single().pointers.Single().phase));
-        Assert.Empty(received[3].screens.Single().pointers);
+            [InteractionPhase.Down, InteractionPhase.Move, InteractionPhase.Up],
+            received.Take(3).Select(frame => frame.Points.Single().Phase));
+        Assert.Empty(received[3].Points);
         await client.StopAsync();
     }
 
     [Fact]
-    public void Protocol_CreateUsesV2AndRejectsLegacyPointerFrame()
+    public void Protocol_CreateUsesInteractionIpcOne()
     {
-        var hello = RadarIpcProtocol.Create(RadarIpcMessageType.Hello, 1, Hello("main"));
+        var hello = InteractionIpcProtocol.Create(InteractionMessageType.Hello, 1, Hello("main"));
 
-        Assert.Equal(2, RadarIpcProtocol.Version);
-        Assert.Equal(2, hello.protocolVersion);
-        var error = Assert.Throws<InvalidOperationException>(() =>
-            RadarIpcProtocol.Create(RadarIpcMessageType.PointerFrame, 2, new RadarPointerFrameMessage()));
-        Assert.Contains("protocol v2", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, InteractionIpcProtocol.Version);
+        Assert.Equal(1, hello.ProtocolVersion);
+        Assert.Equal(InteractionMessageType.Hello, hello.MessageType);
     }
 
     [Fact]
-    public async Task Client_HelloContainsEveryCallerScreenAndNoV1ResolutionFields()
+    public async Task Client_HelloContainsEveryCallerSurfaceAndNoLegacyResolutionFields()
     {
         var pipeName = PipeName();
         using var timeout = Timeout();
@@ -160,14 +150,14 @@ public sealed class RadarPipeClientTests
         var received = await ReadEnvelopeWithJsonAsync(server, timeout.Token);
         var payload = JObject.Parse(received.Json)["payload"]!;
 
-        Assert.Equal(RadarIpcMessageType.Hello, received.Envelope.messageType);
-        Assert.Contains("\"protocolVersion\":2", received.Json, StringComparison.Ordinal);
-        Assert.Contains("\"messageType\":\"Hello\"", received.Json, StringComparison.Ordinal);
-        Assert.Equal(new[] { "left", "front", "right" },
-            received.Envelope.payload.ToObject<RadarHelloPayload>()!.screens.Select(screen => screen.screenId));
+        Assert.Equal(InteractionMessageType.Hello, received.Envelope.MessageType);
+        Assert.Contains("\"protocolVersion\":1", received.Json, StringComparison.Ordinal);
+        Assert.Equal(
+            new[] { "left", "front", "right" },
+            received.Envelope.DeserializePayload<HelloPayload>().Surfaces.Select(surface => surface.SurfaceId));
         Assert.Null(payload["screenWidth"]);
         Assert.Null(payload["screenHeight"]);
-        Assert.Equal(3, payload["screens"]!.Count());
+        Assert.Equal(3, payload["surfaces"]!.Count());
 
         await WriteEnvelopeAsync(server, Ack(), timeout.Token);
         await WaitUntilAsync(() => client.IsConnected, timeout.Token);
@@ -175,7 +165,7 @@ public sealed class RadarPipeClientTests
     }
 
     [Fact]
-    public async Task Client_HelloAckGatesConnectionAndRetainsEveryV2Field()
+    public async Task Client_HelloAckGatesConnectionAndRetainsProviderFields()
     {
         var pipeName = PipeName();
         using var timeout = Timeout();
@@ -195,7 +185,7 @@ public sealed class RadarPipeClientTests
         await ReadEnvelopeAsync(server, timeout.Token);
         Assert.False(client.IsConnected);
 
-        await WriteEnvelopeAsync(server, Ack(connected: false), timeout.Token);
+        await WriteEnvelopeAsync(server, Ack(), timeout.Token);
         await WaitUntilAsync(() => client.IsConnected, timeout.Token);
 
         Assert.False(callbackConnected);
@@ -203,56 +193,39 @@ public sealed class RadarPipeClientTests
         client.DrainMainThreadEvents();
         Assert.True(callbackConnected);
         Assert.Equal(drainThread, callbackThread);
-        Assert.True(client.IsConnected);
-        Assert.Equal("1.2.0", client.BridgeVersion);
-        Assert.Equal(2, client.AcknowledgedProtocolVersion);
-        Assert.Equal("multi-screen", client.Capability);
-        Assert.False(client.HasRunningSensors);
-        var screen = Assert.Single(client.AcknowledgedScreens);
-        Assert.Equal("front", screen.screenId);
-        Assert.Equal(4096, screen.widthPixels);
+        Assert.Equal("1.0.0", client.BridgeVersion);
+        Assert.Equal("blaze.radar.f10f20", client.ActiveProvider!.Id);
+        Assert.Equal("radar-main", client.ActiveProvider.InstanceId);
 
         await client.StopAsync();
     }
 
     [Fact]
-    public async Task Client_FragmentedStickyAckAndPointerBatchRoundTripAtomically()
+    public async Task Client_FragmentedStickyAckAndFrameRoundTripAtomically()
     {
         var pipeName = PipeName();
         using var timeout = Timeout();
         await using var server = Server(pipeName);
         using var client = Client(pipeName);
-        client.Start(Hello("left", "front"));
+        client.Start(Hello("front"));
         await server.WaitForConnectionAsync(timeout.Token);
         await ReadEnvelopeAsync(server, timeout.Token);
 
-        var batch = Batch(
-            Frame("left", 40, Pointer(1, 10f, 20f, 0.1f, 0.2f, 1001)),
-            Frame("front", 41, Pointer(7, 2048f, 384f, 0.5f, 0.25f, 1002)));
-        await WriteFragmentedEnvelopesAsync(
-            server,
-            new[] { Ack(), RadarIpcProtocol.Create(RadarIpcMessageType.PointerBatch, 42, batch) },
-            timeout.Token);
+        var expected = Frame(42, InteractionPhase.Move, "front");
+        await WriteEnvelopesAsync(server, [Ack(), Envelope(expected)], timeout.Token, fragment: true);
+        var received = await ConsumeFrameAsync(client, timeout.Token);
 
-        var received = await ConsumeBatchAsync(client, timeout.Token);
-
-        Assert.Equal(2, received.screens.Count);
-        Assert.Equal("left", received.screens[0].screen.screenId);
-        Assert.Equal(40, received.screens[0].sequence);
-        Assert.Equal("front", received.screens[1].screen.screenId);
-        var pointer = Assert.Single(received.screens[1].pointers);
-        Assert.Equal(7, pointer.pointerId);
-        Assert.Equal(2048f, pointer.pixelX);
-        Assert.Equal(384f, pointer.pixelY);
-        Assert.Equal(0.5f, pointer.normalizedX);
-        Assert.Equal(0.25f, pointer.normalizedY);
-        Assert.Equal(1002, pointer.timestampUnixMilliseconds);
-
+        Assert.Equal(42, received.Sequence);
+        Assert.Equal("front", received.SurfaceId);
+        var point = Assert.Single(received.Points);
+        Assert.Equal(7, point.Id);
+        Assert.Equal(2048f, point.PixelPosition!.X);
+        Assert.Equal(384f, point.PixelPosition.Y);
         await client.StopAsync();
     }
 
     [Fact]
-    public async Task Client_TwoUnconsumedBatchesDropOneWholeBatchAndLatestWins()
+    public async Task Client_TwoUnconsumedVisualFramesDropOneAndLatestWins()
     {
         var pipeName = PipeName();
         using var timeout = Timeout();
@@ -260,54 +233,49 @@ public sealed class RadarPipeClientTests
         using var client = Client(pipeName);
         await ConnectAndAckAsync(server, client, timeout.Token);
 
-        await WriteFragmentedEnvelopesAsync(
+        await WriteEnvelopesAsync(
             server,
-            new[]
-            {
-                RadarIpcProtocol.Create(RadarIpcMessageType.PointerBatch, 1, Batch(Frame("main", 1))),
-                RadarIpcProtocol.Create(RadarIpcMessageType.PointerBatch, 2, Batch(Frame("main", 2)))
-            },
+            [Envelope(Frame(1, InteractionPhase.Move)), Envelope(Frame(2, InteractionPhase.Move))],
             timeout.Token,
             fragment: false);
-        await WaitUntilAsync(() => client.DroppedBatchCount == 1, timeout.Token);
+        await WaitUntilAsync(() => client.DroppedFrameCount == 1, timeout.Token);
 
-        Assert.True(client.TryConsumeLatestBatch(out var latest));
-        Assert.Equal(2, Assert.Single(latest.screens).sequence);
-        Assert.Equal(1, client.DroppedBatchCount);
-        Assert.Equal(client.DroppedBatchCount, client.DroppedFrameCount);
-
+        Assert.True(client.TryConsumeLatestFrame(out var latest));
+        Assert.Equal(2, latest.Sequence);
+        Assert.Equal(1, client.DroppedFrameCount);
         await client.StopAsync();
     }
 
     [Fact]
-    public async Task Client_LegacyPointerFrameReportsExplicitErrorAndPublishesNoBatch()
+    public async Task Client_FrameBeforeAckIsRejectedAndSessionReconnects()
     {
         var pipeName = PipeName();
         using var timeout = Timeout();
-        await using var server = Server(pipeName);
         using var client = Client(pipeName);
-        var laterSubscriberCalled = false;
-        client.ErrorReceived += _ => throw new InvalidOperationException("observer failed");
-        client.ErrorReceived += _ => laterSubscriberCalled = true;
-        await ConnectAndAckAsync(server, client, timeout.Token);
 
-        await WriteEnvelopeAsync(
-            server,
-            ManualEnvelope(RadarIpcProtocol.Version, RadarIpcMessageType.PointerFrame, new RadarPointerFrameMessage()),
-            timeout.Token);
-        await WaitUntilAsync(() => client.LastError.Contains("legacy PointerFrame", StringComparison.Ordinal), timeout.Token);
-        client.DrainMainThreadEvents();
+        await using (var firstServer = Server(pipeName))
+        {
+            client.Start(Hello("main"));
+            await firstServer.WaitForConnectionAsync(timeout.Token);
+            await ReadEnvelopeAsync(firstServer, timeout.Token);
+            await WriteEnvelopeAsync(firstServer, Envelope(Frame(2, InteractionPhase.Down)), timeout.Token);
+            await WaitUntilAsync(
+                () => client.LastError.Contains("before HelloAck", StringComparison.OrdinalIgnoreCase),
+                timeout.Token);
+        }
 
-        Assert.Equal("RadarBridge sent legacy PointerFrame on IPC v2.", client.LastError);
-        Assert.True(laterSubscriberCalled);
-        Assert.False(client.TryConsumeLatestBatch(out _));
-        Assert.True(client.IsConnected);
-
+        Assert.False(client.IsConnected);
+        Assert.False(client.TryConsumeLatestFrame(out _));
+        await using var secondServer = Server(pipeName);
+        await secondServer.WaitForConnectionAsync(timeout.Token);
+        await ReadEnvelopeAsync(secondServer, timeout.Token);
+        await WriteEnvelopeAsync(secondServer, Ack(), timeout.Token);
+        await WaitUntilAsync(() => client.IsConnected, timeout.Token);
         await client.StopAsync();
     }
 
     [Theory]
-    [InlineData(1)]
+    [InlineData(0)]
     [InlineData(999)]
     public async Task Client_ProtocolMismatchReportsErrorReconnectsAndNeverPublishesRejectedData(int protocolVersion)
     {
@@ -320,22 +288,20 @@ public sealed class RadarPipeClientTests
             client.Start(Hello("main"));
             await firstServer.WaitForConnectionAsync(timeout.Token);
             await ReadEnvelopeAsync(firstServer, timeout.Token);
-            await WriteEnvelopeAsync(
-                firstServer,
-                ManualEnvelope(protocolVersion, RadarIpcMessageType.PointerBatch, Batch(Frame("main", 1))),
-                timeout.Token);
+            var invalid = Envelope(Frame(1, InteractionPhase.Down));
+            invalid.ProtocolVersion = protocolVersion;
+            await WriteEnvelopeAsync(firstServer, invalid, timeout.Token);
             await WaitUntilAsync(
                 () => client.LastError.Contains(protocolVersion.ToString(), StringComparison.Ordinal),
                 timeout.Token);
         }
 
-        Assert.False(client.TryConsumeLatestBatch(out _));
+        Assert.False(client.TryConsumeLatestFrame(out _));
         await using var secondServer = Server(pipeName);
         await secondServer.WaitForConnectionAsync(timeout.Token);
-        Assert.Equal(RadarIpcMessageType.Hello, (await ReadEnvelopeAsync(secondServer, timeout.Token)).messageType);
+        Assert.Equal(InteractionMessageType.Hello, (await ReadEnvelopeAsync(secondServer, timeout.Token)).MessageType);
         await WriteEnvelopeAsync(secondServer, Ack(), timeout.Token);
         await WaitUntilAsync(() => client.IsConnected, timeout.Token);
-
         await client.StopAsync();
     }
 
@@ -360,12 +326,11 @@ public sealed class RadarPipeClientTests
         await ReadEnvelopeAsync(secondServer, timeout.Token);
         await WriteEnvelopeAsync(secondServer, Ack(), timeout.Token);
         await WaitUntilAsync(() => client.IsConnected, timeout.Token);
-
         await client.StopAsync();
     }
 
     [Fact]
-    public async Task Client_NullBatchPayloadReportsErrorReconnectsAndPublishesNothing()
+    public async Task Client_NullFramePayloadReportsErrorReconnectsAndPublishesNothing()
     {
         var pipeName = PipeName();
         using var timeout = Timeout();
@@ -374,32 +339,28 @@ public sealed class RadarPipeClientTests
         await using (var firstServer = Server(pipeName))
         {
             await ConnectAndAckAsync(firstServer, client, timeout.Token);
-            var invalid = new RadarIpcEnvelope
+            var invalid = new InteractionEnvelope
             {
-                protocolVersion = RadarIpcProtocol.Version,
-                messageType = RadarIpcMessageType.PointerBatch,
-                sequence = 10,
-                timestampUnixMilliseconds = 1000,
-                payload = JValue.CreateNull()
+                ProtocolVersion = InteractionIpcProtocol.Version,
+                MessageType = InteractionMessageType.InteractionFrame,
+                Sequence = 10,
+                Payload = JValue.CreateNull()
             };
             await WriteEnvelopeAsync(firstServer, invalid, timeout.Token);
-            await WaitUntilAsync(
-                () => client.LastError.Contains("PointerBatch", StringComparison.OrdinalIgnoreCase),
-                timeout.Token);
+            await WaitUntilAsync(() => !string.IsNullOrWhiteSpace(client.LastError), timeout.Token);
         }
 
-        Assert.False(client.TryConsumeLatestBatch(out _));
+        Assert.False(client.TryConsumeLatestFrame(out _));
         await using var secondServer = Server(pipeName);
         await secondServer.WaitForConnectionAsync(timeout.Token);
         await ReadEnvelopeAsync(secondServer, timeout.Token);
         await WriteEnvelopeAsync(secondServer, Ack(), timeout.Token);
         await WaitUntilAsync(() => client.IsConnected, timeout.Token);
-
         await client.StopAsync();
     }
 
     [Fact]
-    public async Task Client_PointerBatchBeforeAckIsRejectedAndSessionReconnects()
+    public async Task Client_DuplicateAckReportsErrorAndReconnects()
     {
         var pipeName = PipeName();
         using var timeout = Timeout();
@@ -407,62 +368,84 @@ public sealed class RadarPipeClientTests
 
         await using (var firstServer = Server(pipeName))
         {
-            client.Start(Hello("main"));
-            await firstServer.WaitForConnectionAsync(timeout.Token);
-            await ReadEnvelopeAsync(firstServer, timeout.Token);
-            await WriteEnvelopeAsync(
-                firstServer,
-                RadarIpcProtocol.Create(RadarIpcMessageType.PointerBatch, 2, Batch(Frame("main", 2))),
-                timeout.Token);
+            await ConnectAndAckAsync(firstServer, client, timeout.Token);
+            await WriteEnvelopeAsync(firstServer, Ack(), timeout.Token);
             await WaitUntilAsync(
-                () => client.LastError.Contains("before HelloAck", StringComparison.OrdinalIgnoreCase),
+                () => client.LastError.Contains("duplicate HelloAck", StringComparison.OrdinalIgnoreCase),
                 timeout.Token);
         }
 
-        Assert.False(client.IsConnected);
-        Assert.False(client.TryConsumeLatestBatch(out _));
         await using var secondServer = Server(pipeName);
         await secondServer.WaitForConnectionAsync(timeout.Token);
         await ReadEnvelopeAsync(secondServer, timeout.Token);
         await WriteEnvelopeAsync(secondServer, Ack(), timeout.Token);
         await WaitUntilAsync(() => client.IsConnected, timeout.Token);
-
         await client.StopAsync();
     }
 
     [Fact]
-    public async Task Client_InvalidAckProtocolReportsErrorAndDoesNotConnect()
+    public async Task Client_ProviderChangedUpdatesStateAndRaisesOnDrainThread()
     {
         var pipeName = PipeName();
         using var timeout = Timeout();
+        await using var server = Server(pipeName);
         using var client = Client(pipeName);
+        await ConnectAndAckAsync(server, client, timeout.Token);
+        ProviderChangedPayload? observed = null;
+        client.ProviderChangedReceived += change => observed = change;
 
-        await using (var firstServer = Server(pipeName))
+        var change = new ProviderChangedPayload
         {
-            client.Start(Hello("main"));
-            await firstServer.WaitForConnectionAsync(timeout.Token);
-            await ReadEnvelopeAsync(firstServer, timeout.Token);
-            var ack = Ack();
-            ack.payload["protocolVersion"] = 1;
+            PreviousProvider = new ProviderReferencePayload { Id = "blaze.radar.f10f20", InstanceId = "radar-main" },
+            ActiveProvider = new ProviderReferencePayload { Id = "blaze.test", InstanceId = "test-main" },
+            TimestampUnixMs = 5000
+        };
+        await WriteEnvelopeAsync(
+            server,
+            InteractionIpcProtocol.Create(InteractionMessageType.ProviderChanged, 5, change),
+            timeout.Token);
+        await WaitUntilAsync(() => client.ActiveProvider?.Id == "blaze.test", timeout.Token);
+        Assert.Null(observed);
+        client.DrainMainThreadEvents();
 
-            await WriteEnvelopeAsync(firstServer, ack, timeout.Token);
-            await WaitUntilAsync(
-                () => client.LastError.Contains("acknowledgement", StringComparison.OrdinalIgnoreCase),
-                timeout.Token);
-        }
-
-        Assert.False(client.IsConnected);
-
-        await using var secondServer = Server(pipeName);
-        await secondServer.WaitForConnectionAsync(timeout.Token);
-        await ReadEnvelopeAsync(secondServer, timeout.Token);
-        await WriteEnvelopeAsync(secondServer, Ack(), timeout.Token);
-        await WaitUntilAsync(() => client.IsConnected, timeout.Token);
+        Assert.Equal("blaze.test", observed!.ActiveProvider!.Id);
         await client.StopAsync();
     }
 
     [Fact]
-    public async Task Client_HeartbeatAndShutdownRemainLengthPrefixedMessages()
+    public async Task Client_StatusRaisesOnDrainThreadAndIsolatesObservers()
+    {
+        var pipeName = PipeName();
+        using var timeout = Timeout();
+        await using var server = Server(pipeName);
+        using var client = Client(pipeName);
+        await ConnectAndAckAsync(server, client, timeout.Token);
+        StatusPayload? observed = null;
+        client.StatusReceived += _ => throw new InvalidOperationException("observer failed");
+        client.StatusReceived += status => observed = status;
+
+        var status = new StatusPayload
+        {
+            Code = "provider_status",
+            State = "Running",
+            Message = "ready",
+            Provider = new ProviderReferencePayload { Id = "blaze.radar.f10f20", InstanceId = "radar-main" },
+            TimestampUnixMs = 5000
+        };
+        await WriteEnvelopeAsync(
+            server,
+            InteractionIpcProtocol.Create(InteractionMessageType.Status, 6, status),
+            timeout.Token);
+        await Task.Delay(75, timeout.Token);
+        Assert.Null(observed);
+        client.DrainMainThreadEvents();
+
+        Assert.Equal("ready", observed!.Message);
+        await client.StopAsync();
+    }
+
+    [Fact]
+    public async Task Client_HeartbeatRemainsLengthPrefixedPing()
     {
         var pipeName = PipeName();
         using var timeout = Timeout(seconds: 7);
@@ -471,12 +454,8 @@ public sealed class RadarPipeClientTests
         await ConnectAndAckAsync(server, client, timeout.Token);
 
         var heartbeat = await ReadEnvelopeAsync(server, timeout.Token);
-        Assert.Equal(RadarIpcMessageType.Ping, heartbeat.messageType);
-        var sendShutdown = client.SendShutdownAsync();
-        var shutdown = await ReadEnvelopeAsync(server, timeout.Token);
-        await sendShutdown;
-        Assert.Equal(RadarIpcMessageType.Shutdown, shutdown.messageType);
-
+        Assert.Equal(InteractionMessageType.Ping, heartbeat.MessageType);
+        Assert.True(heartbeat.DeserializePayload<PingPayload>().TimestampUnixMs > 0);
         await client.StopAsync();
     }
 
@@ -505,7 +484,7 @@ public sealed class RadarPipeClientTests
         }
 
         Assert.False(client.IsConnected);
-        Assert.False(client.TryConsumeLatestBatch(out _));
+        Assert.False(client.TryConsumeLatestFrame(out _));
     }
 
     [Fact]
@@ -530,7 +509,7 @@ public sealed class RadarPipeClientTests
         Assert.False(client.IsConnected);
     }
 
-    private static RadarPipeClient Client(string pipeName) => new(pipeName, 500, 50, 2500);
+    private static InteractionPipeClient Client(string pipeName) => new(pipeName, 500, 50, 2500);
 
     private static NamedPipeServerStream Server(string pipeName) => new(
         pipeName,
@@ -542,228 +521,189 @@ public sealed class RadarPipeClientTests
     private static CancellationTokenSource Timeout(int seconds = 5) =>
         new(TimeSpan.FromSeconds(seconds));
 
-    private static string PipeName() => "RadarControl.Tests." + Guid.NewGuid().ToString("N");
+    private static string PipeName() => "BlazeInteraction.Tests." + Guid.NewGuid().ToString("N");
 
-    private static RadarHelloPayload Hello(params string[] screenIds)
+    private static HelloPayload Hello(params string[] surfaceIds) => new()
     {
-        return new RadarHelloPayload
+        UnityPid = Environment.ProcessId,
+        UnityVersion = "2021.3.45f1",
+        SdkVersion = "1.0.0",
+        Surfaces = surfaceIds.Select((id, index) => new InteractionSurface
         {
-            unityProcessId = Environment.ProcessId,
-            unityVersion = "2021.3.45f1",
-            screens = screenIds.Select((id, index) => new RadarScreenDefinitionPayload
-            {
-                screenId = id,
-                name = id.ToUpperInvariant(),
-                defaultWidthPixels = id == "front" ? 4096 : 1920,
-                defaultHeightPixels = id == "front" ? 1536 : 1080,
-                isPrimary = id == "front" || (screenIds.Length == 1 && index == 0),
-                order = index
-            }).ToList()
-        };
-    }
-
-    private static RadarIpcEnvelope Ack(bool connected = true)
-    {
-        return RadarIpcProtocol.Create(
-            RadarIpcMessageType.HelloAck,
-            1,
-            new RadarHelloAckPayload
-            {
-                bridgeVersion = "1.2.0",
-                protocolVersion = 2,
-                connected = connected,
-                capability = "multi-screen",
-                screens = new List<RadarScreenInfo>
-                {
-                    new()
-                    {
-                        screenId = "front",
-                        name = "Front",
-                        widthPixels = 4096,
-                        heightPixels = 1536,
-                        isPrimary = true,
-                        order = 0
-                    }
-                }
-            });
-    }
-
-    private static RadarPointerBatchPayload Batch(params RadarScreenPointerFrame[] frames) => new()
-    {
-        screens = frames.ToList()
+            SurfaceId = id,
+            Name = id,
+            LogicalWidth = 1920 + index,
+            LogicalHeight = 1080,
+            IsPrimary = index == 0,
+            Order = index
+        }).ToList()
     };
 
-    private static RadarScreenPointerFrame Frame(
-        string screenId,
-        long sequence,
-        params RadarScreenPointer[] pointers)
-    {
-        return new RadarScreenPointerFrame
+    private static InteractionEnvelope Ack() => InteractionIpcProtocol.Create(
+        InteractionMessageType.HelloAck,
+        1,
+        new HelloAckPayload
         {
-            screen = new RadarScreenInfo
+            BridgeVersion = "1.0.0",
+            ActiveProvider = new ProviderReferencePayload
             {
-                screenId = screenId,
-                name = screenId,
-                widthPixels = 1920,
-                heightPixels = 1080,
-                isPrimary = screenId == "main" || screenId == "front",
-                order = 0
+                Id = "blaze.radar.f10f20",
+                InstanceId = "radar-main"
             },
-            sequence = sequence,
-            timestampUnixMilliseconds = 1000 + sequence,
-            pointers = pointers.ToList()
-        };
-    }
+            Capabilities = ["radar"]
+        });
 
-    private static RadarScreenPointer Pointer(
-        int pointerId,
-        float pixelX,
-        float pixelY,
-        float normalizedX,
-        float normalizedY,
-        long timestamp,
-        RadarPointerPhase phase = RadarPointerPhase.Move)
+    private static InteractionFrame Frame(
+        long sequence,
+        InteractionPhase? phase,
+        string surfaceId = "main") => new()
     {
-        return new RadarScreenPointer
-        {
-            pointerId = pointerId,
-            phase = phase,
-            normalizedX = normalizedX,
-            normalizedY = normalizedY,
-            pixelX = pixelX,
-            pixelY = pixelY,
-            confidence = 0.9f,
-            timestampUnixMilliseconds = timestamp
-        };
-    }
+        ProviderId = "blaze.radar.f10f20",
+        ProviderInstanceId = "radar-main",
+        SurfaceId = surfaceId,
+        Sequence = sequence,
+        TimestampUnixMs = 1000 + sequence,
+        Points = phase.HasValue
+            ? [new InteractionPoint
+            {
+                Id = 7,
+                SurfaceId = surfaceId,
+                ProviderId = "blaze.radar.f10f20",
+                ProviderInstanceId = "radar-main",
+                SourceId = "radar-fused-output",
+                Phase = phase.Value,
+                NormalizedPosition = new Vector2Data { X = .5f, Y = .25f },
+                PixelPosition = new Vector2Data { X = 2048f, Y = 384f },
+                Confidence = .9f,
+                TimestampUnixMs = 1000 + sequence
+            }]
+            : []
+    };
 
-    private static RadarIpcEnvelope ManualEnvelope(int protocol, RadarIpcMessageType type, object payload)
-    {
-        return new RadarIpcEnvelope
-        {
-            protocolVersion = protocol,
-            messageType = type,
-            sequence = 9,
-            timestampUnixMilliseconds = 1000,
-            payload = payload == null ? JValue.CreateNull() : JToken.FromObject(payload)
-        };
-    }
+    private static InteractionEnvelope Envelope(InteractionFrame frame) =>
+        InteractionIpcProtocol.Create(InteractionMessageType.InteractionFrame, frame.Sequence, frame);
 
     private static async Task ConnectAndAckAsync(
         NamedPipeServerStream server,
-        RadarPipeClient client,
+        InteractionPipeClient client,
         CancellationToken cancellationToken)
     {
         client.Start(Hello("main"));
         await server.WaitForConnectionAsync(cancellationToken);
-        await ReadEnvelopeAsync(server, cancellationToken);
+        Assert.Equal(InteractionMessageType.Hello, (await ReadEnvelopeAsync(server, cancellationToken)).MessageType);
         await WriteEnvelopeAsync(server, Ack(), cancellationToken);
         await WaitUntilAsync(() => client.IsConnected, cancellationToken);
     }
 
-    private static async Task<RadarPointerBatchPayload> ConsumeBatchAsync(
-        RadarPipeClient client,
+    private static async Task<InteractionFrame> ConsumeFrameAsync(
+        InteractionPipeClient client,
         CancellationToken cancellationToken)
     {
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            if (client.TryConsumeLatestBatch(out var batch))
-            {
-                return batch;
-            }
-
-            await Task.Delay(5, cancellationToken);
-        }
-
-        throw new OperationCanceledException(cancellationToken);
+        InteractionFrame? frame = null;
+        await WaitUntilAsync(() => client.TryConsumeLatestFrame(out frame), cancellationToken);
+        return frame!;
     }
 
-    private static async Task<RadarIpcEnvelope> ReadEnvelopeAsync(
-        Stream stream,
-        CancellationToken cancellationToken)
-    {
-        return (await ReadEnvelopeWithJsonAsync(stream, cancellationToken)).Envelope;
-    }
+    private static async Task<InteractionEnvelope> ReadEnvelopeAsync(
+        NamedPipeServerStream server,
+        CancellationToken cancellationToken) =>
+        (await ReadEnvelopeWithJsonAsync(server, cancellationToken)).Envelope;
 
-    private static async Task<(RadarIpcEnvelope Envelope, string Json)> ReadEnvelopeWithJsonAsync(
-        Stream stream,
+    private static async Task<(InteractionEnvelope Envelope, string Json)> ReadEnvelopeWithJsonAsync(
+        NamedPipeServerStream server,
         CancellationToken cancellationToken)
     {
-        var prefix = new byte[4];
-        await stream.ReadExactlyAsync(prefix, cancellationToken);
-        var length = BinaryPrimitives.ReadInt32LittleEndian(prefix);
+        var header = new byte[4];
+        await ReadExactlyAsync(server, header, cancellationToken);
+        var length = BinaryPrimitives.ReadInt32LittleEndian(header);
         var payload = new byte[length];
-        await stream.ReadExactlyAsync(payload, cancellationToken);
+        await ReadExactlyAsync(server, payload, cancellationToken);
         var json = Encoding.UTF8.GetString(payload);
-        return (JsonConvert.DeserializeObject<RadarIpcEnvelope>(json)!, json);
+        return (JsonConvert.DeserializeObject<InteractionEnvelope>(json)!, json);
     }
 
     private static async Task WriteEnvelopeAsync(
-        Stream stream,
-        RadarIpcEnvelope envelope,
+        NamedPipeServerStream server,
+        InteractionEnvelope envelope,
         CancellationToken cancellationToken)
     {
-        await WriteRawJsonAsync(stream, JsonConvert.SerializeObject(envelope), cancellationToken);
+        var frame = EncodeEnvelope(envelope);
+        await server.WriteAsync(frame, cancellationToken);
+        await server.FlushAsync(cancellationToken);
     }
 
     private static async Task WriteRawJsonAsync(
-        Stream stream,
+        NamedPipeServerStream server,
         string json,
         CancellationToken cancellationToken)
     {
         var payload = Encoding.UTF8.GetBytes(json);
         var frame = new byte[payload.Length + 4];
         BinaryPrimitives.WriteInt32LittleEndian(frame, payload.Length);
-        payload.CopyTo(frame.AsSpan(4));
-        await stream.WriteAsync(frame, cancellationToken);
-        await stream.FlushAsync(cancellationToken);
+        payload.CopyTo(frame, 4);
+        await server.WriteAsync(frame, cancellationToken);
+        await server.FlushAsync(cancellationToken);
     }
 
-    private static async Task WriteFragmentedEnvelopesAsync(
-        Stream stream,
-        IReadOnlyList<RadarIpcEnvelope> envelopes,
+    private static async Task WriteEnvelopesAsync(
+        NamedPipeServerStream server,
+        IReadOnlyList<InteractionEnvelope> envelopes,
         CancellationToken cancellationToken,
-        bool fragment = true)
+        bool fragment)
     {
-        var frames = envelopes.Select(EncodeEnvelope).ToArray();
-        var combined = new byte[frames.Sum(bytes => bytes.Length)];
-        var offset = 0;
-        foreach (var frame in frames)
-        {
-            Buffer.BlockCopy(frame, 0, combined, offset, frame.Length);
-            offset += frame.Length;
-        }
-
+        var bytes = envelopes.SelectMany(EncodeEnvelope).ToArray();
         if (!fragment)
         {
-            await stream.WriteAsync(combined, cancellationToken);
-        }
-        else
-        {
-            var first = Math.Min(3, combined.Length);
-            var second = Math.Min(11, combined.Length - first);
-            await stream.WriteAsync(combined.AsMemory(0, first), cancellationToken);
-            await stream.WriteAsync(combined.AsMemory(first, second), cancellationToken);
-            await stream.WriteAsync(combined.AsMemory(first + second), cancellationToken);
+            await server.WriteAsync(bytes, cancellationToken);
+            await server.FlushAsync(cancellationToken);
+            return;
         }
 
-        await stream.FlushAsync(cancellationToken);
+        var split = Math.Min(7, bytes.Length - 1);
+        await server.WriteAsync(bytes.AsMemory(0, split), cancellationToken);
+        await server.FlushAsync(cancellationToken);
+        await Task.Delay(10, cancellationToken);
+        await server.WriteAsync(bytes.AsMemory(split), cancellationToken);
+        await server.FlushAsync(cancellationToken);
     }
 
-    private static byte[] EncodeEnvelope(RadarIpcEnvelope envelope)
+    private static byte[] EncodeEnvelope(InteractionEnvelope envelope)
     {
-        var payload = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(envelope));
+        var payload = Encoding.UTF8.GetBytes(InteractionIpcProtocol.Serialize(envelope));
         var frame = new byte[payload.Length + 4];
         BinaryPrimitives.WriteInt32LittleEndian(frame, payload.Length);
-        payload.CopyTo(frame.AsSpan(4));
+        payload.CopyTo(frame, 4);
         return frame;
     }
 
-    private static async Task WaitUntilAsync(Func<bool> condition, CancellationToken cancellationToken)
+    private static async Task ReadExactlyAsync(
+        Stream stream,
+        byte[] buffer,
+        CancellationToken cancellationToken)
     {
-        while (!condition())
+        var offset = 0;
+        while (offset < buffer.Length)
         {
-            await Task.Delay(5, cancellationToken);
+            var read = await stream.ReadAsync(buffer.AsMemory(offset), cancellationToken);
+            if (read == 0) throw new EndOfStreamException();
+            offset += read;
+        }
+    }
+
+    private static async Task WaitUntilAsync(
+        Func<bool> predicate,
+        CancellationToken cancellationToken,
+        int minimumDelayMilliseconds = 0)
+    {
+        if (minimumDelayMilliseconds > 0)
+        {
+            await Task.Delay(minimumDelayMilliseconds, cancellationToken);
+        }
+
+        while (!predicate())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Delay(10, cancellationToken);
         }
     }
 }

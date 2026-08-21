@@ -25,6 +25,7 @@ namespace Blaze.Interaction
         public event Action<InteractionPoint> PointAdded;
         public event Action<InteractionPoint> PointUpdated;
         public event Action<InteractionPoint> PointRemoved;
+        public event Action<InteractionFrame> FrameReceived;
         public event Action<ProviderChangedPayload> ProviderChanged;
         public event Action<bool> ConnectionChanged;
 
@@ -87,6 +88,8 @@ namespace Blaze.Interaction
                     InvokeSafely(PointAdded, point);
                 }
             }
+
+            InvokeSafely(FrameReceived, frame);
         }
 
         public void ApplyProviderChanged(ProviderChangedPayload change)

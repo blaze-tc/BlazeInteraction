@@ -83,8 +83,8 @@ function Assert-SampleAssembliesCopied {
     param([string]$SampleRoot)
 
     $expectedAssemblies = @(
-        (Join-Path $SampleRoot "Basic Interaction\Blaze.Radar.Sample.BasicInteraction.asmdef"),
-        (Join-Path $SampleRoot "Multi-Screen Camera Routing\Blaze.Radar.Sample.MultiScreenCameraRouting.asmdef")
+        (Join-Path $SampleRoot "Basic Interaction\Blaze.Interaction.Sample.BasicInteraction.asmdef"),
+        (Join-Path $SampleRoot "Multi-Surface Routing\Blaze.Interaction.Sample.MultiSurfaceRouting.asmdef")
     )
     foreach ($assemblyPath in $expectedAssemblies) {
         if (-not (Test-Path -LiteralPath $assemblyPath -PathType Leaf)) {
@@ -284,8 +284,8 @@ function Invoke-RunnerSelfTest {
     }
 
     $sampleTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "blaze-radar-$selfTestId-samples"
-    $basicAssembly = Join-Path $sampleTestRoot "Basic Interaction\Blaze.Radar.Sample.BasicInteraction.asmdef"
-    $multiScreenAssembly = Join-Path $sampleTestRoot "Multi-Screen Camera Routing\Blaze.Radar.Sample.MultiScreenCameraRouting.asmdef"
+    $basicAssembly = Join-Path $sampleTestRoot "Basic Interaction\Blaze.Interaction.Sample.BasicInteraction.asmdef"
+    $multiScreenAssembly = Join-Path $sampleTestRoot "Multi-Surface Routing\Blaze.Interaction.Sample.MultiSurfaceRouting.asmdef"
     try {
         New-Item -ItemType Directory -Path (Split-Path -Parent $basicAssembly), (Split-Path -Parent $multiScreenAssembly) -Force | Out-Null
         Set-Content -LiteralPath $basicAssembly -Encoding UTF8 -Value '{}'
@@ -409,7 +409,7 @@ if ($RunnerSelfTest) {
 }
 
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-$packageRoot = [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot "UnityPackage\com.blaze.radar"))
+$packageRoot = [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot "UnityPackage\com.blaze.interaction"))
 $temporaryProject = [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot "tmp\unity-package-tests"))
 Assert-SafeTemporaryProjectPath -RepositoryRoot $repositoryRoot -TemporaryProject $temporaryProject
 
@@ -429,12 +429,12 @@ New-Item -ItemType Directory -Path $packagesDirectory, $projectSettingsDirectory
 $manifest = @'
 {
   "dependencies": {
-    "com.blaze.radar": "file:../../../UnityPackage/com.blaze.radar",
+    "com.blaze.interaction": "file:../../../UnityPackage/com.blaze.interaction",
     "com.unity.test-framework": "1.1.33",
     "com.unity.ugui": "1.0.0",
     "com.unity.nuget.newtonsoft-json": "3.0.2"
   },
-  "testables": ["com.blaze.radar"]
+  "testables": ["com.blaze.interaction"]
 }
 '@
 Set-Content -LiteralPath (Join-Path $packagesDirectory "manifest.json") -Value $manifest -Encoding UTF8
@@ -442,7 +442,7 @@ Set-Content -LiteralPath (Join-Path $projectSettingsDirectory "ProjectVersion.tx
 
 if ($IncludeSamples) {
     $packageJson = Get-Content -LiteralPath (Join-Path $packageRoot "package.json") -Raw | ConvertFrom-Json
-    $sampleRoot = Join-Path $assetsDirectory ("Samples\Blaze Radar SDK\" + $packageJson.version)
+    $sampleRoot = Join-Path $assetsDirectory ("Samples\Blaze Interaction SDK\" + $packageJson.version)
     foreach ($sample in @($packageJson.samples)) {
         $source = [System.IO.Path]::GetFullPath((Join-Path $packageRoot $sample.path))
         if (-not (Test-Path -LiteralPath $source -PathType Container)) {

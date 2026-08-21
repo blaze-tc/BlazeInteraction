@@ -1,34 +1,36 @@
-using Blaze.Radar.Internal;
+using Blaze.Interaction;
+using Blaze.Interaction.Internal;
 
-namespace Blaze.Radar.Compatibility.Tests;
+namespace Radar.Unity.Compatibility.Tests;
 
-public sealed class LifecycleBatchBufferTests
+public sealed class LifecycleFrameBufferTests
 {
     [Fact]
-    public void MoveFloodIsCoalescedWhileDownUpAndFollowingZeroRemainOrdered()
+    public void MoveFloodIsCoalescedWhileDownUpCancelAndFollowingEmptyRemainOrdered()
     {
-        var buffer = new LifecycleBatchBuffer(4);
+        var buffer = new LifecycleFrameBuffer(5);
 
-        buffer.Publish(Batch(1, RadarPointerPhase.Down));
-        for (var sequence = 2; sequence <= 101; sequence++) buffer.Publish(Batch(sequence, RadarPointerPhase.Move));
-        buffer.Publish(Batch(102, RadarPointerPhase.Up));
-        buffer.Publish(Batch(103));
+        buffer.Publish(Frame(1, InteractionPhase.Down));
+        for (var sequence = 2; sequence <= 101; sequence++) buffer.Publish(Frame(sequence, InteractionPhase.Move));
+        buffer.Publish(Frame(102, InteractionPhase.Up));
+        buffer.Publish(Frame(103, InteractionPhase.Cancel));
+        buffer.Publish(Frame(104));
 
-        Assert.Equal(4, buffer.PendingCount);
+        Assert.Equal(5, buffer.PendingCount);
         Assert.Equal(99, buffer.DroppedCount);
         var sequences = new List<long>();
-        while (buffer.TryConsume(out var batch)) sequences.Add(batch.screens.Single().sequence);
-        Assert.Equal([1L, 101L, 102L, 103L], sequences);
+        while (buffer.TryConsume(out var frame)) sequences.Add(frame.Sequence);
+        Assert.Equal([1L, 101L, 102L, 103L, 104L], sequences);
     }
 
     [Fact]
     public async Task FullLifecycleQueueBackpressuresProducerWithoutExceedingCapacityOrReorderingEdges()
     {
-        var buffer = new LifecycleBatchBuffer(2);
-        buffer.Publish(Batch(1, RadarPointerPhase.Down));
-        buffer.Publish(Batch(2, RadarPointerPhase.Up));
+        var buffer = new LifecycleFrameBuffer(2);
+        buffer.Publish(Frame(1, InteractionPhase.Down));
+        buffer.Publish(Frame(2, InteractionPhase.Up));
 
-        var thirdPublish = Task.Run(() => buffer.Publish(Batch(3, RadarPointerPhase.Down)));
+        var thirdPublish = Task.Run(() => buffer.Publish(Frame(3, InteractionPhase.Cancel)));
         await Task.Delay(50);
 
         Assert.False(thirdPublish.IsCompleted);
@@ -37,23 +39,26 @@ public sealed class LifecycleBatchBufferTests
         await thirdPublish.WaitAsync(TimeSpan.FromSeconds(1));
         Assert.True(buffer.TryConsume(out var second));
         Assert.True(buffer.TryConsume(out var third));
-        Assert.Equal([1L, 2L, 3L], new[] { first, second, third }.Select(batch => batch.screens.Single().sequence));
+        Assert.Equal([1L, 2L, 3L], new[] { first, second, third }.Select(frame => frame.Sequence));
         Assert.False(buffer.TryConsume(out _));
     }
 
-    private static RadarPointerBatchPayload Batch(long sequence, RadarPointerPhase? phase = null) => new()
+    private static InteractionFrame Frame(long sequence, InteractionPhase? phase = null) => new()
     {
-        screens =
-        [
-            new RadarScreenPointerFrame
+        ProviderId = "blaze.radar.f10f20",
+        ProviderInstanceId = "radar-main",
+        SurfaceId = "main",
+        Sequence = sequence,
+        TimestampUnixMs = 1000 + sequence,
+        Points = phase.HasValue
+            ? [new InteractionPoint
             {
-                screen = new RadarScreenInfo { screenId = "main", name = "Main", widthPixels = 1920, heightPixels = 1080, isPrimary = true },
-                sequence = sequence,
-                timestampUnixMilliseconds = 1000 + sequence,
-                pointers = phase.HasValue
-                    ? [new RadarScreenPointer { pointerId = 7, phase = phase.Value, normalizedX = .5f, normalizedY = .5f }]
-                    : []
-            }
-        ]
+                Id = 7,
+                SurfaceId = "main",
+                ProviderId = "blaze.radar.f10f20",
+                ProviderInstanceId = "radar-main",
+                Phase = phase.Value
+            }]
+            : []
     };
 }

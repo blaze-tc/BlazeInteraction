@@ -1,52 +1,45 @@
-namespace Radar.Unity.Compatibility.Tests;
-
 using System.Text.Json;
+
+namespace Radar.Unity.Compatibility.Tests;
 
 public sealed class EmbeddedBridgePayloadTests
 {
     [Fact]
-    public void PackageContainsSelfContainedBridgeAndProfiles()
+    public void PackageContainsOneSelfContainedInteractionBridgeAndExternalRadarProvider()
     {
         var repositoryRoot = FindRepositoryRoot();
-        var publishDirectory = Path.Combine(
-            repositoryRoot,
-            "UnityPackage",
-            "com.blaze.radar",
-            "Bridge~",
-            "win-x64");
+        var packageRoot = Path.Combine(repositoryRoot, "UnityPackage", "com.blaze.interaction");
+        var publishDirectory = Path.Combine(packageRoot, "Bridge~", "win-x64");
 
-        AssertFileExists(publishDirectory, "RadarBridge.exe");
-        AssertFileExists(publishDirectory, "RadarBridge.deps.json");
-        AssertFileExists(publishDirectory, "RadarBridge.runtimeconfig.json");
-        AssertFileExists(publishDirectory, "coreclr.dll");
-        AssertFileExists(publishDirectory, "bridge-version.txt");
-        AssertFileExists(publishDirectory, "profiles", "default-profile.json");
-        AssertFileExists(publishDirectory, "profiles", "f20-profile.json");
-
-        using var packageJson = JsonDocument.Parse(File.ReadAllText(Path.Combine(
-            repositoryRoot,
-            "UnityPackage",
-            "com.blaze.radar",
-            "package.json")));
-        var expectedVersion = packageJson.RootElement.GetProperty("version").GetString();
-        var embeddedVersion = File.ReadAllText(Path.Combine(publishDirectory, "bridge-version.txt")).Trim();
-
-        Assert.Equal(expectedVersion, embeddedVersion);
-
-        foreach (var profileName in new[] { "default-profile.json", "f20-profile.json" })
+        foreach (var relativePath in new[]
+                 {
+                     "BlazeInteractionBridge.exe",
+                     "BlazeInteractionBridge.deps.json",
+                     "BlazeInteractionBridge.runtimeconfig.json",
+                     "hostfxr.dll",
+                     "hostpolicy.dll",
+                     "bridge-version.txt",
+                     Path.Combine("Providers", "Radar", "provider.json"),
+                     Path.Combine("Providers", "Radar", "Blaze.Provider.Radar.dll")
+                 })
         {
-            using var profile = JsonDocument.Parse(File.ReadAllText(Path.Combine(
-                publishDirectory,
-                "profiles",
-                profileName)));
-            Assert.Equal(2, profile.RootElement.GetProperty("schemaVersion").GetInt32());
+            Assert.True(File.Exists(Path.Combine(publishDirectory, relativePath)), relativePath);
         }
-    }
 
-    private static void AssertFileExists(params string[] pathParts)
-    {
-        var path = Path.Combine(pathParts);
-        Assert.True(File.Exists(path), $"Expected embedded Bridge file: {path}");
+        Assert.Equal("BlazeInteractionBridge.exe", Path.GetFileName(Assert.Single(
+            Directory.EnumerateFiles(publishDirectory, "*.exe", SearchOption.AllDirectories))));
+        Assert.Equal("1.0.0", File.ReadAllText(Path.Combine(publishDirectory, "bridge-version.txt")).Trim());
+
+        using var runtimeConfig = JsonDocument.Parse(File.ReadAllText(Path.Combine(
+            publishDirectory, "BlazeInteractionBridge.runtimeconfig.json")));
+        Assert.True(runtimeConfig.RootElement.GetProperty("runtimeOptions").TryGetProperty(
+            "includedFrameworks", out _));
+
+        using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(
+            publishDirectory, "Providers", "Radar", "provider.json")));
+        Assert.Equal("blaze.radar.f10f20", manifest.RootElement.GetProperty("id").GetString());
+        Assert.Equal("1.0.0", manifest.RootElement.GetProperty("version").GetString());
+        Assert.Equal(1, manifest.RootElement.GetProperty("providerApiVersion").GetInt32());
     }
 
     private static string FindRepositoryRoot()
@@ -55,12 +48,12 @@ public sealed class EmbeddedBridgePayloadTests
              directory is not null;
              directory = directory.Parent)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "RadarControl.sln")))
+            if (File.Exists(Path.Combine(directory.FullName, "BlazeInteraction.sln")))
             {
                 return directory.FullName;
             }
         }
 
-        throw new DirectoryNotFoundException("Unable to locate RadarControl.sln from the test output directory.");
+        throw new DirectoryNotFoundException("Unable to locate BlazeInteraction.sln.");
     }
 }

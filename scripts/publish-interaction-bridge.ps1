@@ -2,11 +2,15 @@
 param(
     [ValidateSet('win-x64')]
     [string]$Runtime = 'win-x64',
-    [string]$OutputDirectory
+    [string]$OutputDirectory,
+    [switch]$EmbedUnityPackage
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'bridge-release-functions.ps1')
+
+$expectedVersion = '1.0.0'
 
 $repositoryRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
@@ -35,7 +39,7 @@ $radarDirectory = Join-Path $publishRoot 'Providers\Radar'
 
 Push-Location $repositoryRoot
 try {
-    & dotnet publish $bridgeProject -c Release -r $Runtime --self-contained false `
+    & dotnet publish $bridgeProject -c Release -r $Runtime --self-contained true `
         -p:PublishSingleFile=false -p:UseAppHost=true --nologo -o $publishRoot
     if ($LASTEXITCODE -ne 0) {
         throw "BlazeInteractionBridge publish failed with exit code $LASTEXITCODE."
@@ -49,6 +53,11 @@ try {
 }
 finally {
     Pop-Location
+}
+
+$optionalCrashDumper = Join-Path $publishRoot 'createdump.exe'
+if (Test-Path -LiteralPath $optionalCrashDumper -PathType Leaf) {
+    Remove-Item -LiteralPath $optionalCrashDumper -Force
 }
 
 $executables = @(Get-ChildItem -LiteralPath $publishRoot -Filter '*.exe' -File -Recurse)
@@ -74,6 +83,12 @@ if (-not (Test-Path -LiteralPath $entryAssembly -PathType Leaf)) {
     throw 'The external Radar Provider entry assembly is missing.'
 }
 
+[System.IO.File]::WriteAllText(
+    (Join-Path $publishRoot 'bridge-version.txt'),
+    $expectedVersion,
+    [System.Text.UTF8Encoding]::new($false))
+Assert-InteractionBridgePayload -Directory $publishRoot -ExpectedVersion $expectedVersion
+
 $stream = [System.IO.File]::OpenRead($executables[0].FullName)
 try {
     $sha256 = [System.Security.Cryptography.SHA256]::Create()
@@ -90,3 +105,14 @@ finally {
 Write-Host "BlazeInteractionBridge published to: $publishRoot"
 Write-Host "BlazeInteractionBridge.exe SHA-256: $hash"
 Write-Host "External Radar Provider: $radarDirectory"
+
+if ($EmbedUnityPackage) {
+    $embeddedDirectory = [System.IO.Path]::GetFullPath((
+        Join-Path $repositoryRoot "UnityPackage\com.blaze.interaction\Bridge~\$Runtime"))
+    $embeddedHash = Copy-ValidatedInteractionBridgePayload `
+        -SourceDirectory $publishRoot `
+        -DestinationDirectory $embeddedDirectory `
+        -ExpectedDestinationDirectory $embeddedDirectory `
+        -ExpectedVersion $expectedVersion
+    Write-Host "Embedded BlazeInteractionBridge.exe SHA-256: $embeddedHash"
+}

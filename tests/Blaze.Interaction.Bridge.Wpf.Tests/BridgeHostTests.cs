@@ -207,6 +207,24 @@ public sealed class BridgeHostTests
         Assert.Equal(1, published.Message.DeserializePayload<InteractionFrame>().Sequence);
     }
 
+    [Theory]
+    [InlineData(InteractionPhase.Down)]
+    [InlineData(InteractionPhase.Up)]
+    [InlineData(InteractionPhase.Cancel)]
+    public async Task ProviderLifecycleEdges_AreForwardedReliablyInOrder(InteractionPhase phase)
+    {
+        var provider = new RecordingProvider("radar-main");
+        await using var fixture = BridgeFixture.Create(provider);
+        await fixture.Host.HandleHelloAsync(Hello(), CancellationToken.None);
+
+        provider.Emit(Frame("radar-main", 1, phase));
+        var published = await fixture.Sink.NextAsync();
+
+        Assert.True(published.Reliable);
+        Assert.Equal(phase, Assert.Single(
+            published.Message.DeserializePayload<InteractionFrame>().Points).Phase);
+    }
+
     [Fact]
     public async Task ProviderSwitch_SendsPointCancelBeforeProviderChanged()
     {
@@ -305,11 +323,12 @@ public sealed class BridgeHostTests
         await fixture.Host.HandleHelloAsync(Hello(), CancellationToken.None);
         provider.Emit(Frame("radar-main", 1, InteractionPhase.Down));
         _ = await fixture.Sink.NextAsync();
+        var reliableCallsBeforeDisconnect = fixture.Sink.ReliableSendCalls;
         fixture.Sink.IsConnected = false;
 
         await fixture.Host.DisposeAsync();
 
-        Assert.Equal(0, fixture.Sink.ReliableSendCalls);
+        Assert.Equal(reliableCallsBeforeDisconnect, fixture.Sink.ReliableSendCalls);
     }
 
     [Fact]
@@ -350,11 +369,14 @@ public sealed class BridgeHostTests
         radar.Emit(Frame("radar-main", 101, InteractionPhase.Down));
         var switching = fixture.Host.SwitchProviderAsync("alternate-main", CancellationToken.None);
         await fixture.Sink.ReliableSendStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(101, fixture.Sink.NormalPublishCalls);
+        Assert.Equal(100, fixture.Sink.NormalPublishCalls);
 
         fixture.Sink.ReleaseNormalPublish();
         fixture.Sink.ReleaseReliableSend();
         await switching.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(
+            [InteractionPhase.Down, InteractionPhase.Cancel],
+            fixture.Sink.ReliablePhases);
     }
 
     [Fact]
@@ -409,7 +431,7 @@ public sealed class BridgeHostTests
     }
 
     [Fact]
-    public async Task DisconnectedSink_DoesNotAttemptReliableCancelOrInvokeProviderChanged()
+    public async Task DisconnectedSink_SwitchSkipsUndeliverableCancelAndProviderChanged()
     {
         var radar = new RecordingProvider("radar-main");
         var alternate = new RecordingProvider("alternate-main");
@@ -417,12 +439,12 @@ public sealed class BridgeHostTests
         await fixture.Host.HandleHelloAsync(Hello(), CancellationToken.None);
         radar.Emit(Frame("radar-main", 1, InteractionPhase.Down));
         _ = await fixture.Sink.NextAsync();
+        var reliableCallsBeforeDisconnect = fixture.Sink.ReliableSendCalls;
         fixture.Sink.IsConnected = false;
 
-        await Assert.ThrowsAsync<IOException>(() =>
-            fixture.Host.SwitchProviderAsync("alternate-main", CancellationToken.None));
+        await fixture.Host.SwitchProviderAsync("alternate-main", CancellationToken.None);
 
-        Assert.Equal(0, fixture.Sink.ReliableSendCalls);
+        Assert.Equal(reliableCallsBeforeDisconnect, fixture.Sink.ReliableSendCalls);
         Assert.Equal(0, fixture.Sink.ProviderChangedCalls);
     }
 
@@ -980,6 +1002,7 @@ public sealed class BridgeHostTests
         internal int ProviderChangedCalls { get; private set; }
         internal int NormalPublishCalls { get; private set; }
         internal int ReliableSendCalls { get; private set; }
+        internal List<InteractionPhase> ReliablePhases { get; } = [];
         internal bool ReliableSendResult { get; set; } = true;
         internal bool ThrowFromReliableSend { get; set; }
         public bool IsConnected { get; set; } = true;
@@ -1019,6 +1042,10 @@ public sealed class BridgeHostTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             ReliableSendCalls++;
+            lock (ReliablePhases)
+            {
+                ReliablePhases.Add(frame.Points[0].Phase);
+            }
             ReliableSendStarted.TrySetResult();
             var release = Volatile.Read(ref _reliableRelease);
             if (release is not null)

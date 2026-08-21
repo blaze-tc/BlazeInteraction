@@ -57,11 +57,20 @@ public sealed class InteractionPublishLayoutTests
                 output.Path,
                 "*.exe",
                 SearchOption.AllDirectories))));
+        Assert.Equal(
+            "1.0.0",
+            (await File.ReadAllTextAsync(Path.Combine(output.Path, "bridge-version.txt"))).Trim());
+        var runtimeConfig = await File.ReadAllTextAsync(
+            Path.Combine(output.Path, "BlazeInteractionBridge.runtimeconfig.json"));
+        Assert.Contains("includedFrameworks", runtimeConfig, StringComparison.Ordinal);
+        Assert.True(File.Exists(Path.Combine(output.Path, "hostfxr.dll")));
+        Assert.True(File.Exists(Path.Combine(output.Path, "hostpolicy.dll")));
         var radarDirectory = Path.Combine(output.Path, "Providers", "Radar");
         Assert.True(File.Exists(Path.Combine(radarDirectory, "Blaze.Provider.Radar.dll")));
         var radar = Assert.Single(new ProviderCatalog().Discover(Path.Combine(output.Path, "Providers")));
         Assert.True(radar.IsAvailable, radar.Error);
         Assert.Equal("blaze.radar.f10f20", radar.Manifest!.Id);
+        Assert.Equal("1.0.0", radar.Manifest.Version);
         Assert.Equal(
             await File.ReadAllBytesAsync(Path.Combine(repositoryRoot, "config", "default-profile.json")),
             await File.ReadAllBytesAsync(Path.Combine(radarDirectory, "profiles", "radar-default.json")));

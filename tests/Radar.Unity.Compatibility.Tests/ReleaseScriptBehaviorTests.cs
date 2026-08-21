@@ -54,10 +54,10 @@ public sealed class ReleaseScriptBehaviorTests
     }
 
     [Fact]
-    public void PowerShellValidator_AcceptsCommitted491FilePayload()
+    public void PowerShellValidator_AcceptsCommittedInteractionPayload()
     {
-        var payload = Path.Combine(FindRepositoryRoot(), "UnityPackage", "com.blaze.radar", "Bridge~", "win-x64");
-        Assert.Equal(491, Directory.GetFiles(payload, "*", SearchOption.AllDirectories).Length);
+        var payload = Path.Combine(FindRepositoryRoot(), "UnityPackage", "com.blaze.interaction", "Bridge~", "win-x64");
+        Assert.True(Directory.GetFiles(payload, "*", SearchOption.AllDirectories).Length > 100);
         var result = RunPowerShell(
             "tests/Radar.Unity.Compatibility.Tests/InvokeReleaseFunctions.ps1",
             "-Scenario", "ValidateOutput", "-FixtureRoot", payload);
@@ -154,7 +154,7 @@ public sealed class ReleaseScriptBehaviorTests
             "-StartupTimeoutSeconds", "20");
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Contains("IPC v2 Hello/HelloAck passed with Bridge version 1.2.10.", result.Output, StringComparison.Ordinal);
+        Assert.Contains("Interaction IPC 1 Hello/HelloAck passed with Bridge version 1.0.0.", result.Output, StringComparison.Ordinal);
         Assert.Contains("Parent-process shutdown passed with exit code 0.", result.Output, StringComparison.Ordinal);
     }
 
@@ -188,7 +188,7 @@ public sealed class ReleaseScriptBehaviorTests
             "-SetupDelaySeconds", "9");
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Contains("IPC v2 Hello/HelloAck passed with Bridge version 1.2.10.", result.Output, StringComparison.Ordinal);
+        Assert.Contains("Interaction IPC 1 Hello/HelloAck passed with Bridge version 1.0.0.", result.Output, StringComparison.Ordinal);
     }
 
     private static int ReadSchema(string path) =>

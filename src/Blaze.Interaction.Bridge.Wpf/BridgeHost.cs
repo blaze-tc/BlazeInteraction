@@ -387,18 +387,18 @@ public sealed class BridgeHost : IAsyncDisposable
     private void OnFrameReceived(object? sender, InteractionFrameEventArgs eventArgs)
     {
         var frame = eventArgs.Frame;
-        if (frame.Points.Count > 0 && frame.Points.All(point => point.Phase == InteractionPhase.Cancel))
+        if (frame.Points.Any(point =>
+                point.Phase == InteractionPhase.Down ||
+                point.Phase == InteractionPhase.Up ||
+                point.Phase == InteractionPhase.Cancel))
         {
-            if ((_messageSink.IsConnected && !_messageSink.IsAcknowledged) ||
-                (!_messageSink.IsConnected && Volatile.Read(ref _disposed) != 0))
+            if (!_messageSink.IsAcknowledged)
             {
                 return;
             }
 
             QueueOutbound(
-                cancellationToken => _messageSink.IsConnected
-                    ? _messageSink.SendReliableFrameAsync(frame, cancellationToken)
-                    : ValueTask.FromResult(false),
+                cancellationToken => _messageSink.SendReliableFrameAsync(frame, cancellationToken),
                 requireSuccess: true);
             return;
         }

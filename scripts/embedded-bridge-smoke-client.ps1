@@ -56,15 +56,15 @@ try {
     $pipeClient.Connect($StartupTimeoutSeconds * 1000)
 
     $hello = [ordered]@{
-        protocolVersion = 2
+        protocolVersion = 1
         messageType = 'Hello'
         sequence = 1
-        timestampUnixMilliseconds = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         payload = [ordered]@{
-            unityProcessId = $PID
+            unityPid = $PID
             unityVersion = 'release-smoke'
-            screens = @([ordered]@{
-                screenId = 'main'; name = 'Smoke Primary'; defaultWidthPixels = 1920; defaultHeightPixels = 1080
+            sdkVersion = '1.0.0'
+            surfaces = @([ordered]@{
+                surfaceId = 'main'; name = 'Smoke Primary'; logicalWidth = 1920; logicalHeight = 1080
                 isPrimary = $true; order = 0
             })
         }
@@ -83,12 +83,12 @@ try {
 
     $responseBytes = Read-ExactBytes -Stream $pipeClient -Count $responseLength -TimeoutMilliseconds 5000
     $response = [System.Text.Encoding]::UTF8.GetString($responseBytes) | ConvertFrom-Json
-    if ($response.protocolVersion -ne 2 -or $response.messageType -ne 'HelloAck') {
+    if ($response.protocolVersion -ne 1 -or $response.messageType -ne 'HelloAck') {
         $responsePayload = $response.payload | ConvertTo-Json -Depth 8 -Compress
-        throw "Expected IPC v2 HelloAck; received protocol '$($response.protocolVersion)' message '$($response.messageType)' payload '$responsePayload'."
+        throw "Expected Interaction IPC 1 HelloAck; received protocol '$($response.protocolVersion)' message '$($response.messageType)' payload '$responsePayload'."
     }
-    if ($response.payload.protocolVersion -ne 2 -or $response.payload.bridgeVersion -ne '1.2.10') {
-        throw "HelloAck identity mismatch: Bridge '$($response.payload.bridgeVersion)', IPC '$($response.payload.protocolVersion)'."
+    if ($response.payload.bridgeVersion -ne '1.0.0') {
+        throw "HelloAck identity mismatch: Bridge '$($response.payload.bridgeVersion)', IPC '$($response.protocolVersion)'."
     }
 
     Write-SmokeResult -Value 'OK'

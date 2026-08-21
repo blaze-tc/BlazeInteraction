@@ -1,8 +1,8 @@
 using System.Buffers.Binary;
 using System.Text;
-using Blaze.Radar.Internal;
+using Blaze.Interaction.Internal;
 
-namespace Blaze.Radar.Compatibility.Tests;
+namespace Radar.Unity.Compatibility.Tests;
 
 public sealed class LengthPrefixedFrameDecoderTests
 {
@@ -10,7 +10,7 @@ public sealed class LengthPrefixedFrameDecoderTests
     public void Append_HoldsHalfPacketAndDecodesStickyPackets()
     {
         var first = Frame("{\"messageType\":\"HelloAck\"}");
-        var second = Frame("{\"messageType\":\"PointerFrame\"}");
+        var second = Frame("{\"messageType\":\"InteractionFrame\"}");
         var decoder = new LengthPrefixedFrameDecoder();
 
         Assert.Empty(decoder.Append(first, 0, 3));
@@ -19,7 +19,7 @@ public sealed class LengthPrefixedFrameDecoderTests
 
         Assert.Equal(2, payloads.Count);
         Assert.Contains("HelloAck", Encoding.UTF8.GetString(payloads[0]));
-        Assert.Contains("PointerFrame", Encoding.UTF8.GetString(payloads[1]));
+        Assert.Contains("InteractionFrame", Encoding.UTF8.GetString(payloads[1]));
         Assert.Equal(0, decoder.BufferedByteCount);
     }
 

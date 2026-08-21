@@ -11,6 +11,7 @@ namespace Blaze.Interaction
         private static readonly InteractionManager SharedInstance = new InteractionManager();
         private readonly InteractionPipeClient _client;
         private readonly InteractionFrameDispatcher _dispatcher;
+        private IReadOnlyList<InteractionSurface> _surfaces = Array.Empty<InteractionSurface>();
         private bool _disposed;
 
         public InteractionManager()
@@ -40,6 +41,7 @@ namespace Blaze.Interaction
         public bool IsConnected { get { return _dispatcher.IsConnected; } }
         public ProviderReferencePayload ActiveProvider { get { return _dispatcher.ActiveProvider; } }
         public long DroppedFrameCount { get { return _client.DroppedFrameCount; } }
+        public IReadOnlyList<InteractionSurface> Surfaces { get { return _surfaces; } }
 
         public event Action<InteractionPoint> PointAdded
         {
@@ -57,6 +59,12 @@ namespace Blaze.Interaction
         {
             add { _dispatcher.PointRemoved += value; }
             remove { _dispatcher.PointRemoved -= value; }
+        }
+
+        public event Action<InteractionFrame> FrameReceived
+        {
+            add { _dispatcher.FrameReceived += value; }
+            remove { _dispatcher.FrameReceived -= value; }
         }
 
         public event Action<ProviderChangedPayload> ProviderChanged
@@ -80,6 +88,12 @@ namespace Blaze.Interaction
         public void Connect(HelloPayload hello)
         {
             ThrowIfDisposed();
+            if (hello == null)
+            {
+                throw new ArgumentNullException(nameof(hello));
+            }
+
+            _surfaces = Array.AsReadOnly((hello.Surfaces ?? new List<InteractionSurface>()).ToArray());
             _client.Start(hello);
         }
 

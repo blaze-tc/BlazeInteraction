@@ -2,7 +2,9 @@
   "name": "Blaze.Interaction.Runtime.Tests",
   "rootNamespace": "Blaze.Interaction.Tests",
   "references": [
-    "Blaze.Interaction.Runtime"
+    "Blaze.Interaction.Runtime",
+    "Blaze.Radar.Compatibility",
+    "Unity.Newtonsoft.Json"
   ],
   "includePlatforms": [],
   "excludePlatforms": [],

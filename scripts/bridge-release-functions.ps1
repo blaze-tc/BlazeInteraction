@@ -331,3 +331,89 @@ function Copy-ValidatedBridgePayload {
     Get-ChildItem -LiteralPath $SourceDirectory | Copy-Item -Destination $DestinationDirectory -Recurse -Force
     Assert-BridgePublishOutput -Directory $DestinationDirectory -ExpectedVersion $ExpectedVersion
 }
+
+function Assert-InteractionBridgePayload {
+    param(
+        [Parameter(Mandatory)] [string]$Directory,
+        [Parameter(Mandatory)] [string]$ExpectedVersion
+    )
+
+    foreach ($name in @(
+        'BlazeInteractionBridge.exe',
+        'BlazeInteractionBridge.dll',
+        'BlazeInteractionBridge.deps.json',
+        'BlazeInteractionBridge.runtimeconfig.json',
+        'hostfxr.dll',
+        'hostpolicy.dll',
+        'bridge-version.txt')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $Directory $name) -PathType Leaf)) {
+            throw "Required BlazeInteractionBridge host file is missing: $name"
+        }
+    }
+
+    $executables = @(Get-ChildItem -LiteralPath $Directory -Filter '*.exe' -File -Recurse)
+    if ($executables.Count -ne 1 -or $executables[0].Name -cne 'BlazeInteractionBridge.exe') {
+        throw 'Interaction payload must contain exactly one executable named BlazeInteractionBridge.exe.'
+    }
+
+    $actualVersion = (Get-Content -LiteralPath (Join-Path $Directory 'bridge-version.txt') -Raw -Encoding UTF8).Trim()
+    if ($actualVersion -cne $ExpectedVersion) {
+        throw "BlazeInteractionBridge version marker expected '$ExpectedVersion', found '$actualVersion'."
+    }
+
+    try {
+        $runtimeConfig = Get-Content -LiteralPath (Join-Path $Directory 'BlazeInteractionBridge.runtimeconfig.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+    catch { throw "BlazeInteractionBridge.runtimeconfig.json is not valid JSON: $($_.Exception.Message)" }
+    $optionNames = @($runtimeConfig.runtimeOptions.PSObject.Properties.Name)
+    if ($optionNames -contains 'framework' -or $optionNames -contains 'frameworks' -or
+        $optionNames -notcontains 'includedFrameworks') {
+        throw 'BlazeInteractionBridge runtimeconfig describes framework-dependent output; embedding is forbidden.'
+    }
+    $frameworkNames = @($runtimeConfig.runtimeOptions.includedFrameworks | ForEach-Object { $_.name })
+    foreach ($framework in @('Microsoft.NETCore.App', 'Microsoft.WindowsDesktop.App')) {
+        if ($frameworkNames -notcontains $framework) {
+            throw "BlazeInteractionBridge runtimeconfig is missing included framework '$framework'."
+        }
+    }
+
+    $radarDirectory = Join-Path $Directory 'Providers\Radar'
+    $manifestPath = Join-Path $radarDirectory 'provider.json'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        throw 'The external Radar Provider manifest is missing.'
+    }
+    try { $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch { throw "The external Radar Provider manifest is invalid JSON: $($_.Exception.Message)" }
+    if ($manifest.id -cne 'blaze.radar.f10f20' -or
+        $manifest.version -cne $ExpectedVersion -or
+        $manifest.providerApiVersion -ne 1 -or
+        $manifest.entryAssembly -cne 'Blaze.Provider.Radar.dll' -or
+        $manifest.entryType -cne 'Blaze.Provider.Radar.RadarPlugin') {
+        throw "The external Radar Provider manifest does not match Gate A Provider API 1 and version $ExpectedVersion."
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $radarDirectory $manifest.entryAssembly) -PathType Leaf)) {
+        throw "The external Radar Provider entry assembly is missing: $($manifest.entryAssembly)"
+    }
+}
+
+function Copy-ValidatedInteractionBridgePayload {
+    param(
+        [Parameter(Mandatory)] [string]$SourceDirectory,
+        [Parameter(Mandatory)] [string]$DestinationDirectory,
+        [Parameter(Mandatory)] [string]$ExpectedDestinationDirectory,
+        [Parameter(Mandatory)] [string]$ExpectedVersion
+    )
+
+    Assert-InteractionBridgePayload -Directory $SourceDirectory -ExpectedVersion $ExpectedVersion
+    Remove-ValidatedDirectory -Path $DestinationDirectory -ExpectedPath $ExpectedDestinationDirectory -Label 'Interaction embedded Bridge'
+    New-Item -ItemType Directory -Force -Path $DestinationDirectory | Out-Null
+    Get-ChildItem -LiteralPath $SourceDirectory | Copy-Item -Destination $DestinationDirectory -Recurse -Force
+    Assert-InteractionBridgePayload -Directory $DestinationDirectory -ExpectedVersion $ExpectedVersion
+
+    $sourceHash = (Get-FileHash -LiteralPath (Join-Path $SourceDirectory 'BlazeInteractionBridge.exe') -Algorithm SHA256).Hash
+    $destinationHash = (Get-FileHash -LiteralPath (Join-Path $DestinationDirectory 'BlazeInteractionBridge.exe') -Algorithm SHA256).Hash
+    if ($sourceHash -cne $destinationHash) {
+        throw "BlazeInteractionBridge embedded copy SHA-256 mismatch. Source $sourceHash, destination $destinationHash."
+    }
+    return $destinationHash
+}

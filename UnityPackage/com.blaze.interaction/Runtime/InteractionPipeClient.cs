@@ -21,9 +21,9 @@ namespace Blaze.Interaction
         private readonly int _connectTimeoutMilliseconds;
         private readonly int _reconnectDelayMilliseconds;
         private readonly int _serverResponseTimeoutMilliseconds;
-        private readonly LatestValueBuffer<InteractionFrame> _latestFrame =
-            new LatestValueBuffer<InteractionFrame>();
+        private readonly LifecycleFrameBuffer _latestFrame = new LifecycleFrameBuffer();
         private readonly ConcurrentQueue<Action> _mainThreadActions = new ConcurrentQueue<Action>();
+        private readonly ConcurrentQueue<Action> _mainThreadErrorActions = new ConcurrentQueue<Action>();
         private readonly SemaphoreSlim _writeLock = new SemaphoreSlim(1, 1);
         private readonly object _lifecycleGate = new object();
         private readonly object _errorGate = new object();
@@ -99,6 +99,11 @@ namespace Blaze.Interaction
             {
                 action();
             }
+
+            while (_mainThreadErrorActions.TryDequeue(out action))
+            {
+                action();
+            }
         }
 
         public Task StopAsync()
@@ -134,6 +139,34 @@ namespace Blaze.Interaction
 
             StopAsync().GetAwaiter().GetResult();
             _writeLock.Dispose();
+        }
+
+        public static async Task<bool> CanConnectAsync(
+            string pipeName,
+            int timeoutMilliseconds,
+            CancellationToken cancellationToken)
+        {
+            using (var pipe = new NamedPipeClientStream(
+                       ".",
+                       string.IsNullOrWhiteSpace(pipeName) ? InteractionIpcProtocol.PipeName : pipeName,
+                       PipeDirection.InOut,
+                       PipeOptions.Asynchronous))
+            {
+                try
+                {
+                    await pipe.ConnectAsync(Math.Max(50, timeoutMilliseconds), cancellationToken)
+                        .ConfigureAwait(false);
+                    return pipe.IsConnected;
+                }
+                catch (TimeoutException)
+                {
+                    return false;
+                }
+                catch (IOException)
+                {
+                    return false;
+                }
+            }
         }
 
         private async Task StopCoreAsync(Task runTask, CancellationTokenSource cancellation)
@@ -235,6 +268,7 @@ namespace Blaze.Interaction
                     catch (Exception exception) when (
                         exception is IOException ||
                         exception is InvalidDataException ||
+                        exception is InvalidOperationException ||
                         exception is TimeoutException ||
                         exception is UnauthorizedAccessException ||
                         exception is JsonException)
@@ -291,7 +325,7 @@ namespace Blaze.Interaction
                                     " is incompatible with Unity SDK protocol " + InteractionIpcProtocol.Version + ".");
                             }
 
-                            acknowledged = HandleEnvelope(envelope, acknowledged);
+                            acknowledged = HandleEnvelope(envelope, acknowledged, cancellationToken);
                         }
                     }
                     catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -304,7 +338,10 @@ namespace Blaze.Interaction
             }
         }
 
-        private bool HandleEnvelope(InteractionEnvelope envelope, bool acknowledged)
+        private bool HandleEnvelope(
+            InteractionEnvelope envelope,
+            bool acknowledged,
+            CancellationToken cancellationToken)
         {
             switch (envelope.MessageType)
             {
@@ -324,7 +361,9 @@ namespace Blaze.Interaction
 
                 case InteractionMessageType.InteractionFrame:
                     RequireAcknowledged(acknowledged, "InteractionFrame");
-                    _latestFrame.Publish(envelope.DeserializePayload<InteractionFrame>());
+                    _latestFrame.Publish(
+                        envelope.DeserializePayload<InteractionFrame>(),
+                        cancellationToken);
                     return true;
 
                 case InteractionMessageType.ProviderChanged:
@@ -442,7 +481,7 @@ namespace Blaze.Interaction
                 _recentErrors[captured] = now;
             }
 
-            _mainThreadActions.Enqueue(() => InvokeSafely(ErrorReceived, captured));
+            _mainThreadErrorActions.Enqueue(() => InvokeSafely(ErrorReceived, captured));
         }
 
         private static void InvokeSafely<T>(Action<T> handlers, T value)

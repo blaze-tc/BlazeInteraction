@@ -22,12 +22,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Include="..\..\UnityPackage\com.blaze.radar\Runtime\Internal\BridgePathResolver.cs" Link="Runtime\BridgePathResolver.cs" />
-    <Compile Include="..\..\UnityPackage\com.blaze.radar\Runtime\Internal\BridgePayloadValidator.cs" Link="Runtime\BridgePayloadValidator.cs" />
-    <Compile Include="..\..\UnityPackage\com.blaze.radar\Runtime\Internal\LengthPrefixedFrameDecoder.cs" Link="Runtime\LengthPrefixedFrameDecoder.cs" />
-    <Compile Include="..\..\UnityPackage\com.blaze.radar\Runtime\Internal\LatestValueBuffer.cs" Link="Runtime\LatestValueBuffer.cs" />
-    <Compile Include="..\..\UnityPackage\com.blaze.radar\Runtime\RadarMessageModels.cs" Link="Runtime\RadarMessageModels.cs" />
-    <Compile Include="..\..\UnityPackage\com.blaze.radar\Runtime\RadarPipeClient.cs" Link="Runtime\RadarPipeClient.cs" />
+    <Compile Include="..\..\UnityPackage\com.blaze.interaction\Runtime\Contracts\InteractionMessageModels.cs" Link="Runtime\InteractionMessageModels.cs" />
+    <Compile Include="..\..\UnityPackage\com.blaze.interaction\Runtime\Internal\InteractionBridgePathResolver.cs" Link="Runtime\InteractionBridgePathResolver.cs" />
+    <Compile Include="..\..\UnityPackage\com.blaze.interaction\Runtime\Internal\LengthPrefixedFrameDecoder.cs" Link="Runtime\LengthPrefixedFrameDecoder.cs" />
+    <Compile Include="..\..\UnityPackage\com.blaze.interaction\Runtime\Internal\LatestValueBuffer.cs" Link="Runtime\LatestValueBuffer.cs" />
+    <Compile Include="..\..\UnityPackage\com.blaze.interaction\Runtime\InteractionPipeClient.cs" Link="Runtime\InteractionPipeClient.cs" />
+    <Compile Include="..\..\UnityPackage\com.blaze.interaction\Editor\InteractionBridgePayloadValidator.cs" Link="Editor\InteractionBridgePayloadValidator.cs" />
   </ItemGroup>
 
 </Project>
