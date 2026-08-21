@@ -29,12 +29,74 @@ public sealed class InteractionPipeServerTests
     }
 
     [Fact]
+    public async Task Server_StagesFramePublishedByHelloAckFactoryUntilAfterHelloAck()
+    {
+        ServerFixture? fixture = null;
+        var published = false;
+        fixture = await ServerFixture.StartAsync(async (_, cancellationToken) =>
+        {
+            published = await fixture!.Server.PublishFrameAsync(
+                ProviderFrame(9, "blaze.provider.alpha", "alpha-main", InteractionPhase.Down),
+                cancellationToken);
+            return Ack();
+        });
+        await using var ownedFixture = fixture;
+        await using var client = await fixture.ConnectAndSendHelloAsync();
+
+        var first = await InteractionIpcStream.ReadAsync(client, fixture.Token);
+
+        Assert.True(published);
+        Assert.Equal(InteractionMessageType.HelloAck, first.MessageType);
+        var second = await InteractionIpcStream.ReadAsync(client, fixture.Token);
+        Assert.Equal(InteractionMessageType.InteractionFrame, second.MessageType);
+        Assert.All(
+            second.DeserializePayload<InteractionFrame>().Points,
+            static point => Assert.Equal(InteractionPhase.Down, point.Phase));
+    }
+
+    [Fact]
+    public async Task Server_RejectsControlPublishedByHelloAckFactoryBeforeAcknowledgement()
+    {
+        ServerFixture? fixture = null;
+        var controlQueued = true;
+        fixture = await ServerFixture.StartAsync(async (_, cancellationToken) =>
+        {
+            controlQueued = await fixture!.Server.SendAsync(
+                ProviderChangedEnvelope(10),
+                cancellationToken);
+            return Ack();
+        });
+        await using var ownedFixture = fixture;
+        await using var client = await fixture.ConnectAndSendHelloAsync();
+
+        var acknowledgement = await InteractionIpcStream.ReadAsync(client, fixture.Token);
+        using var noControl = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
+
+        Assert.False(controlQueued);
+        Assert.Equal(InteractionMessageType.HelloAck, acknowledgement.MessageType);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await InteractionIpcStream.ReadAsync(client, noControl.Token));
+    }
+
+    [Fact]
     public async Task Server_DoesNotPublishBeforeHello()
     {
         await using var fixture = await ServerFixture.StartAsync();
         await using var client = await fixture.ConnectAsync();
 
         Assert.False(await fixture.Server.PublishFrameAsync(Frame(1), fixture.Token));
+        using var shortRead = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await InteractionIpcStream.ReadAsync(client, shortRead.Token));
+    }
+
+    [Fact]
+    public async Task Server_DoesNotSendReliableFrameBeforeHello()
+    {
+        await using var fixture = await ServerFixture.StartAsync();
+        await using var client = await fixture.ConnectAsync();
+
+        Assert.False(await fixture.Server.SendReliableFrameAsync(CancelFrame(2), fixture.Token));
         using var shortRead = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
             await InteractionIpcStream.ReadAsync(client, shortRead.Token));
@@ -138,6 +200,123 @@ public sealed class InteractionPipeServerTests
     }
 
     [Fact]
+    public async Task Server_IsolatesHelloAckWriteFailureAndAcceptsNextClient()
+    {
+        var pipeName = NewPipeName();
+        var firstAckStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstAck = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var acknowledgementCalls = 0;
+        await using var server = new InteractionPipeServer(new InteractionPipeServerOptions
+        {
+            PipeName = pipeName,
+            CreateHelloAckAsync = async (_, cancellationToken) =>
+            {
+                if (Interlocked.Increment(ref acknowledgementCalls) == 1)
+                {
+                    firstAckStarted.TrySetResult();
+                    await releaseFirstAck.Task.WaitAsync(cancellationToken);
+                    return new HelloAckPayload(
+                        "1.0.0",
+                        null,
+                        [new string('x', 2 * 1024 * 1024)]);
+                }
+
+                return Ack();
+            }
+        });
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var stopServer = new CancellationTokenSource();
+        var run = server.RunAsync(stopServer.Token);
+        try
+        {
+            await using (var first = new NamedPipeClientStream(
+                ".",
+                pipeName,
+                PipeDirection.InOut,
+                PipeOptions.Asynchronous))
+            {
+                await first.ConnectAsync(timeout.Token);
+                await InteractionIpcStream.WriteAsync(
+                    first,
+                    InteractionEnvelope.Create(InteractionMessageType.Hello, 1, Hello()),
+                    timeout.Token);
+                await firstAckStarted.Task.WaitAsync(timeout.Token);
+            }
+
+            releaseFirstAck.TrySetResult();
+            await using var second = new NamedPipeClientStream(
+                ".",
+                pipeName,
+                PipeDirection.InOut,
+                PipeOptions.Asynchronous);
+            await second.ConnectAsync(timeout.Token);
+            await InteractionIpcStream.WriteAsync(
+                second,
+                InteractionEnvelope.Create(InteractionMessageType.Hello, 2, Hello()),
+                timeout.Token);
+
+            Assert.Equal(
+                InteractionMessageType.HelloAck,
+                (await InteractionIpcStream.ReadAsync(second, timeout.Token)).MessageType);
+            Assert.False(run.IsCompleted);
+            Assert.Equal(2, acknowledgementCalls);
+        }
+        finally
+        {
+            releaseFirstAck.TrySetResult();
+            stopServer.Cancel();
+            try
+            {
+                await run.WaitAsync(timeout.Token);
+            }
+            catch (IOException)
+            {
+                // Expected only during the RED run before handshake write failures are isolated.
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Server_DisposeDuringCompletingHelloAckWriteDoesNotAcknowledgeInactiveSession()
+    {
+        var pipeName = NewPipeName();
+        var writeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseWrite = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var server = new InteractionPipeServer(new InteractionPipeServerOptions
+        {
+            PipeName = pipeName,
+            CreateHelloAckAsync = (_, _) => ValueTask.FromResult(Ack()),
+            WriteHelloAckAsync = async (_, _, _) =>
+            {
+                writeStarted.TrySetResult();
+                await releaseWrite.Task;
+            }
+        });
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var run = server.RunAsync();
+        await using var client = new NamedPipeClientStream(
+            ".",
+            pipeName,
+            PipeDirection.InOut,
+            PipeOptions.Asynchronous);
+        await client.ConnectAsync(timeout.Token);
+        await InteractionIpcStream.WriteAsync(
+            client,
+            InteractionEnvelope.Create(InteractionMessageType.Hello, 1, Hello()),
+            timeout.Token);
+        await writeStarted.Task.WaitAsync(timeout.Token);
+
+        var disposal = server.DisposeAsync().AsTask();
+        await WaitUntilAsync(() => !server.IsClientConnected, timeout.Token);
+        releaseWrite.TrySetResult();
+
+        await disposal.WaitAsync(timeout.Token);
+        await run.WaitAsync(timeout.Token);
+    }
+
+    [Fact]
     public async Task Server_RejectsDuplicateSurfaceIdsBeforeAuthentication()
     {
         var authenticationCalls = 0;
@@ -230,6 +409,141 @@ public sealed class InteractionPipeServerTests
     }
 
     [Fact]
+    public async Task Server_ReliableCancelFramePrecedesProviderChangedOnWire()
+    {
+        await using var fixture = await ServerFixture.StartAsync();
+        var cancelFrame = CancelFrame(40);
+        var providerChanged = InteractionEnvelope.Create(
+            InteractionMessageType.ProviderChanged,
+            41,
+            new ProviderChangedPayload(
+                new ProviderReferencePayload("blaze.provider.alpha", "alpha-main"),
+                new ProviderReferencePayload("blaze.provider.beta", "beta-main"),
+                1041));
+        var messagesQueued = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Server.ClientConnected += async (_, _) =>
+        {
+            try
+            {
+                _ = await fixture.Server.SendReliableFrameAsync(cancelFrame, fixture.Token);
+                _ = await fixture.Server.SendAsync(providerChanged, fixture.Token);
+                messagesQueued.TrySetResult();
+            }
+            catch (Exception exception)
+            {
+                messagesQueued.TrySetException(exception);
+            }
+        };
+        await using var client = await fixture.ConnectAndSendHelloAsync();
+        _ = await InteractionIpcStream.ReadAsync(client, fixture.Token);
+        await messagesQueued.Task.WaitAsync(fixture.Token);
+
+        var first = await InteractionIpcStream.ReadAsync(client, fixture.Token);
+        var second = await InteractionIpcStream.ReadAsync(client, fixture.Token);
+
+        Assert.Equal(InteractionMessageType.InteractionFrame, first.MessageType);
+        Assert.All(
+            first.DeserializePayload<InteractionFrame>().Points,
+            static point => Assert.Equal(InteractionPhase.Cancel, point.Phase));
+        Assert.Equal(InteractionMessageType.ProviderChanged, second.MessageType);
+    }
+
+    [Fact]
+    public async Task Server_ReliableCancelDropsPendingLatestFrameFromCancelledProvider()
+    {
+        await using var fixture = await ServerFixture.StartAsync();
+        var cancelFrame = CancelFrame(40);
+        var providerChanged = ProviderChangedEnvelope(41);
+        var messagesQueued = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Server.ClientConnected += async (_, _) =>
+        {
+            try
+            {
+                _ = await fixture.Server.PublishFrameAsync(
+                    ProviderFrame(39, "blaze.provider.alpha", "alpha-main", InteractionPhase.Move),
+                    fixture.Token);
+                _ = await fixture.Server.SendReliableFrameAsync(cancelFrame, fixture.Token);
+                _ = await fixture.Server.SendAsync(providerChanged, fixture.Token);
+                messagesQueued.TrySetResult();
+            }
+            catch (Exception exception)
+            {
+                messagesQueued.TrySetException(exception);
+            }
+        };
+        await using var client = await fixture.ConnectAndSendHelloAsync();
+        _ = await InteractionIpcStream.ReadAsync(client, fixture.Token);
+        await messagesQueued.Task.WaitAsync(fixture.Token);
+
+        var cancel = await InteractionIpcStream.ReadAsync(client, fixture.Token);
+        var changed = await InteractionIpcStream.ReadAsync(client, fixture.Token);
+        using var shortRead = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
+
+        Assert.Equal(InteractionMessageType.InteractionFrame, cancel.MessageType);
+        Assert.All(
+            cancel.DeserializePayload<InteractionFrame>().Points,
+            static point => Assert.Equal(InteractionPhase.Cancel, point.Phase));
+        Assert.Equal(InteractionMessageType.ProviderChanged, changed.MessageType);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await InteractionIpcStream.ReadAsync(client, shortRead.Token));
+    }
+
+    [Fact]
+    public async Task Server_ReliableCancelPreservesPendingLatestFrameFromNewProvider()
+    {
+        await using var fixture = await ServerFixture.StartAsync(controlQueueCapacity: 16);
+        var cancelFrame = CancelFrame(40);
+        var newProviderFrame = ProviderFrame(
+            42,
+            "blaze.provider.beta",
+            "beta-main",
+            InteractionPhase.Move);
+        var messagesQueued = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Server.ClientConnected += async (_, _) =>
+        {
+            try
+            {
+                for (var sequence = 0; sequence < 8; sequence++)
+                {
+                    _ = await fixture.Server.SendAsync(ControlEnvelope(sequence), fixture.Token);
+                }
+
+                _ = await fixture.Server.PublishFrameAsync(newProviderFrame, fixture.Token);
+                _ = await fixture.Server.SendReliableFrameAsync(cancelFrame, fixture.Token);
+                _ = await fixture.Server.SendAsync(ProviderChangedEnvelope(41), fixture.Token);
+                messagesQueued.TrySetResult();
+            }
+            catch (Exception exception)
+            {
+                messagesQueued.TrySetException(exception);
+            }
+        };
+        await using var client = await fixture.ConnectAndSendHelloAsync();
+        _ = await InteractionIpcStream.ReadAsync(client, fixture.Token);
+        await messagesQueued.Task.WaitAsync(fixture.Token);
+
+        for (var sequence = 0; sequence < 8; sequence++)
+        {
+            var status = await InteractionIpcStream.ReadAsync(client, fixture.Token);
+            Assert.Equal(InteractionMessageType.Status, status.MessageType);
+            Assert.Equal(sequence, status.Sequence);
+        }
+
+        var cancel = await InteractionIpcStream.ReadAsync(client, fixture.Token);
+        var changed = await InteractionIpcStream.ReadAsync(client, fixture.Token);
+        var latest = await InteractionIpcStream.ReadAsync(client, fixture.Token);
+
+        Assert.All(
+            cancel.DeserializePayload<InteractionFrame>().Points,
+            static point => Assert.Equal(InteractionPhase.Cancel, point.Phase));
+        Assert.Equal(InteractionMessageType.ProviderChanged, changed.MessageType);
+        Assert.Equal("blaze.provider.beta", latest.DeserializePayload<InteractionFrame>().ProviderId);
+    }
+
+    [Fact]
     public async Task Server_ReconnectRequiresNewHelloAndDropsOldSessionFrames()
     {
         await using var fixture = await ServerFixture.StartAsync();
@@ -252,6 +566,27 @@ public sealed class InteractionPipeServerTests
         var ack = await InteractionIpcStream.ReadAsync(second, fixture.Token);
 
         Assert.Equal(InteractionMessageType.HelloAck, ack.MessageType);
+    }
+
+    [Fact]
+    public async Task Server_ReliableFrameAfterDisconnectIsNotReplayedToNextSession()
+    {
+        await using var fixture = await ServerFixture.StartAsync();
+        await using (var first = await fixture.ConnectAndSendHelloAsync())
+        {
+            _ = await InteractionIpcStream.ReadAsync(first, fixture.Token);
+        }
+
+        await WaitUntilAsync(() => !fixture.Server.IsClientConnected, fixture.Token);
+        Assert.False(await fixture.Server.SendReliableFrameAsync(CancelFrame(90), fixture.Token));
+        await using var second = await fixture.ConnectAndSendHelloAsync();
+        Assert.Equal(
+            InteractionMessageType.HelloAck,
+            (await InteractionIpcStream.ReadAsync(second, fixture.Token)).MessageType);
+        using var shortRead = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await InteractionIpcStream.ReadAsync(second, shortRead.Token));
     }
 
     [Fact]
@@ -587,6 +922,51 @@ public sealed class InteractionPipeServerTests
         TimestampUnixMs = 1000 + sequence,
         Points = []
     };
+
+    private static InteractionFrame CancelFrame(long sequence) =>
+        ProviderFrame(
+            sequence,
+            "blaze.provider.alpha",
+            "alpha-main",
+            InteractionPhase.Cancel);
+
+    private static InteractionFrame ProviderFrame(
+        long sequence,
+        string providerId,
+        string providerInstanceId,
+        InteractionPhase phase) => new()
+        {
+            ProviderId = providerId,
+            ProviderInstanceId = providerInstanceId,
+            SurfaceId = "FRONT",
+            Sequence = sequence,
+            TimestampUnixMs = 1000 + sequence,
+            Points =
+            [
+                new InteractionPoint
+                {
+                    Id = 7,
+                    SurfaceId = "FRONT",
+                    ProviderId = providerId,
+                    ProviderInstanceId = providerInstanceId,
+                    SourceId = "source-7",
+                    Phase = phase,
+                    NormalizedPosition = new Vector2Data(0.25f, 0.75f),
+                    PixelPosition = new Vector2Data(480f, 810f),
+                    Confidence = 0.9f,
+                    TimestampUnixMs = 1000 + sequence
+                }
+            ]
+        };
+
+    private static InteractionEnvelope ProviderChangedEnvelope(long sequence) =>
+        InteractionEnvelope.Create(
+            InteractionMessageType.ProviderChanged,
+            sequence,
+            new ProviderChangedPayload(
+                new ProviderReferencePayload("blaze.provider.alpha", "alpha-main"),
+                new ProviderReferencePayload("blaze.provider.beta", "beta-main"),
+                1000 + sequence));
 
     private static InteractionEnvelope FrameEnvelope(long sequence) =>
         InteractionEnvelope.Create(InteractionMessageType.InteractionFrame, sequence, Frame(sequence));

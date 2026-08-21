@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>BlazeInteractionBridge</AssemblyName>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Blaze.Interaction.Contracts\Blaze.Interaction.Contracts.csproj" />
+    <ProjectReference Include="..\Blaze.Interaction.Provider.Abstractions\Blaze.Interaction.Provider.Abstractions.csproj" />
+    <ProjectReference Include="..\Blaze.Interaction.Runtime\Blaze.Interaction.Runtime.csproj" />
+    <ProjectReference Include="..\Blaze.Interaction.Ipc\Blaze.Interaction.Ipc.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Blaze.Interaction.Bridge.Wpf.Tests" />
+  </ItemGroup>
+</Project>

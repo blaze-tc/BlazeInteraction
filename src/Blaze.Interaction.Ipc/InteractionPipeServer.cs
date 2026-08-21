@@ -28,6 +28,9 @@ public sealed class InteractionPipeServerOptions
     internal Func<NamedPipeServerStream, Stream> CreateAuthenticatedSessionStream { get; init; } =
         static pipe => pipe;
 
+    internal Func<Stream, InteractionEnvelope, CancellationToken, ValueTask> WriteHelloAckAsync { get; init; } =
+        InteractionIpcStream.WriteAsync;
+
     public Func<HelloPayload, CancellationToken, ValueTask<HelloAckPayload>> CreateHelloAckAsync { get; init; } =
         static (_, _) => ValueTask.FromResult(new HelloAckPayload("1.0.0", null, []));
 }
@@ -80,6 +83,7 @@ public sealed class InteractionPipeServer : IAsyncDisposable
 
         ArgumentNullException.ThrowIfNull(_options.CreateHelloAckAsync);
         ArgumentNullException.ThrowIfNull(_options.CreateAuthenticatedSessionStream);
+        ArgumentNullException.ThrowIfNull(_options.WriteHelloAckAsync);
     }
 
     public event EventHandler<InteractionClientConnectedEventArgs>? ClientConnected;
@@ -91,6 +95,17 @@ public sealed class InteractionPipeServer : IAsyncDisposable
             lock (_sessionLock)
             {
                 return _session is { IsActive: true };
+            }
+        }
+    }
+
+    public bool IsClientAcknowledged
+    {
+        get
+        {
+            lock (_sessionLock)
+            {
+                return _session is { IsActive: true, IsAcknowledged: true };
             }
         }
     }
@@ -138,7 +153,8 @@ public sealed class InteractionPipeServer : IAsyncDisposable
             throw new ArgumentException("Only Interaction IPC protocol 1 messages can be sent.", nameof(message));
         }
 
-        var session = GetActiveSession();
+        var session = GetActiveSession(
+            requireAcknowledged: message.MessageType != InteractionMessageType.InteractionFrame);
         if (session is null)
         {
             return false;
@@ -146,7 +162,10 @@ public sealed class InteractionPipeServer : IAsyncDisposable
 
         if (message.MessageType == InteractionMessageType.InteractionFrame)
         {
-            return session.Outbound.PublishLatestFrame(message);
+            var frame = message.DeserializePayload<InteractionFrame>();
+            return session.Outbound.PublishLatestFrame(
+                message,
+                new InteractionOutboundProviderIdentity(frame.ProviderId, frame.ProviderInstanceId));
         }
 
         try
@@ -176,7 +195,61 @@ public sealed class InteractionPipeServer : IAsyncDisposable
             InteractionMessageType.InteractionFrame,
             frame.Sequence,
             frame);
-        return ValueTask.FromResult(session.Outbound.PublishLatestFrame(message));
+        return ValueTask.FromResult(session.Outbound.PublishLatestFrame(
+            message,
+            new InteractionOutboundProviderIdentity(frame.ProviderId, frame.ProviderInstanceId)));
+    }
+
+    public bool DiscardStagedLatestFrame(string providerId, string providerInstanceId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(providerInstanceId);
+        var session = GetActiveSession();
+        if (session is null || session.IsAcknowledged)
+        {
+            return false;
+        }
+
+        return session.Outbound.DiscardLatestFrame(
+            new InteractionOutboundProviderIdentity(providerId, providerInstanceId));
+    }
+
+    public async ValueTask<bool> SendReliableFrameAsync(
+        InteractionFrame frame,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(frame);
+        cancellationToken.ThrowIfCancellationRequested();
+        var session = GetActiveSession(requireAcknowledged: true);
+        if (session is null)
+        {
+            return false;
+        }
+
+        var message = InteractionEnvelope.Create(
+            InteractionMessageType.InteractionFrame,
+            frame.Sequence,
+            frame);
+        var supersededProvider = frame.Points.Count > 0 &&
+            frame.Points.All(static point => point.Phase == InteractionPhase.Cancel)
+                ? new InteractionOutboundProviderIdentity(frame.ProviderId, frame.ProviderInstanceId)
+                : (InteractionOutboundProviderIdentity?)null;
+        try
+        {
+            await session.Outbound.EnqueueControlAsync(
+                message,
+                cancellationToken,
+                supersededProvider).ConfigureAwait(false);
+            return session.IsActive;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && !session.IsActive)
+        {
+            return false;
+        }
+        catch (ObjectDisposedException) when (!session.IsActive)
+        {
+            return false;
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -314,32 +387,6 @@ public sealed class InteractionPipeServer : IAsyncDisposable
             return;
         }
 
-        HelloAckPayload acknowledgement;
-        try
-        {
-            acknowledgement = await _options.CreateHelloAckAsync(hello, serverCancellation).ConfigureAwait(false);
-            ArgumentNullException.ThrowIfNull(acknowledgement);
-        }
-        catch (OperationCanceledException) when (serverCancellation.IsCancellationRequested)
-        {
-            return;
-        }
-        catch (Exception exception)
-        {
-            await TryWriteErrorAsync(
-                pipe,
-                first.Sequence,
-                "hello_rejected",
-                exception.Message,
-                serverCancellation).ConfigureAwait(false);
-            return;
-        }
-
-        await InteractionIpcStream.WriteAsync(
-            pipe,
-            InteractionEnvelope.Create(InteractionMessageType.HelloAck, first.Sequence, acknowledgement),
-            serverCancellation).ConfigureAwait(false);
-
         var sessionStream = _options.CreateAuthenticatedSessionStream(pipe)
             ?? throw new InvalidOperationException("The authenticated session stream factory returned null.");
         await using var session = new InteractionPipeSession(
@@ -355,9 +402,48 @@ public sealed class InteractionPipeServer : IAsyncDisposable
             _session = session;
         }
 
-        InvokeConnected(hello);
         try
         {
+            HelloAckPayload acknowledgement;
+            try
+            {
+                acknowledgement = await _options.CreateHelloAckAsync(hello, serverCancellation).ConfigureAwait(false);
+                ArgumentNullException.ThrowIfNull(acknowledgement);
+            }
+            catch (OperationCanceledException) when (serverCancellation.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception exception)
+            {
+                await TryWriteErrorAsync(
+                    pipe,
+                    first.Sequence,
+                    "hello_rejected",
+                    exception.Message,
+                    serverCancellation).ConfigureAwait(false);
+                return;
+            }
+
+            try
+            {
+                await _options.WriteHelloAckAsync(
+                    pipe,
+                    InteractionEnvelope.Create(InteractionMessageType.HelloAck, first.Sequence, acknowledgement),
+                    serverCancellation).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (
+                exception is IOException or EndOfStreamException or ObjectDisposedException)
+            {
+                return;
+            }
+
+            if (!session.TryAcknowledge())
+            {
+                return;
+            }
+
+            InvokeConnected(hello);
             await session.RunAsync().ConfigureAwait(false);
         }
         finally
@@ -374,11 +460,14 @@ public sealed class InteractionPipeServer : IAsyncDisposable
         }
     }
 
-    private InteractionPipeSession? GetActiveSession()
+    private InteractionPipeSession? GetActiveSession(bool requireAcknowledged = false)
     {
         lock (_sessionLock)
         {
-            return _session is { IsActive: true } session ? session : null;
+            return _session is { IsActive: true } session &&
+                   (!requireAcknowledged || session.IsAcknowledged)
+                ? session
+                : null;
         }
     }
 
@@ -581,6 +670,10 @@ internal sealed class InteractionPipeSession : IAsyncDisposable
     internal InteractionOutboundQueue Outbound { get; }
 
     internal bool IsActive => Volatile.Read(ref _active) != 0;
+
+    internal bool IsAcknowledged => Volatile.Read(ref _active) == 2;
+
+    internal bool TryAcknowledge() => Interlocked.CompareExchange(ref _active, 2, 1) == 1;
 
     internal async Task<InteractionPipeSessionOutcome> RunAsync()
     {
@@ -800,15 +893,19 @@ internal enum InteractionPipeSessionOutcome
     SendTimeout = 5
 }
 
+internal readonly record struct InteractionOutboundProviderIdentity(
+    string ProviderId,
+    string ProviderInstanceId);
+
 internal sealed class InteractionOutboundQueue : IAsyncDisposable
 {
     private const int MaximumControlBurstWhileFramePending = 8;
     private readonly object _sync = new();
-    private readonly Queue<InteractionEnvelope> _controls = new();
+    private readonly Queue<InteractionOutboundControl> _controls = new();
     private readonly SemaphoreSlim _controlSlots;
     private readonly SemaphoreSlim _available = new(0);
     private readonly CancellationTokenSource _completion = new();
-    private InteractionEnvelope? _latestFrame;
+    private InteractionOutboundFrame? _latestFrame;
     private TaskCompletionSource? _pendingEnqueuesDrained;
     private int _controlBurstWhileFramePending;
     private int _pendingEnqueues;
@@ -827,7 +924,8 @@ internal sealed class InteractionOutboundQueue : IAsyncDisposable
 
     internal async ValueTask EnqueueControlAsync(
         InteractionEnvelope message,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        InteractionOutboundProviderIdentity? supersededProvider = null)
     {
         ArgumentNullException.ThrowIfNull(message);
         lock (_sync)
@@ -854,10 +952,9 @@ internal sealed class InteractionOutboundQueue : IAsyncDisposable
                     throw new OperationCanceledException(_completion.Token);
                 }
 
-                _controls.Enqueue(message);
+                _controls.Enqueue(new InteractionOutboundControl(message, supersededProvider));
+                _available.Release();
             }
-
-            _available.Release();
         }
         finally
         {
@@ -872,7 +969,9 @@ internal sealed class InteractionOutboundQueue : IAsyncDisposable
         }
     }
 
-    internal bool PublishLatestFrame(InteractionEnvelope message)
+    internal bool PublishLatestFrame(
+        InteractionEnvelope message,
+        InteractionOutboundProviderIdentity? provider = null)
     {
         ArgumentNullException.ThrowIfNull(message);
         if (message.MessageType != InteractionMessageType.InteractionFrame)
@@ -889,15 +988,34 @@ internal sealed class InteractionOutboundQueue : IAsyncDisposable
             }
 
             shouldSignal = _latestFrame is null;
-            _latestFrame = message;
-        }
-
-        if (shouldSignal)
-        {
-            _available.Release();
+            _latestFrame = new InteractionOutboundFrame(message, provider);
+            if (shouldSignal)
+            {
+                _available.Release();
+            }
         }
 
         return true;
+    }
+
+    internal bool DiscardLatestFrame(InteractionOutboundProviderIdentity provider)
+    {
+        lock (_sync)
+        {
+            if (_latestFrame is not { Provider: { } latestProvider } || latestProvider != provider)
+            {
+                return false;
+            }
+
+            if (!_available.Wait(0))
+            {
+                return false;
+            }
+
+            _latestFrame = null;
+            _controlBurstWhileFramePending = 0;
+            return true;
+        }
     }
 
     internal async ValueTask<InteractionEnvelope> DequeueAsync(
@@ -910,16 +1028,37 @@ internal sealed class InteractionOutboundQueue : IAsyncDisposable
         lock (_sync)
         {
             var framePending = _latestFrame is not null;
+            var nextControlIsBarrier = _controls.Count > 0 &&
+                _controls.Peek().SupersededProvider is not null;
             if (_controls.Count > 0 &&
                 (!framePending ||
+                 nextControlIsBarrier ||
                  _controlBurstWhileFramePending < MaximumControlBurstWhileFramePending))
             {
                 var control = _controls.Dequeue();
-                _controlBurstWhileFramePending = framePending
-                    ? _controlBurstWhileFramePending + 1
-                    : 0;
+                if (control.SupersededProvider is { } supersededProvider)
+                {
+                    _controlBurstWhileFramePending = 0;
+                    if (_latestFrame is { Provider: { } latestProvider } &&
+                        latestProvider == supersededProvider)
+                    {
+                        _latestFrame = null;
+                        if (!_available.Wait(0))
+                        {
+                            throw new InvalidOperationException(
+                                "The superseded latest frame did not have a matching queue signal.");
+                        }
+                    }
+                }
+                else
+                {
+                    _controlBurstWhileFramePending = framePending
+                        ? _controlBurstWhileFramePending + 1
+                        : 0;
+                }
+
                 _controlSlots.Release();
-                return control;
+                return control.Message;
             }
 
             if (_latestFrame is not null)
@@ -927,7 +1066,7 @@ internal sealed class InteractionOutboundQueue : IAsyncDisposable
                 var frame = _latestFrame;
                 _latestFrame = null;
                 _controlBurstWhileFramePending = 0;
-                return frame;
+                return frame.Message;
             }
         }
 
@@ -973,4 +1112,12 @@ internal sealed class InteractionOutboundQueue : IAsyncDisposable
         _controlSlots.Dispose();
         _available.Dispose();
     }
+
+    private sealed record InteractionOutboundControl(
+        InteractionEnvelope Message,
+        InteractionOutboundProviderIdentity? SupersededProvider);
+
+    private sealed record InteractionOutboundFrame(
+        InteractionEnvelope Message,
+        InteractionOutboundProviderIdentity? Provider);
 }
