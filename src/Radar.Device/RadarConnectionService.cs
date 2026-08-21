@@ -154,7 +154,10 @@ public sealed class RadarConnectionService : IAsyncDisposable
             {
                 var stopwatch = Stopwatch.StartNew();
                 var readTask = client.ReadAsync(buffer, timeout.Token).AsTask();
-                var warningTask = Task.Delay(_options.DataWarningTimeout, cancellationToken);
+                var warningTask = WaitUntilElapsedAsync(
+                    stopwatch,
+                    _options.DataWarningTimeout,
+                    cancellationToken);
                 if (await Task.WhenAny(readTask, warningTask).ConfigureAwait(false) == warningTask)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -205,6 +208,17 @@ public sealed class RadarConnectionService : IAsyncDisposable
 
         State = state;
         InvokeSafely(StateChanged, state);
+    }
+
+    private static async Task WaitUntilElapsedAsync(
+        Stopwatch stopwatch,
+        TimeSpan deadline,
+        CancellationToken cancellationToken)
+    {
+        while (stopwatch.Elapsed < deadline)
+        {
+            await Task.Delay(deadline - stopwatch.Elapsed, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private void NotifyConnectionError(Exception exception)

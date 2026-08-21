@@ -106,7 +106,10 @@ public sealed class RadarConnectionServiceTests
         cancellation.Cancel();
         await runTask;
 
-        Assert.True(elapsed >= options.DataWarningTimeout);
+        Assert.True(
+            elapsed >= options.DataWarningTimeout,
+            $"DataWarning fired at {elapsed.TotalMilliseconds:R} ms before the configured " +
+            $"{options.DataWarningTimeout.TotalMilliseconds:R} ms deadline.");
     }
 
     [Fact]
