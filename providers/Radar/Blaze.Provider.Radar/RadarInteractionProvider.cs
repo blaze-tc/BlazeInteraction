@@ -35,6 +35,7 @@ public sealed class RadarInteractionProvider : IInteractionProvider
     private readonly object _disposeGate = new();
     private IRadarProviderRuntime? _runtime;
     private Task? _disposeOperation;
+    private Exception? _terminalFailure;
     private int _status = (int)ProviderRuntimeStatus.Created;
     private int _disposed;
 
@@ -132,17 +133,25 @@ public sealed class RadarInteractionProvider : IInteractionProvider
                 await runtime.StartAsync(cancellationToken).ConfigureAwait(false);
                 TransitionTo(ProviderRuntimeStatus.Running);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException exception) when (cancellationToken.IsCancellationRequested)
             {
-                await StopAndDisposeRuntimeAfterFailureAsync(runtime).ConfigureAwait(false);
-                TransitionTo(ProviderRuntimeStatus.Stopped);
-                throw;
+                var failure = await StopAndDisposeRuntimeAfterFailureAsync(runtime, exception).ConfigureAwait(false);
+                if (ReferenceEquals(exception, failure))
+                {
+                    TransitionTo(ProviderRuntimeStatus.Stopped);
+                    throw;
+                }
+
+                PreserveTerminalCleanupFailure(exception, failure);
+                TransitionTo(ProviderRuntimeStatus.Faulted, failure);
+                throw failure;
             }
             catch (Exception exception)
             {
-                await StopAndDisposeRuntimeAfterFailureAsync(runtime).ConfigureAwait(false);
-                TransitionTo(ProviderRuntimeStatus.Faulted, exception);
-                throw;
+                var failure = await StopAndDisposeRuntimeAfterFailureAsync(runtime, exception).ConfigureAwait(false);
+                PreserveTerminalCleanupFailure(exception, failure);
+                TransitionTo(ProviderRuntimeStatus.Faulted, failure);
+                throw failure;
             }
         }
         finally
@@ -154,6 +163,7 @@ public sealed class RadarInteractionProvider : IInteractionProvider
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         ThrowIfStatusChangedCallbackReentry();
+        ThrowIfTerminalFailure();
         var disposal = Volatile.Read(ref _disposeOperation);
         if (disposal is not null)
         {
@@ -168,6 +178,7 @@ public sealed class RadarInteractionProvider : IInteractionProvider
             disposalStartedWhileWaiting = Volatile.Read(ref _disposeOperation);
             if (disposalStartedWhileWaiting is null)
             {
+                ThrowIfTerminalFailure();
                 if (Status == ProviderRuntimeStatus.Stopped) return;
                 if (Status == ProviderRuntimeStatus.Created)
                 {
@@ -185,9 +196,10 @@ public sealed class RadarInteractionProvider : IInteractionProvider
                 }
                 catch (Exception exception)
                 {
-                    await DisposeRuntimeAfterFailureAsync().ConfigureAwait(false);
-                    TransitionTo(ProviderRuntimeStatus.Faulted, exception);
-                    throw;
+                    var failure = await DisposeRuntimeAfterFailureAsync(exception).ConfigureAwait(false);
+                    PreserveTerminalCleanupFailure(exception, failure);
+                    TransitionTo(ProviderRuntimeStatus.Faulted, failure);
+                    throw failure;
                 }
             }
         }
@@ -264,6 +276,7 @@ public sealed class RadarInteractionProvider : IInteractionProvider
         await _lifecycle.WaitAsync().ConfigureAwait(false);
         try
         {
+            ThrowIfTerminalFailure();
             var runtime = Interlocked.Exchange(ref _runtime, null);
             if (runtime is not null)
             {
@@ -340,30 +353,70 @@ public sealed class RadarInteractionProvider : IInteractionProvider
         return runtime;
     }
 
-    private async Task StopAndDisposeRuntimeAfterFailureAsync(IRadarProviderRuntime runtime)
+    private async Task<Exception> StopAndDisposeRuntimeAfterFailureAsync(
+        IRadarProviderRuntime runtime,
+        Exception primaryFailure)
     {
+        var failures = new List<Exception> { primaryFailure };
         try
         {
             await runtime.StopAsync(CancellationToken.None).ConfigureAwait(false);
         }
-        catch
+        catch (Exception exception)
         {
+            failures.Add(exception);
         }
 
-        await DisposeRuntimeAfterFailureAsync().ConfigureAwait(false);
+        var disposeFailure = await CaptureDisposeRuntimeFailureAsync().ConfigureAwait(false);
+        if (disposeFailure is not null)
+            failures.Add(disposeFailure);
+        return CombineOperationAndCleanupFailures(failures);
     }
 
     private async Task DisposeRuntimeAfterFailureAsync()
     {
+        _ = await CaptureDisposeRuntimeFailureAsync().ConfigureAwait(false);
+    }
+
+    private async Task<Exception> DisposeRuntimeAfterFailureAsync(Exception primaryFailure)
+    {
+        var failures = new List<Exception> { primaryFailure };
+        var disposeFailure = await CaptureDisposeRuntimeFailureAsync().ConfigureAwait(false);
+        if (disposeFailure is not null)
+            failures.Add(disposeFailure);
+        return CombineOperationAndCleanupFailures(failures);
+    }
+
+    private async Task<Exception?> CaptureDisposeRuntimeFailureAsync()
+    {
         var runtime = Interlocked.Exchange(ref _runtime, null);
-        if (runtime is null) return;
+        if (runtime is null) return null;
         try
         {
             await runtime.DisposeAsync().ConfigureAwait(false);
+            return null;
         }
-        catch
+        catch (Exception exception)
         {
+            return exception;
         }
+    }
+
+    private static Exception CombineOperationAndCleanupFailures(List<Exception> failures) =>
+        failures.Count == 1
+            ? failures[0]
+            : new AggregateException("The Radar runtime operation and its cleanup both failed.", failures);
+
+    private void PreserveTerminalCleanupFailure(Exception primaryFailure, Exception observedFailure)
+    {
+        if (!ReferenceEquals(primaryFailure, observedFailure))
+            Volatile.Write(ref _terminalFailure, observedFailure);
+    }
+
+    private void ThrowIfTerminalFailure()
+    {
+        if (Volatile.Read(ref _terminalFailure) is { } failure)
+            throw failure;
     }
 
     private void TransitionTo(ProviderRuntimeStatus status, Exception? error = null)

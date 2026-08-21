@@ -1,7 +1,9 @@
 using Blaze.Interaction.Contracts;
 using Blaze.Interaction.Provider.Abstractions;
 using Blaze.Interaction.Runtime;
+using System.Collections;
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using Yuexin.Radar.Contracts;
 using Yuexin.Radar.Device;
@@ -48,7 +50,12 @@ public sealed class RadarProviderLoaderIntegrationTests
             output.Path,
             "RadarBridge.runtimeconfig.json",
             SearchOption.AllDirectories));
-        Assert.True(File.Exists(Path.Combine(output.Path, "profiles", "radar-default.json")));
+        var publishedProfilePath = Path.Combine(output.Path, "profiles", "radar-default.json");
+        var canonicalProfilePath = Path.Combine(repositoryRoot, "config", "default-profile.json");
+        Assert.True(File.Exists(publishedProfilePath));
+        Assert.Equal(
+            await File.ReadAllBytesAsync(canonicalProfilePath),
+            await File.ReadAllBytesAsync(publishedProfilePath));
     }
 
     [Fact]
@@ -146,14 +153,14 @@ public sealed class RadarProviderLoaderIntegrationTests
     }
 
     [Fact]
-    public void RunningReplayRadarProviderReleasesItsProviderPluginAndLoadContext()
+    public void RunningReplayRadarProviderProcessesAnEntryAndReleasesItsPluginAndLoadContext()
     {
         using var fixture = new PublishedProviderFixture(useReplayRadarProfile: true);
 
         var references = CreateInitializeStopDisposeAndUnload(
             fixture.Root,
             startProvider: true,
-            allowReplayHeaderRead: true);
+            waitForReplayEntry: true);
         CollectUntilDead(references.Provider, references.Plugin, references.LoadContext);
 
         Assert.False(references.Provider.IsAlive);
@@ -181,13 +188,17 @@ public sealed class RadarProviderLoaderIntegrationTests
         CreateInitializeStopDisposeAndUnload(
             string providersRoot,
             bool startProvider,
-            bool allowReplayHeaderRead = false)
+            bool waitForReplayEntry = false)
     {
         var entry = Assert.Single(new ProviderCatalog().Discover(providersRoot));
         var loaded = new ProviderLoader().Load(entry);
         var plugin = loaded.Plugin;
         var provider = plugin.CreateProvider(
             new ProviderCreateContext(entry.ProviderDirectory, EmptyServiceProvider.Instance));
+        var references = (
+            new WeakReference(provider),
+            new WeakReference(plugin),
+            new WeakReference(loaded.LoadContext));
         provider.InitializeAsync(
             new ProviderInitializationContext(
             [
@@ -203,18 +214,61 @@ public sealed class RadarProviderLoaderIntegrationTests
             ],
             EmptyServiceProvider.Instance),
             CancellationToken.None).GetAwaiter().GetResult();
-        if (startProvider)
-            provider.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
-        if (allowReplayHeaderRead)
-            Thread.Sleep(TimeSpan.FromMilliseconds(250));
-        provider.StopAsync(CancellationToken.None).GetAwaiter().GetResult();
-        provider.DisposeAsync().AsTask().GetAwaiter().GetResult();
-        var references = (
-            new WeakReference(provider),
-            new WeakReference(plugin),
-            new WeakReference(loaded.LoadContext));
-        loaded.Dispose();
+        try
+        {
+            if (startProvider)
+                provider.StartAsync(CancellationToken.None).GetAwaiter().GetResult();
+            if (waitForReplayEntry)
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                WaitForProcessedReplayEntry(provider, timeout.Token);
+            }
+        }
+        finally
+        {
+            provider.StopAsync(CancellationToken.None).GetAwaiter().GetResult();
+            provider.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            loaded.Dispose();
+        }
         return references;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void WaitForProcessedReplayEntry(
+        IInteractionProvider provider,
+        CancellationToken cancellationToken)
+    {
+        while (!HasProcessedReplayEntry(provider))
+            Task.Delay(10, cancellationToken).GetAwaiter().GetResult();
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static bool HasProcessedReplayEntry(IInteractionProvider provider)
+    {
+        const BindingFlags instanceFields = BindingFlags.Instance | BindingFlags.NonPublic;
+        var runtime = provider.GetType().GetField("_runtime", instanceFields)?.GetValue(provider)
+            ?? throw new InvalidOperationException("The loaded Radar provider has no active runtime.");
+        var coordinator = runtime.GetType().GetField("_coordinator", instanceFields)?.GetValue(runtime)
+            ?? throw new InvalidOperationException("The loaded Radar runtime has no coordinator.");
+        var screens = coordinator.GetType().GetField("_screens", instanceFields)?.GetValue(coordinator) as IDictionary
+            ?? throw new InvalidOperationException("The loaded Radar coordinator has no screen collection.");
+
+        foreach (DictionaryEntry screenEntry in screens)
+        {
+            var screen = screenEntry.Value!;
+            var pipelines = screen.GetType().GetProperty("Pipelines")?.GetValue(screen) as IDictionary
+                ?? throw new InvalidOperationException("The loaded Radar screen has no pipeline collection.");
+            foreach (DictionaryEntry pipelineEntry in pipelines)
+            {
+                var pipeline = pipelineEntry.Value!;
+                var snapshot = pipeline.GetType().GetProperty("LastSnapshot")?.GetValue(pipeline);
+                var rawPoints = snapshot?.GetType().GetProperty("RawPoints")?.GetValue(snapshot);
+                var count = rawPoints?.GetType().GetProperty("Count")?.GetValue(rawPoints) as int?;
+                if (count > 0) return true;
+            }
+        }
+
+        return false;
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -361,16 +415,29 @@ public sealed class RadarProviderLoaderIntegrationTests
         {
             using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
             var writer = new RadarRecordingWriter(stream, leaveOpen: true);
+            var recordedAt = DateTimeOffset.UtcNow;
 #pragma warning disable xUnit1031 // Fixture construction intentionally bridges the async recording API.
             writer.InitializeAsync(new RadarRecordingHeader(
                     RadarModel.F10,
                     "{\"sourceMode\":\"replay\"}",
                     "test-firmware",
-                    DateTimeOffset.FromUnixTimeMilliseconds(1_000)))
+                    recordedAt))
                 .AsTask().GetAwaiter().GetResult();
-            writer.WriteConnectionStateAsync(
-                    RadarConnectionState.Connected,
-                    DateTimeOffset.FromUnixTimeMilliseconds(1_010))
+            writer.WriteDataAsync(
+                    new byte[]
+                    {
+                        0x10, 0x32, 0x27, 0x88, // 100 cm, angle raw 5000
+                        0x20, 0x32, 0x27, 0x89  // 100 cm, angle raw 5001
+                    },
+                    recordedAt.AddMilliseconds(10))
+                .AsTask().GetAwaiter().GetResult();
+            writer.WriteDataAsync(
+                    new byte[] { 0x70, 0x32, 0x00, 0xE4 }, // 100 cm, angle raw 100; closes the scan after wrap.
+                    recordedAt.AddSeconds(1))
+                .AsTask().GetAwaiter().GetResult();
+            writer.WriteDataAsync(
+                    new byte[] { 0x00, 0x32, 0x00, 0xE5 }, // 100 cm, angle raw 101; keeps replay alive after the scan.
+                    recordedAt.AddSeconds(11))
                 .AsTask().GetAwaiter().GetResult();
             writer.DisposeAsync().AsTask().GetAwaiter().GetResult();
 #pragma warning restore xUnit1031

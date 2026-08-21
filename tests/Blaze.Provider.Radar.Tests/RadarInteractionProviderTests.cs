@@ -137,6 +137,97 @@ public sealed class RadarInteractionProviderTests
     }
 
     [Fact]
+    public async Task StartAndCleanupFailuresArePreservedInOrderAndSharedByLaterLifecycleCalls()
+    {
+        var startFailure = new IOException("start failed");
+        var stopFailure = new InvalidOperationException("cleanup stop failed");
+        var disposeFailure = new ApplicationException("cleanup dispose failed");
+        var runtime = new FakeRadarProviderRuntime
+        {
+            StartException = startFailure,
+            StopException = stopFailure,
+            DisposeException = disposeFailure
+        };
+        var provider = CreateProvider(runtime);
+        await provider.InitializeAsync(InitializationContext(Surface("front", true, 0)), CancellationToken.None);
+
+        var startException = await Record.ExceptionAsync(() => provider.StartAsync(CancellationToken.None));
+        var aggregate = Assert.IsType<AggregateException>(startException);
+        Assert.Equal([startFailure, stopFailure, disposeFailure], aggregate.InnerExceptions);
+        Assert.Equal(ProviderRuntimeStatus.Faulted, provider.Status);
+
+        var stopException = await Record.ExceptionAsync(() => provider.StopAsync(CancellationToken.None));
+        var disposeException = await Record.ExceptionAsync(() => provider.DisposeAsync().AsTask());
+
+        Assert.Same(startException, stopException);
+        Assert.Same(startException, disposeException);
+        Assert.Equal(ProviderRuntimeStatus.Faulted, provider.Status);
+        Assert.Equal(1, runtime.StopCallCount);
+        Assert.Equal(1, runtime.DisposeCallCount);
+    }
+
+    [Fact]
+    public async Task StartCancellationAndCleanupFailuresArePreservedInOrderAndSharedByLaterLifecycleCalls()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var cancellationFailure = new OperationCanceledException(cancellation.Token);
+        var stopFailure = new InvalidOperationException("cleanup stop failed");
+        var disposeFailure = new ApplicationException("cleanup dispose failed");
+        var runtime = new FakeRadarProviderRuntime
+        {
+            BeforeStart = cancellation.Cancel,
+            StartException = cancellationFailure,
+            StopException = stopFailure,
+            DisposeException = disposeFailure
+        };
+        var provider = CreateProvider(runtime);
+        await provider.InitializeAsync(InitializationContext(Surface("front", true, 0)), CancellationToken.None);
+
+        var startException = await Record.ExceptionAsync(() => provider.StartAsync(cancellation.Token));
+        var aggregate = Assert.IsType<AggregateException>(startException);
+        Assert.Equal([cancellationFailure, stopFailure, disposeFailure], aggregate.InnerExceptions);
+        Assert.Equal(ProviderRuntimeStatus.Faulted, provider.Status);
+
+        var stopException = await Record.ExceptionAsync(() => provider.StopAsync(CancellationToken.None));
+        var disposeException = await Record.ExceptionAsync(() => provider.DisposeAsync().AsTask());
+
+        Assert.Same(startException, stopException);
+        Assert.Same(startException, disposeException);
+        Assert.Equal(ProviderRuntimeStatus.Faulted, provider.Status);
+        Assert.Equal(1, runtime.StopCallCount);
+        Assert.Equal(1, runtime.DisposeCallCount);
+    }
+
+    [Fact]
+    public async Task StopAndDisposeFailuresArePreservedInOrderAndSharedByLaterLifecycleCalls()
+    {
+        var stopFailure = new IOException("stop failed");
+        var disposeFailure = new InvalidOperationException("cleanup dispose failed");
+        var runtime = new FakeRadarProviderRuntime
+        {
+            StopException = stopFailure,
+            DisposeException = disposeFailure
+        };
+        var provider = CreateProvider(runtime);
+        await provider.InitializeAsync(InitializationContext(Surface("front", true, 0)), CancellationToken.None);
+        await provider.StartAsync(CancellationToken.None);
+
+        var stopException = await Record.ExceptionAsync(() => provider.StopAsync(CancellationToken.None));
+        var aggregate = Assert.IsType<AggregateException>(stopException);
+        Assert.Equal([stopFailure, disposeFailure], aggregate.InnerExceptions);
+        Assert.Equal(ProviderRuntimeStatus.Faulted, provider.Status);
+
+        var repeatedStopException = await Record.ExceptionAsync(() => provider.StopAsync(CancellationToken.None));
+        var disposeException = await Record.ExceptionAsync(() => provider.DisposeAsync().AsTask());
+
+        Assert.Same(stopException, repeatedStopException);
+        Assert.Same(stopException, disposeException);
+        Assert.Equal(ProviderRuntimeStatus.Faulted, provider.Status);
+        Assert.Equal(1, runtime.StopCallCount);
+        Assert.Equal(1, runtime.DisposeCallCount);
+    }
+
+    [Fact]
     public async Task InitializeCancellationIsForwardedAndLeavesNoLiveRadarRuntime()
     {
         CancellationToken observed = default;
@@ -420,6 +511,7 @@ public sealed class RadarInteractionProviderTests
     private sealed class FakeRadarProviderRuntime : IRadarProviderRuntime
     {
         public Func<PointerBatchPayload, CancellationToken, Task<bool>> Publish { get; set; } = null!;
+        public Action? BeforeStart { get; init; }
         public Exception? StartException { get; init; }
         public Exception? StopException { get; init; }
         public Exception? DisposeException { get; init; }
@@ -437,6 +529,7 @@ public sealed class RadarInteractionProviderTests
         public Task StartAsync(CancellationToken cancellationToken)
         {
             StartCallCount++;
+            BeforeStart?.Invoke();
             return StartException is null ? Task.CompletedTask : Task.FromException(StartException);
         }
 
