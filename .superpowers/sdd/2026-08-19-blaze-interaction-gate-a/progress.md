@@ -10,10 +10,10 @@ Plan: `docs/superpowers/plans/2026-08-19-blaze-interaction-gate-a.md`
 | 3. Provider manager | Complete | c247463 + 559fbd3 + 2a9673f + this commit | Runtime 72/72; full solution 509/509; Radar .NET 398/398 |
 | 4. Interaction IPC | Complete | facaaaf + 2f00daa + de74f99 + current session-hardening fix | IPC 50/50 Release and Debug; full solution 559/559; Radar .NET 398/398 |
 | 5. Radar provider | Complete | 1606d67 + 6ba0816 + 91db85b + current compatibility fix | Provider 31/31 Release and Debug; Radar .NET 407/407; full solution 599/599; Unity EditMode 6/6; PlayMode 68/68 |
-| 6. Bridge/publish | Pending | pending | pending |
-| 7. Unity core runtime | Pending | pending | pending |
-| 8. Unity input/compatibility | Pending | pending | pending |
-| 9. Final docs/verification | Pending | pending | pending |
+| 6. Bridge/publish | Complete | 26c4aca | Bridge host/provider discovery, single-host publish, IPC smoke |
+| 7. Unity core runtime | Complete | f06e29c | provider-neutral Unity runtime and IPC client |
+| 8. Unity input/compatibility | Complete | 63c22ac | Unity 5/5 + 44/44; solution 647/647; Radar 407/407 |
+| 9. Final docs/verification | Complete | this commit | docs, solution 647/647, Radar 407/407, Unity 5/5 + 44/44, release and IPC smoke |
 
 ## Baseline evidence
 
@@ -129,3 +129,34 @@ Plan: `docs/superpowers/plans/2026-08-19-blaze-interaction-gate-a.md`
 - Publish-test reliability RED/GREEN: the provider-only publish test reproduced an indefinite stdout wait after the child `dotnet publish` exited because reusable MSBuild worker nodes retained inherited redirected handles. The child process now sets `MSBUILDDISABLENODEREUSE=1`; the focused real publish completes in four seconds and the complete Provider suite no longer leaves orphan build nodes.
 - Final compatibility verification: Radar Provider passed 31/31 in Release and Debug; Radar Configuration passed 51/51; Radar Device passed 16/16; affected Radar Bridge passed 138/138. `scripts/test.ps1 -Configuration Release` passed 407/407 and `dotnet test BlazeInteraction.sln -c Release --no-restore --nologo` passed 599/599; `git diff --check` exited 0.
 - Fourth Unity Radar regression: the repository's path-guarded isolated Unity 2021.3.45f1 runner, with both declared Samples copied and their asmdefs verified, passed EditMode 6/6 and PlayMode 68/68. Live UnitySkills independently reported the correct `BlazeInteraction-Test` project/version, not playing or compiling, zero Console errors, and the latest live EditMode result 6/6. No package/sample junction, callback script, or generated `.meta` remained in the live project.
+
+## Task 6 evidence
+
+- Bridge host discovers external Provider API 1 manifests, registers factory-created instances, owns the ProviderManager and InteractionPipeServer, and exposes startup diagnostics without aborting valid providers.
+- Parent-PID mode authenticates the Unity process and exits cleanly when the parent ends; manual mode survives client disconnects.
+- Commit `26c4aca` completed Provider hosting without adding a second Radar production IPC.
+
+## Task 7 evidence
+
+- `InteractionManager`, provider-neutral contracts, pipe client, dispatcher and Unity asmdef layering were added under the existing `com.blaze.interaction` package.
+- Unity client performs Hello/HelloAck, reconnection, ProviderChanged/status/error dispatch and main-thread frame consumption.
+- Commit `f06e29c` completed the core runtime before input, compatibility, launcher and release packaging.
+
+## Task 8 evidence
+
+- RED/GREEN launcher review removed unsupported `--profile`, forwards configured `--pipe-name`, uses `--parent-pid`/`--minimized`, and makes inherited Unity lifecycle methods execute for the Radar compatibility launcher.
+- RED/GREEN Radar compatibility review changed the adapter from one frame per point and coordinate-derived dimensions to one InteractionFrame per Radar frame with sequence/timestamp/batch and Hello topology preserved.
+- Restored and migrated all 97 Radar Unity/release compatibility tests to the single Interaction runtime; no second Radar Pipe Client or Launcher implementation remains.
+- RED/GREEN lifecycle review made Down/Up/Cancel reliable and ordered in Bridge and Unity while Hover/Move/empty visual frames remain latest-only. A capacity-64 Unity lifecycle buffer backpressures rather than dropping edges.
+- Full Bridge regression found disconnected lifecycle frames poisoning the old reliable tail. After a red large-topology reconnect test, unacknowledged/disconnected frames are dropped at the session boundary; Bridge passed 35/35.
+- Live Unity 2021.3.45f1 passed Editor 5/5 and reload-safe real PlayMode 44/44. The first real run exposed a migrated physics test missing `Physics.SyncTransforms`; the corrected complete run passed with no skipped or inconclusive tests. Both declared Samples compiled with zero Console errors.
+- `dotnet test BlazeInteraction.sln -c Release --nologo` passed 647/647. The independent Radar script passed 407/407. Release layout passed 1/1 and the embedded Simulation smoke passed top-level WPF window, Interaction IPC 1 Hello/HelloAck, Bridge 1.0.0, and parent-process exit code 0.
+- Final package inventory: one UPM package, one EXE, external `Providers/Radar`, no legacy `com.blaze.radar`, and zero CameraHand production hits. Commit `63c22ac` completed Task 8.
+
+## Task 9 evidence
+
+- README, architecture, Interaction IPC, Unity integration, Provider development, Radar migration and Gate A report now describe the implemented Gate A boundary rather than the old Radar-only package.
+- A full-solution run exposed one load-sensitive Radar warning-deadline assertion: `Task.Delay` completion could precede the Stopwatch deadline at the timer boundary. Commit `548ea36` changed the production wait to recheck the Stopwatch deadline instead of weakening the test. The focused regression then passed 50/50, Radar Device passed 16/16, and the official Radar suite passed 407/407.
+- The final clean solution run passed 647/647. Live Unity 2021.3.45f1 passed EditMode 5/5 and real PlayMode 44/44 with no skipped or inconclusive tests; after deleting the reload-safe callback and its `.meta`, Unity recompiled with zero Console errors.
+- The final embedded Bridge passed release layout 1/1, WPF-window startup, Interaction IPC 1 Hello/HelloAck with Bridge 1.0.0, Simulation mode, and parent-process exit code 0. The embedded EXE SHA-256 is `ACA5585BC69307A7915457576DAF70BAB2596847E0A6A5D4E75C0F2FF18092C4`.
+- Final package inventory has one UPM package, one EXE, external `Providers/Radar`, no legacy `com.blaze.radar`, and no CameraHand production implementation.

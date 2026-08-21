@@ -1,35 +1,109 @@
-# 雷达及 IPC 2 协议
+# Interaction IPC 1
 
-## F10/F20 设备层
+Interaction IPC 是 Provider-neutral 的 Bridge ↔ Unity 协议。默认 Named Pipe 为 `Blaze.InteractionBridge`，当前 major 为 `1`。它不等同于 RadarControl legacy IPC 2；Gate A Unity 生产路径不得静默降级到 Radar IPC。
 
-| 参数 | F10 | F20 |
-| --- | ---: | ---: |
-| 推荐量程 | 0.05–10 m | 0.05–40 m |
-| 扫描频率 | 10–25 Hz，默认 15 | 10–30 Hz，默认 25 |
-| 角分辨率 | 默认 0.27° | 默认 0.3° |
-| 输出角度/盲区 | 280° / 230°–310° | 280° / 230°–310° |
-| 默认 IP/端口 | `192.168.0.100:8487` | `192.168.0.100:8487` |
+## Framing 与 Envelope
 
-每点 `A B C D` 四字节：A/B/C 最高位 0，D 最高位 1。距离厘米为 `((A & 0x7F) << 7) | (B & 0x7F)`；角度为 `(((C & 0x7F) << 7) | (D & 0x7F)) / 16`。CRC 统计 B/C/D 置 1 位数取低 3 位，与 A 低 3 位比较。失败时逐字节重新同步。Profile 只描述软件范围，不发送未定义设备写命令。
+每条消息为：
 
-## IPC 2 framing 与握手
+```text
+4-byte little-endian UTF-8 JSON byte length
+UTF-8 JSON envelope
+```
 
-- Pipe：`Yuexin.RadarBridge`。
-- Frame：4-byte little-endian JSON byte length + UTF-8 JSON；length、JSON 和 protocolVersion 在业务层前验证。
-- Unity 首帧必须是 protocol 2 `Hello`，payload 带 Unity PID/version 和启用 Screen summaries（stable ID、name、logical width/height、primary、order）。
-- Bridge 校验非空/唯一 ID、合法分辨率/order 和恰好一个 Primary，应用 topology 后返回 `HelloAck`：Bridge `1.2.10`、protocol 2、capability `multi-screen` 和最终 screen summaries。
-- 业务消息为 `PointerBatch`、Status、Ping/Pong、Shutdown、Error。PointerBatch 含每屏 summary、screen-local sequence/timestamp 和 Pointers；坐标同时包含该屏左下原点 normalized `[0,1]` 与 logical pixels。
+默认最大 payload 为 4 MiB。长度必须为正且不超限；截断、非法 JSON、未知消息类型、错误 payload 或错误 protocol major 都会终止当前 session，但 server accept loop 保持可重连。
 
-每个 Pointer ID 仅保证在其 Screen 内稳定。LEFT/L1、FRONT/F1+F2 overlap、RIGHT/R1 中，FRONT 的 F1/F2 detections 先映射到同一逻辑像素空间再融合；IPC 不暴露两个雷达的重复 Pointer。
+Envelope 字段：
 
-## v1/v2 不兼容与恢复
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `messageType` | enum string | `Hello`、`HelloAck`、`InteractionFrame`、`Status`、`ProviderChanged`、`Ping`、`Pong`、`Shutdown`、`Error` |
+| `protocolVersion` | integer | 必须为 `1` |
+| `sequence` | int64 | 消息序号；frame 内另有 Provider/Surface 序号 |
+| `payload` | object | 与消息类型对应的 payload |
 
-IPC 2 禁止发布 legacy `PointerFrame`，IPC 1 客户端也不理解 screen-addressed `PointerBatch`。主版本不一致时服务端返回 Error 并拒绝业务会话；客户端不得继续消费或静默降级。
+JSON 使用 camelCase、字符串 enum；坐标对象必须显式包含有限数值 `x` 和 `y`。
 
-恢复顺序：停止 Player/Play Mode → 关闭旧 Bridge → 移除旧 Package URL/cache → 安装 `https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.10` → 确认 package/SDK/Bridge `1.2.10`、Resolved Path 和 `bridge-version.txt` → 重新握手并检查 HelloAck protocol 2/screen summaries。Pipe Name 不应用来绕过版本校验。
+## 握手
 
-## 诊断契约
+客户端首帧必须是 `Hello`：
 
-Bridge tagged logs 至少能按 `[SCREEN/SENSOR]` 或 `[GLOBAL/IPC]` 关联连接、topology/fusion 和序号。`Player.log` 对应 SDK/Bridge/IPC、screenId、batch/frame sequence、pointer count、dropped count、timestamp/latency、phase/pixel 和 EventSystem target。现场需以 timestamp/sequence 对时并归档两侧日志、Schema 2 Profile、Camera 路由和 EXE SHA。
+```json
+{
+  "unityPid": 1234,
+  "unityVersion": "2021.3.45f1",
+  "sdkVersion": "1.0.0",
+  "surfaces": [
+    {
+      "surfaceId": "FRONT",
+      "name": "Front",
+      "logicalWidth": 4096,
+      "logicalHeight": 1536,
+      "isPrimary": true,
+      "order": 0
+    }
+  ]
+}
+```
 
-修改 topology、逻辑分辨率或 OutputRect 会重置受影响 Pointer；只有操作员预期 Up/reset 时才执行。Protocol 自动化不能代替 FRONT overlap 单 Pointer、逐雷达/NIC 重连和 8 小时真实三投影四雷达验证。
+Surface ID、Order 必须唯一，宽高为正，且恰好一个 Primary。Bridge 在 topology 生效、默认 Provider 完成 Initialize/Start 后返回 `HelloAck`：
+
+```json
+{
+  "bridgeVersion": "1.0.0",
+  "activeProvider": {
+    "id": "blaze.radar.f10f20",
+    "instanceId": "radar-main"
+  },
+  "capabilities": [
+    "interaction-point",
+    "preview",
+    "multi-sensor",
+    "calibration",
+    "multi-surface"
+  ]
+}
+```
+
+Ack 写入前不得向客户端发布业务帧。默认握手超时 5 秒、心跳超时 10 秒、单次发送超时 2 秒。
+
+## InteractionFrame
+
+一个 frame 属于一个 Provider instance 和一个 Surface：
+
+| 字段 | 规则 |
+| --- | --- |
+| `providerId` / `providerInstanceId` | 非空，标识插件类型与当前实例 |
+| `surfaceId` | 必须存在于 Hello topology |
+| `sequence` | 同 Provider/Surface 严格递增 |
+| `timestampUnixMs` | frame 采样/输出时间 |
+| `points` | 不可为 null；允许空列表表示视觉状态刷新 |
+
+每个 point 含 `id`、Surface/Provider/Source identity、`Hover|Down|Move|Up|Cancel`、normalized `[0,1]`、logical pixel、confidence `[0,1]`、timestamp 和可选 `extensions`。Point ID 的稳定域由 Provider 定义；Radar Gate A 中按 Surface 保持既有 Screen-local 语义。
+
+`extensions` 是新增设备类型的可选数据面，不能改变核心字段含义。消费者必须能在忽略未知扩展时继续处理基础 InteractionPoint。
+
+## 生命周期、背压与顺序
+
+- 含 Down、Up 或 Cancel 的 frame 是可靠生命周期事务，按接纳顺序 FIFO。
+- 仅含 Hover/Move 或空点列表的 frame 是视觉状态，可 latest-only 合并。
+- 控制队列容量默认 64；控制消息保持有界 FIFO。持续控制流最多连续选择 8 条后必须给待发视觉帧一次机会。
+- Unity 接收端重复该策略；生命周期队列满时读取线程等待，而不是丢边。
+- Provider 退役时 Cancel 在 ProviderChanged 之前；未完成 HelloAck 或已断线的 session 不接收业务帧。
+
+## 身份与会话
+
+Pipe 使用 `CurrentUserOnly`。服务端从 Windows pipe handle 读取真实客户端 PID 和 Session ID：
+
+- 真实 PID 必须等于 Hello 的 `unityPid`；
+- 客户端与 Bridge 必须在同一 Windows Session；
+- Bridge 由 Unity 启动时，真实 PID 还必须等于命令行 `--parent-pid`；
+- 同一时间只允许一个活动客户端，第二个客户端等待当前 session 结束。
+
+只有有效 Ping/Pong 刷新心跳；仅发送 frame 不能掩盖失活客户端。发送、握手或心跳超时会释放 session，并允许下一个 Hello。
+
+## 错误与恢复
+
+`Error` payload 为 `{ code, message }`。协议/客户端输入错误只关闭当前 session；server 程序错误和 writer fault 不会被伪装成可恢复输入错误。客户端收到 Error 时在 Unity 主线程触发 `ErrorReceived`，随后按配置延迟重连。
+
+恢复顺序：停止旧 Player/Play Mode → 确认没有旧 `RadarBridge.exe` 占用 → 校验双方使用 Interaction IPC 1 和 `Blaze.InteractionBridge` → 校验 package/Bridge `1.0.0` 与 Provider manifest → 重新 Hello。修改 Pipe Name 不能绕过 protocol、版本或 PID 校验。

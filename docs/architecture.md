@@ -1,51 +1,75 @@
-# 1.2.10 架构与线程模型
+# Gate A 架构与所有权
 
-## 所有权边界
-
-`RadarBridge.exe` 是雷达 TCP、Schema 2 配置、每传感器处理和每屏融合的唯一所有者。Unity 不连接 `192.168.0.100:8487`，只通过 `Yuexin.RadarBridge` Named Pipe IPC 2 发布逻辑屏幕 topology 并消费 PointerBatch。
+## 唯一生产数据链
 
 ```mermaid
 flowchart LR
-    subgraph S["每屏 Screen Runtime"]
-      L["Sensor pipelines\nconnect/transform/filter/calibrate"] --> F["same-screen fusion"]
-      F --> T["tracking + interaction"]
-    end
-    R["任意 F10/F20\nTCP/sim/replay"] --> L
-    T --> B["screen-addressed PointerBatch\nIPC 2"]
-    U["Unity Project Settings\nstable IDs/resolutions/primary"] -->|Hello topology| S
-    B --> D["RadarFrameDispatcher"]
-    D --> C["Camera router\nDisplay / pixelRect / RenderTexture"]
-    D --> E["RadarInputModule\nUGUI / Physics2D / Physics3D"]
+    R["F10/F20 / Simulation / Replay"] --> RP["Radar Provider\nblaze.radar.f10f20"]
+    RP --> PM["Interaction Core\nProviderManager"]
+    PM --> BH["BlazeInteractionBridge.exe"]
+    BH --> IPC["Interaction IPC 1\nBlaze.InteractionBridge"]
+    IPC --> UM["InteractionManager\nmain-thread dispatch"]
+    UM --> UI["InteractionInputModule\nUGUI / Physics2D / Physics3D"]
+    UM --> CR["InteractionCameraRouter\nSurface -> Camera"]
 ```
 
-LEFT/L1、FRONT/F1+F2 overlap、RIGHT/R1 中，F1/F2 是 FRONT 内的两个独立 pipeline；各自映射到 FRONT OutputRect 后在该屏 fusion/tracker 去重。其他屏幕不因其中一个雷达断线而停止。Pointer ID 的稳定域是 Screen，不跨屏关联人员。
+Gate A 只有一个 Windows Bridge、一个 Interaction IPC server、一个 Unity Pipe Client 和一个 EventSystem 输入实现。Radar 是 Bridge 外置 Provider，不拥有第二条生产 IPC。`Blaze.Radar` 兼容程序集只做类型/事件适配，不能启动进程或创建管道。
+
+CameraHand 是后续 Gate，当前架构只预留 Provider API 和 `InteractionExtensions` 扩展边界，没有 CameraHand 生产模块。
 
 ## 模块职责
 
-| 项目 | 职责 |
-| --- | --- |
-| `Radar.Contracts` | Schema 2 配置、screen/sensor DTO、IPC 2 envelope 与 PointerBatch |
-| `Radar.Device` / `Radar.Protocol` | 每 Sensor TCP 生命周期、F10/F20 解码、重连、录制/回放 |
-| `Radar.Processing` | transform/filter/calibration、输出矩形、同屏融合与跟踪 |
-| `Radar.Configuration` | Schema 2 校验、持久化与迁移 |
-| `Radar.Ipc` | 长度前缀 JSON、v2 Hello/HelloAck、心跳和 Named Pipe server |
-| `Radar.Bridge.Wpf` | Screen/Sensor runtime 协调、操作界面、软件渲染与 tagged logs |
-| `Blaze.Radar` Unity Runtime | topology、Bridge launcher/client、按屏 dispatcher/input/camera routing |
+| 模块 | 责任 | 不负责 |
+| --- | --- | --- |
+| `Blaze.Interaction.Contracts` | Surface、Point、Frame、Provider identity、可选扩展 JSON 契约 | 设备连接、IPC |
+| `Blaze.Interaction.Provider.Abstractions` | Provider API 1、插件/实例生命周期、状态和设置视图接口 | Provider 发现和加载 |
+| `Blaze.Interaction.Runtime` | 安全目录发现、隔离加载、ProviderManager、切换/停止/取消 | Named Pipe、Unity |
+| `Blaze.Provider.Radar` | 复用 RadarControl coordinator，把每屏融合输出映射为 `InteractionFrame` | 复制 Radar 算法、创建 Interaction IPC |
+| `Blaze.Interaction.Ipc` | IPC 1 framing、握手、身份、心跳、背压和单客户端 session | Provider 选择策略、Unity 事件 |
+| `Blaze.Interaction.Bridge.Wpf` | 发现/托管 Provider、创建 HelloAck、Provider 切换、向 IPC 转发状态/帧 | 直接解码雷达协议 |
+| `com.blaze.interaction` | Bridge 启动/复用、Unity client、主线程状态、InputModule、Camera 路由、构建复制 | 雷达 TCP、雷达配置算法 |
 
-## 并发、背压和拓扑变更
+## Radar 所有权不变
 
-- 每 Sensor 异步接收，重连前清空解析器；容量 1 最新值缓冲避免积压过时扫描。
-- 每 Screen scheduler 只融合未超过 data max age 的 detections，按该屏 output rate 发布；跟踪参数不跨屏共享。
-- Hello/HelloAck 完成后才发布业务帧。Topology/分辨率/OutputRect 变更先输出 Pointer Up/reset transition，再应用新像素空间。
-- WPF 只消费不可变快照并用自绘控件显示；窗口创建前强制软件渲染，日志通过有界异步通道写入。
-- Unity client 保留最新 PointerBatch，记录替换的 dropped count；Camera router 和 EventSystem 在 Unity 主线程派发。
+`Radar.Device`、`Radar.Protocol`、`Radar.Configuration`、`Radar.Processing` 与 `Radar.Bridge.Wpf` 仍是既有 F10/F20 行为的实现来源。Provider 模式调用同一 coordinator，但关闭 legacy Radar IPC 输出，改由回调发送 `InteractionFrame`。每个旧 `PointerBatch` screen frame 映射为一个 Interaction frame，保留：
 
-## 生命周期与可观测性
+- Surface/Screen ID；
+- frame sequence 与 timestamp；
+- pointer ID、phase、normalized/pixel 坐标、confidence 与 point timestamp；
+- 同屏融合后的单一输出流。
 
-启动：读取/迁移 Schema 2 → 日志/DI → 每屏/每 Sensor runtime → IPC server → 软件渲染 WPF。Unity Launcher 先探测 Pipe，只在需要时启动当前 Resolved Package 内 Bridge，并传 `--parent-pid`。停止：取消 active pointers → 停传感器/调度/IPC → 保存配置/刷新日志；父进程结束时 Bridge 返回 code 0。
+适配层不会把一个 frame 拆成“每点一帧”，也不会从点坐标猜测屏幕分辨率。
 
-IPC 身份边界：Bridge 的 Named Pipe 以 `CurrentUserOnly` 创建，并从 Windows 管道句柄读取真实客户端 PID/Session。真实 PID 必须与 Hello 声明一致、客户端必须与 Bridge 同 Session；由 Unity 自动启动时，真实 PID 还必须与 `--parent-pid` 一致。手工启动未提供 `--parent-pid` 时，只能保证当前用户、同 Session 与真实 PID/Hello 一致；同一交互登录用户下的其他进程仍可能发起诚实声明的连接，因此手工模式的信任边界弱于自动启动模式。
+## Provider 生命周期与隔离
 
-Bridge 使用 `[SCREEN/SENSOR]`、`[GLOBAL/IPC]` 标签。与 `Player.log` 的 SDK/Bridge/IPC、screenId、batch/frame sequence、pointer/dropped count 和 latency 对齐。安装固定标签为 `https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.10`；构建处理器从当前 Package Manager Resolved Path 复制完整 Bridge 并验证 1.2.10 marker/SHA。
+每个 Provider 目录包含一个 `provider.json`。Catalog 先验证目录、manifest 大小、重复字段、API major、入口 DLL 与路径安全，再为每个 Provider 创建独立可回收 `AssemblyLoadContext`。Contracts 与 Provider Abstractions 从默认上下文共享；Provider 私有依赖从自己的目录解析。
 
-部署架构验收还包括独立 Display、Camera `pixelRect`/RenderTexture、per-camera world particles、IPC v1/v2 recovery、投影 click/drag/resize/minimize/focus 清晰度以及三投影四雷达 8 小时运行。
+ProviderManager 的成功切换顺序是：
+
+```text
+关闭旧 generation 的事件准入
+-> 等待已接纳回调排空
+-> 为活动点生成 Cancel
+-> 退订并 Stop/Dispose 旧 Provider
+-> 创建、Initialize、Start 新 Provider
+-> 发布 ProviderChanged
+```
+
+同一 Provider/Surface 的 sequence 必须严格递增。嵌套回调经过容量 64 的非递归 FIFO；超出容量会被显式拒绝和诊断。生命周期回调中的同步重入会快速失败，避免生命周期锁死。
+
+## IPC 背压与生命周期边
+
+Bridge 只在客户端已完成 HelloAck 时接受业务帧：
+
+- 仅含 Hover/Move 或空点列表的视觉帧采用 latest-only 合并；
+- 含 Down、Up 或 Cancel 的帧进入可靠有序控制队列；
+- 客户端未确认或已断开时，不把不可投递生命周期帧加入旧 session 的可靠链；
+- Provider 切换/停止生成的 Cancel 必须先于对应 `ProviderChanged` 完成。
+
+Unity 端使用同样的 `LifecycleFrameBuffer`：Down/Up/Cancel FIFO 保留，只有相邻的 Hover/Move/空视觉帧可合并；当容量 64 全被生命周期帧占满时，读取线程背压，不丢生命周期边。
+
+## 进程、身份和部署
+
+Unity Launcher 先探测配置的 Pipe；已有 Bridge 时复用，否则从当前 Package Manager Resolved Path 启动 `BlazeInteractionBridge.exe`，参数为 `--parent-pid`、`--pipe-name`、`--minimized`。Bridge 验证 Named Pipe 的真实客户端 PID/Windows Session 与 Hello 声明；自动启动时还必须等于 `--parent-pid`。
+
+发布 payload 根目录恰好一个 EXE，Provider 位于 `Providers/Radar/`。Player 构建处理器先删除目标中的旧 Bridge 目录，再复制完整 payload，并校验 Bridge 版本、Provider manifest/入口 DLL 和文件 SHA-256。
