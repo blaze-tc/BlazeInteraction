@@ -323,6 +323,54 @@ public sealed class RadarInteractionProviderTests
     }
 
     [Fact]
+    public async Task SynchronousInitializingStatusHandlerInitializeReentryFailsFastWithoutDeadlocking()
+    {
+        var runtime = new FakeRadarProviderRuntime();
+        var provider = CreateProvider(runtime);
+        var context = InitializationContext(Surface("front", true, 0));
+        Exception? reentryFailure = null;
+        provider.StatusChanged += (_, change) =>
+        {
+            if (change.Status != ProviderRuntimeStatus.Initializing) return;
+#pragma warning disable xUnit1031 // This regression test intentionally exercises synchronous event-handler reentry.
+            reentryFailure = Record.Exception(() => provider.InitializeAsync(context, CancellationToken.None).GetAwaiter().GetResult());
+#pragma warning restore xUnit1031
+        };
+
+        await Task.Run(() => provider.InitializeAsync(context, CancellationToken.None))
+            .WaitAsync(TimeSpan.FromSeconds(1));
+
+        var invalidOperation = Assert.IsType<InvalidOperationException>(reentryFailure);
+        Assert.Contains("StatusChanged", invalidOperation.Message, StringComparison.Ordinal);
+        Assert.Equal(ProviderRuntimeStatus.Ready, provider.Status);
+        await provider.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task SynchronousStartingStatusHandlerStartReentryFailsFastWithoutDeadlocking()
+    {
+        var runtime = new FakeRadarProviderRuntime();
+        var provider = CreateProvider(runtime);
+        await provider.InitializeAsync(InitializationContext(Surface("front", true, 0)), CancellationToken.None);
+        Exception? reentryFailure = null;
+        provider.StatusChanged += (_, change) =>
+        {
+            if (change.Status != ProviderRuntimeStatus.Starting) return;
+#pragma warning disable xUnit1031 // This regression test intentionally exercises synchronous event-handler reentry.
+            reentryFailure = Record.Exception(() => provider.StartAsync(CancellationToken.None).GetAwaiter().GetResult());
+#pragma warning restore xUnit1031
+        };
+
+        await Task.Run(() => provider.StartAsync(CancellationToken.None))
+            .WaitAsync(TimeSpan.FromSeconds(1));
+
+        var invalidOperation = Assert.IsType<InvalidOperationException>(reentryFailure);
+        Assert.Contains("StatusChanged", invalidOperation.Message, StringComparison.Ordinal);
+        Assert.Equal(ProviderRuntimeStatus.Running, provider.Status);
+        await provider.DisposeAsync();
+    }
+
+    [Fact]
     public async Task StopRacingDisposeCompletesOneStopAndOneDisposeWithoutSemaphoreTeardownFaults()
     {
         var runtime = new FakeRadarProviderRuntime();

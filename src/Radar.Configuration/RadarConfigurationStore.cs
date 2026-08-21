@@ -132,26 +132,36 @@ public static class RadarConfigurationStore
         return clone;
     }
 
-    public static RadarSensorConfiguration Clone(RadarSensorConfiguration source)
+    public static RadarSensorConfiguration CloneRuntime(RadarSensorConfiguration source)
     {
         ArgumentNullException.ThrowIfNull(source);
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(source, JsonContext.RadarSensorConfiguration);
-        return JsonSerializer.Deserialize(bytes, JsonContext.RadarSensorConfiguration)
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(
+            source,
+            RadarRuntimeSnapshotJsonSerializerContext.Default.RadarSensorConfiguration);
+        return JsonSerializer.Deserialize(
+                bytes,
+                RadarRuntimeSnapshotJsonSerializerContext.Default.RadarSensorConfiguration)
             ?? throw new InvalidOperationException("Could not clone the Radar sensor configuration.");
     }
 
-    public static RadarScreenConfiguration Clone(RadarScreenConfiguration source)
+    public static RadarScreenConfiguration CloneRuntime(RadarScreenConfiguration source)
     {
         ArgumentNullException.ThrowIfNull(source);
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(source, JsonContext.RadarScreenConfiguration);
-        return JsonSerializer.Deserialize(bytes, JsonContext.RadarScreenConfiguration)
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(
+            source,
+            RadarRuntimeSnapshotJsonSerializerContext.Default.RadarScreenConfiguration);
+        return JsonSerializer.Deserialize(
+                bytes,
+                RadarRuntimeSnapshotJsonSerializerContext.Default.RadarScreenConfiguration)
             ?? throw new InvalidOperationException("Could not clone the Radar screen configuration.");
     }
 
-    public static string Serialize(RadarSensorConfiguration source)
+    public static string SerializeRuntimeSnapshot(RadarSensorConfiguration source)
     {
         ArgumentNullException.ThrowIfNull(source);
-        return JsonSerializer.Serialize(source, JsonContext.RadarSensorConfiguration);
+        return JsonSerializer.Serialize(
+            source,
+            RadarRuntimeSnapshotJsonSerializerContext.Default.RadarSensorConfiguration);
     }
 
     private static SaveLockEntry RentSaveLock(string targetPath)

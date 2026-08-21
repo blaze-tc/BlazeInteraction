@@ -1021,7 +1021,7 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
                 },
                 calibration!,
                 mapper,
-                RadarConfigurationStore.Serialize(sensor));
+                RadarConfigurationStore.SerializeRuntimeSnapshot(sensor));
         }
 
         private static bool IsConfigurationId(string? value) =>

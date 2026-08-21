@@ -72,6 +72,7 @@ public sealed class RadarInteractionProvider : IInteractionProvider
         ProviderInitializationContext context,
         CancellationToken cancellationToken)
     {
+        ThrowIfStatusChangedCallbackReentry();
         ArgumentNullException.ThrowIfNull(context);
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
@@ -113,6 +114,7 @@ public sealed class RadarInteractionProvider : IInteractionProvider
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        ThrowIfStatusChangedCallbackReentry();
         ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
         await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);

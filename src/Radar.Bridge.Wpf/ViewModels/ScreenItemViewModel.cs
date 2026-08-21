@@ -90,7 +90,7 @@ public sealed class ScreenItemViewModel : ObservableObject, System.ComponentMode
     }
     private static bool ValidateCopy(RadarScreenConfiguration configuration)
     {
-        var copy = new RadarAppConfiguration { Screens = [RadarConfigurationStore.Clone(configuration)] };
+        var copy = new RadarAppConfiguration { Screens = [RadarConfigurationStore.CloneRuntime(configuration)] };
         return ConfigurationValidator.ValidateAndNormalize(copy).IsValid;
     }
 

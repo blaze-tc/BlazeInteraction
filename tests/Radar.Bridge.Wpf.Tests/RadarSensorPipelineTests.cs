@@ -5,6 +5,7 @@ using Yuexin.Radar.Configuration;
 using Yuexin.Radar.Contracts;
 using Yuexin.Radar.Device;
 using Yuexin.Radar.Processing;
+using System.Text.Json;
 using ConfigurationPixelRect = Yuexin.Radar.Configuration.RadarPixelRect;
 
 namespace Yuexin.Radar.Bridge.Wpf.Tests;
@@ -246,6 +247,34 @@ public sealed class RadarSensorPipelineTests
 
             await pipeline.DisposeAsync();
             Assert.Null(GetRecordingWriter(pipeline));
+        }
+        finally
+        {
+            await pipeline.DisposeAsync();
+            File.Delete(recordingPath);
+        }
+    }
+
+    [Fact]
+    public async Task RecordingHeader_EmbedsTheLegacyDefaultSerializerRuntimeSnapshotExactly()
+    {
+        var (screen, sensor) = CreateConfiguration("main", "sensor-1", new ConfigurationPixelRect(0, 0, 1920, 1080));
+        sensor.SourceMode = RadarSensorSourceMode.Real;
+        sensor.Device.DeviceModel = RadarModel.F20;
+        var expectedSnapshot = JsonSerializer.Serialize(sensor);
+        var pipeline = CreatePipeline(screen, sensor);
+        var recordingPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid() + ".radarrec");
+        try
+        {
+            SetActiveRealSourceForRecording(pipeline);
+            await pipeline.StartRecordingAsync(recordingPath);
+            await pipeline.StopRecordingAsync();
+
+            await using var stream = new FileStream(recordingPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            await using var reader = new RadarRecordingReader(stream, leaveOpen: true);
+            var header = await reader.ReadHeaderAsync();
+
+            Assert.Equal(expectedSnapshot, header.ConfigurationSnapshotJson);
         }
         finally
         {

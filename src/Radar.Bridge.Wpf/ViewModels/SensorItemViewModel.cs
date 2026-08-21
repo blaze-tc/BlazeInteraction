@@ -158,7 +158,7 @@ public sealed class SensorItemViewModel : ObservableObject, System.ComponentMode
                 new RadarScreenConfiguration
                 {
                     IsAssociated = false,
-                    Sensors = [RadarConfigurationStore.Clone(configuration)]
+                    Sensors = [RadarConfigurationStore.CloneRuntime(configuration)]
                 }
             ]
         };

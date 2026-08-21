@@ -28,6 +28,7 @@ public sealed class RadarProviderLoaderIntegrationTests
             RedirectStandardError = true,
             UseShellExecute = false
         };
+        startInfo.Environment["MSBUILDDISABLENODEREUSE"] = "1";
         foreach (var argument in new[]
                  {
                      "publish", projectPath, "-c", "Release", "--no-restore", "--nologo", "-o", output.Path
