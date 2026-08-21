@@ -1,0 +1,21 @@
+{
+  "name": "Blaze.Interaction.Runtime.Tests",
+  "rootNamespace": "Blaze.Interaction.Tests",
+  "references": [
+    "Blaze.Interaction.Runtime"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": false,
+  "defineConstraints": [
+    "UNITY_INCLUDE_TESTS"
+  ],
+  "versionDefines": [],
+  "noEngineReferences": false,
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ]
+}

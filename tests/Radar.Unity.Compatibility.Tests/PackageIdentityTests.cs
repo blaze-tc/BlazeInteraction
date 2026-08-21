@@ -5,6 +5,50 @@ namespace Radar.Unity.Compatibility.Tests;
 public sealed class PackageIdentityTests
 {
     [Fact]
+    public void InteractionPackage_UsesProtocolOneRuntimeIdentityWithoutProviderReferences()
+    {
+        var packageRoot = Path.Combine(FindRepositoryRoot(), "UnityPackage", "com.blaze.interaction");
+        Assert.True(Directory.Exists(packageRoot), $"Expected Interaction package directory: {packageRoot}");
+
+        using var packageJson = JsonDocument.Parse(File.ReadAllText(Path.Combine(packageRoot, "package.json")));
+        Assert.Equal("com.blaze.interaction", packageJson.RootElement.GetProperty("name").GetString());
+        Assert.Equal("1.0.0", packageJson.RootElement.GetProperty("version").GetString());
+        Assert.Equal("Blaze Interaction SDK", packageJson.RootElement.GetProperty("displayName").GetString());
+        Assert.Equal("2021.3", packageJson.RootElement.GetProperty("unity").GetString());
+
+        using var runtimeAssembly = JsonDocument.Parse(File.ReadAllText(Path.Combine(
+            packageRoot,
+            "Runtime",
+            "Blaze.Interaction.Runtime.asmdef")));
+        Assert.Equal("Blaze.Interaction.Runtime", runtimeAssembly.RootElement.GetProperty("name").GetString());
+        Assert.Equal("Blaze.Interaction", runtimeAssembly.RootElement.GetProperty("rootNamespace").GetString());
+        Assert.Contains(
+            "Unity.Newtonsoft.Json",
+            runtimeAssembly.RootElement.GetProperty("references").EnumerateArray()
+                .Select(reference => reference.GetString()));
+
+        var expectedRuntimeFiles = new[]
+        {
+            Path.Combine("Contracts", "InteractionMessageModels.cs"),
+            Path.Combine("Internal", "LengthPrefixedFrameDecoder.cs"),
+            Path.Combine("Internal", "LatestValueBuffer.cs"),
+            "InteractionPipeClient.cs",
+            "InteractionFrameDispatcher.cs",
+            "InteractionManager.cs"
+        };
+        Assert.All(expectedRuntimeFiles, relativePath =>
+            Assert.True(File.Exists(Path.Combine(packageRoot, "Runtime", relativePath)), relativePath));
+
+        var runtimeSource = string.Join(
+            Environment.NewLine,
+            Directory.EnumerateFiles(Path.Combine(packageRoot, "Runtime"), "*.cs", SearchOption.AllDirectories)
+                .Select(File.ReadAllText));
+        Assert.DoesNotContain("Blaze.Provider", runtimeSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("Blaze.Radar", runtimeSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("CameraHand", runtimeSource, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Package_UsesBlazeIdentityAndExplicitSampleAssemblyReference()
     {
         var packageRoot = Path.Combine(FindRepositoryRoot(), "UnityPackage", "com.blaze.radar");

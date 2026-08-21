@@ -1,0 +1,19 @@
+{
+  "name": "com.blaze.interaction",
+  "version": "1.0.0",
+  "displayName": "Blaze Interaction SDK",
+  "description": "Unified external-sensor interaction runtime for Blaze Interaction providers.",
+  "unity": "2021.3",
+  "keywords": [
+    "interaction",
+    "input",
+    "sensor",
+    "multipointer"
+  ],
+  "author": {
+    "name": "Blaze"
+  },
+  "dependencies": {
+    "com.unity.nuget.newtonsoft-json": "3.0.2"
+  }
+}
