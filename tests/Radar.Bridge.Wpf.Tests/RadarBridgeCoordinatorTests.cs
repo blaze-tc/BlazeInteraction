@@ -64,6 +64,60 @@ public sealed class RadarBridgeCoordinatorTests
     }
 
     [Fact]
+    public async Task Coordinator_UnityStatusSubscription_DrainsInitialSnapshotOutsideItsLockInOrder()
+    {
+        var initialEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseInitial = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var received = new List<bool>();
+        await using var coordinator = new RadarBridgeCoordinator(
+            new RadarAppConfiguration(),
+            NullLogger<RadarBridgeCoordinator>.Instance,
+            new FakePipelineFactory(),
+            sendPointerBatchAsync: (_, _) => Task.FromResult(true),
+            enableLegacyIpc: false);
+
+        var subscribe = Task.Run(() => coordinator.SubscribeUnityStatus(status =>
+        {
+            received.Add(status.IsConnected);
+            if (initialEntered.TrySetResult()) releaseInitial.Task.GetAwaiter().GetResult();
+        }));
+        await initialEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var update = Task.Run(() => coordinator.ApplyUnityConnectionStatus(
+            new UnityClientStatus(true, 42, "2021.3.45f1", [], null, 0, null)));
+        await update.WaitAsync(TimeSpan.FromSeconds(5));
+        releaseInitial.TrySetResult();
+        await subscribe.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal([false, true], received);
+    }
+
+    [Fact]
+    public async Task Coordinator_SensorStateSubscription_DrainsInitialAndConcurrentStateInOrder()
+    {
+        var configuration = new RadarAppConfiguration { Screens = [ScreenConfiguration("front", "f1", 1920, 1080)] };
+        var initialEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseInitial = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var received = new List<RadarSensorRuntimeStateSnapshot>();
+        var factory = new FakePipelineFactory();
+        await using var coordinator = CreateCoordinator(configuration, factory);
+        await coordinator.ApplyUnityTopologyAsync(Hello(Screen("front", "Front", true, 1920, 1080, 0)));
+
+        var subscribe = Task.Run(() => coordinator.SubscribeSensorStates(snapshot =>
+        {
+            received.Add(snapshot);
+            if (initialEntered.TrySetResult()) releaseInitial.Task.GetAwaiter().GetResult();
+        }));
+        await initialEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await coordinator.ConnectSensorAsync("front", "f1").WaitAsync(TimeSpan.FromSeconds(5));
+        releaseInitial.TrySetResult();
+        await subscribe.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal([RadarSensorRuntimeState.Stopped, RadarSensorRuntimeState.Running], received.Select(snapshot => snapshot.State.State));
+        Assert.Equal(received[0].BindingGeneration, received[1].BindingGeneration);
+        Assert.True(received[1].Version > received[0].Version);
+    }
+
+    [Fact]
     public async Task Coordinator_BlockedProviderSendCannotRestoreDisconnectedUnityStatus()
     {
         var sendEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

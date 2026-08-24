@@ -23,7 +23,8 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private readonly object _unityStatusGate = new();
     private readonly object _sensorStateGate = new();
     private readonly Queue<UnityStatusPublication> _unityStatusPublications = new();
-    private readonly Dictionary<string, SensorStateSnapshot> _sensorStates = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Queue<SensorStatePublication> _sensorStatePublications = new();
+    private readonly Dictionary<string, SensorStateEntry> _sensorStates = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
     private readonly SemaphoreSlim _topologyLock = new(1, 1);
     private readonly Dictionary<string, ScreenRuntime> _screens = new(StringComparer.OrdinalIgnoreCase);
@@ -43,6 +44,8 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private Task? _schedulerTask;
     private UnityClientStatus _unityStatus = UnityClientStatus.Disconnected;
     private bool _isDrainingUnityStatus;
+    private bool _isDrainingSensorStates;
+    private long _nextSensorBindingGeneration;
     private long _batchSequence;
     private int _started;
     private int _disposed;
@@ -73,6 +76,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     public event Action<RadarSensorRuntimeSnapshot>? SensorSnapshotUpdated;
     public event Action<RadarScreenRuntimeSnapshot>? ScreenSnapshotUpdated;
     private Action<RadarSensorRuntimeStateChanged>? _sensorStateChanged;
+    private Action<RadarSensorRuntimeStateSnapshot>? _sensorStateSnapshotChanged;
     private Action<UnityClientStatus>? _unityStatusChanged;
 
     public event Action<RadarSensorRuntimeStateChanged>? SensorStateChanged
@@ -102,11 +106,18 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     public void SubscribeUnityStatus(Action<UnityClientStatus> handler)
     {
         ArgumentNullException.ThrowIfNull(handler);
+        var shouldDrain = false;
         lock (_unityStatusGate)
         {
             _unityStatusChanged += handler;
-            InvokeSafely(handler, _unityStatus);
+            _unityStatusPublications.Enqueue(new UnityStatusPublication(_unityStatus, handler));
+            if (!_isDrainingUnityStatus)
+            {
+                _isDrainingUnityStatus = true;
+                shouldDrain = true;
+            }
         }
+        if (shouldDrain) DrainUnityStatusPublications();
     }
 
     public void UnsubscribeUnityStatus(Action<UnityClientStatus> handler)
@@ -115,26 +126,33 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         lock (_unityStatusGate) _unityStatusChanged -= handler;
     }
 
-    public void SubscribeSensorStates(Action<RadarSensorRuntimeStateChanged> handler)
+    public void SubscribeSensorStates(Action<RadarSensorRuntimeStateSnapshot> handler)
     {
         ArgumentNullException.ThrowIfNull(handler);
+        var shouldDrain = false;
         lock (_sensorStateGate)
         {
-            _sensorStateChanged += handler;
+            _sensorStateSnapshotChanged += handler;
             foreach (var state in _sensorStates.Values
-                         .Select(value => value.State)
-                         .OrderBy(value => value.ScreenId, StringComparer.OrdinalIgnoreCase)
-                         .ThenBy(value => value.SensorId, StringComparer.OrdinalIgnoreCase))
+                         .Select(value => value.Snapshot)
+                         .OrderBy(value => value.State.ScreenId, StringComparer.OrdinalIgnoreCase)
+                         .ThenBy(value => value.State.SensorId, StringComparer.OrdinalIgnoreCase))
             {
-                InvokeSafely(handler, state);
+                _sensorStatePublications.Enqueue(new SensorStatePublication(state, null, handler));
+            }
+            if (!_isDrainingSensorStates)
+            {
+                _isDrainingSensorStates = true;
+                shouldDrain = true;
             }
         }
+        if (shouldDrain) DrainSensorStatePublications();
     }
 
-    public void UnsubscribeSensorStates(Action<RadarSensorRuntimeStateChanged> handler)
+    public void UnsubscribeSensorStates(Action<RadarSensorRuntimeStateSnapshot> handler)
     {
         ArgumentNullException.ThrowIfNull(handler);
-        lock (_sensorStateGate) _sensorStateChanged -= handler;
+        lock (_sensorStateGate) _sensorStateSnapshotChanged -= handler;
     }
 
     /// <summary>Applies authenticated Unity status supplied by the unified interaction host in provider mode.</summary>
@@ -1439,31 +1457,86 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private void PublishSensorState(PipelineRuntime binding, string screenId, string sensorId, RadarSensorRuntimeState state, string? error = null)
     {
         var change = new RadarSensorRuntimeStateChanged(screenId, sensorId, state, error);
-        Action<RadarSensorRuntimeStateChanged>? handlers;
+        var shouldDrain = false;
         lock (_sensorStateGate)
         {
             var key = SensorStateKey(screenId, sensorId);
             if (!_sensorStates.TryGetValue(key, out var current) || !ReferenceEquals(current.Binding, binding)) return;
-            _sensorStates[key] = new SensorStateSnapshot(binding, change);
-            handlers = _sensorStateChanged;
+            var snapshot = new RadarSensorRuntimeStateSnapshot(change, current.Snapshot.BindingGeneration,
+                checked(current.Snapshot.Version + 1));
+            _sensorStates[key] = new SensorStateEntry(binding, snapshot);
+            _sensorStatePublications.Enqueue(new SensorStatePublication(snapshot, _sensorStateChanged, _sensorStateSnapshotChanged));
+            if (!_isDrainingSensorStates)
+            {
+                _isDrainingSensorStates = true;
+                shouldDrain = true;
+            }
         }
-        InvokeSafely(handlers, change);
+        if (shouldDrain) DrainSensorStatePublications();
     }
 
     private void RefreshSensorStateSnapshot()
     {
-        var states = _screens.Values
+        var bindings = _screens.Values
             .Select(runtime => runtime.IsRetiring ? runtime.PendingReplacement : runtime)
             .Where(runtime => runtime is { Associated: true, IsRetiring: false })
             .OfType<ScreenRuntime>()
             .Distinct()
-            .SelectMany(runtime => runtime.Pipelines.Values.Select(binding => new SensorStateSnapshot(binding,
-                new RadarSensorRuntimeStateChanged(runtime.Info.ScreenId, binding.Configuration.SensorId, binding.Pipeline.State))))
+            .SelectMany(runtime => runtime.Pipelines.Values.Select(binding => (runtime, binding)))
             .ToArray();
+        var shouldDrain = false;
         lock (_sensorStateGate)
         {
+            var previous = _sensorStates;
+            var refreshed = new Dictionary<string, SensorStateEntry>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (runtime, binding) in bindings)
+            {
+                var key = SensorStateKey(runtime.Info.ScreenId, binding.Configuration.SensorId);
+                var state = new RadarSensorRuntimeStateChanged(runtime.Info.ScreenId, binding.Configuration.SensorId, binding.Pipeline.State);
+                if (previous.TryGetValue(key, out var existing) && ReferenceEquals(existing.Binding, binding))
+                {
+                    var snapshot = existing.Snapshot.State == state
+                        ? existing.Snapshot
+                        : new RadarSensorRuntimeStateSnapshot(state, existing.Snapshot.BindingGeneration,
+                            checked(existing.Snapshot.Version + 1));
+                    refreshed[key] = new SensorStateEntry(binding, snapshot);
+                    if (snapshot != existing.Snapshot)
+                        _sensorStatePublications.Enqueue(new SensorStatePublication(snapshot, _sensorStateChanged, _sensorStateSnapshotChanged));
+                }
+                else
+                {
+                    var snapshot = new RadarSensorRuntimeStateSnapshot(state, checked(++_nextSensorBindingGeneration), 1);
+                    refreshed[key] = new SensorStateEntry(binding, snapshot);
+                    _sensorStatePublications.Enqueue(new SensorStatePublication(snapshot, _sensorStateChanged, _sensorStateSnapshotChanged));
+                }
+            }
             _sensorStates.Clear();
-            foreach (var state in states) _sensorStates[SensorStateKey(state.State.ScreenId, state.State.SensorId)] = state;
+            foreach (var (key, state) in refreshed) _sensorStates[key] = state;
+            if (_sensorStatePublications.Count > 0 && !_isDrainingSensorStates)
+            {
+                _isDrainingSensorStates = true;
+                shouldDrain = true;
+            }
+        }
+        if (shouldDrain) DrainSensorStatePublications();
+    }
+
+    private void DrainSensorStatePublications()
+    {
+        while (true)
+        {
+            SensorStatePublication publication;
+            lock (_sensorStateGate)
+            {
+                if (_sensorStatePublications.Count == 0)
+                {
+                    _isDrainingSensorStates = false;
+                    return;
+                }
+                publication = _sensorStatePublications.Dequeue();
+            }
+            InvokeSafely(publication.StateHandlers, publication.Snapshot.State);
+            InvokeSafely(publication.SnapshotHandlers, publication.Snapshot);
         }
     }
 
@@ -1522,7 +1595,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         public Action<string>? LogHandler { get; set; }
     }
 
-    private sealed record SensorStateSnapshot(PipelineRuntime Binding, RadarSensorRuntimeStateChanged State);
+    private sealed record SensorStateEntry(PipelineRuntime Binding, RadarSensorRuntimeStateSnapshot Snapshot);
 
     private sealed class PipelineLease(ScreenRuntime runtime, PipelineRuntime pipeline, CancellationToken cancellationToken) : IDisposable
     {
@@ -1534,4 +1607,8 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private sealed record TransitionFrame(RadarScreenInfo Screen, IReadOnlyList<RadarScreenPointer> Pointers, Func<Task>? OnDelivered = null);
     private sealed record PreparedBatch(long Sequence, DateTimeOffset Timestamp, PointerBatchPayload Payload, TransitionFrame? Transition);
     private sealed record UnityStatusPublication(UnityClientStatus Value, Action<UnityClientStatus>? Handlers);
+    private sealed record SensorStatePublication(
+        RadarSensorRuntimeStateSnapshot Snapshot,
+        Action<RadarSensorRuntimeStateChanged>? StateHandlers,
+        Action<RadarSensorRuntimeStateSnapshot>? SnapshotHandlers);
 }

@@ -366,6 +366,30 @@ public sealed class MainViewModelTests
     }
 
     [Fact]
+    public async Task SensorSnapshots_IgnoreStaleBindingAndPreviousSubscription()
+    {
+        var configuration = new RadarAppConfiguration { Screens = [Screen("front", true, "s1")] };
+        configuration.Screens[0].Sensors[0].Enabled = true;
+        var runtime = new TestRuntime();
+        using var viewModel = new MainViewModel(configuration, runtime);
+        runtime.PublishSensorStateSnapshot(new RadarSensorRuntimeStateSnapshot(
+            new RadarSensorRuntimeStateChanged("front", "s1", RadarSensorRuntimeState.Running), 2, 1));
+        await WaitUntilAsync(() => viewModel.ConnectedRadarCount == 1);
+
+        var oldSubscription = runtime.CaptureSensorStateSubscribers();
+        runtime.PublishConfigurationChanged();
+        await Task.Delay(25);
+        oldSubscription?.Invoke(new RadarSensorRuntimeStateSnapshot(
+            new RadarSensorRuntimeStateChanged("front", "s1", RadarSensorRuntimeState.Stopped), 1, 99));
+        runtime.PublishSensorStateSnapshot(new RadarSensorRuntimeStateSnapshot(
+            new RadarSensorRuntimeStateChanged("front", "s1", RadarSensorRuntimeState.Stopped), 1, 100));
+        await Task.Delay(25);
+
+        Assert.Equal(RadarSensorRuntimeState.Running, viewModel.SelectedScreen!.Sensors.Single().RuntimeState);
+        Assert.Equal("雷达：1/1 已连接", viewModel.RadarConnectionText);
+    }
+
+    [Fact]
     public async Task ConnectionStatus_RefreshesForSensorEnabledStateAndConfigurationChanges()
     {
         var configuration = new RadarAppConfiguration { Screens = [Screen("front", true, "s1")] };
@@ -644,6 +668,8 @@ public sealed class MainViewModelTests
         event Action<RadarScreenRuntimeSnapshot>? IRadarBridgeRuntime.ScreenSnapshotUpdated { add { } remove { } }
         public event Action<string>? LogReceived;
         public event Action<UnityClientStatus>? UnityStatusChanged;
+        private event Action<RadarSensorRuntimeStateSnapshot>? SensorStateSnapshotChanged;
+        private readonly Dictionary<string, RadarSensorRuntimeStateSnapshot> _sensorStates = new(StringComparer.OrdinalIgnoreCase);
         public (string ScreenId, string SensorId)? LastConnectedSensor { get; private set; }
         public (string ScreenId, string SensorId)? LastDisconnectedSensor { get; private set; }
         public int DisconnectSensorCallCount { get; private set; }
@@ -689,7 +715,22 @@ public sealed class MainViewModelTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         public void PublishLog(string entry) => LogReceived?.Invoke(entry);
         public void PublishSensorSnapshot(RadarSensorRuntimeSnapshot snapshot) => SensorSnapshotUpdated?.Invoke(snapshot);
-        public void PublishSensorState(RadarSensorRuntimeStateChanged state) => SensorStateChanged?.Invoke(state);
+        public void PublishSensorState(RadarSensorRuntimeStateChanged state)
+        {
+            SensorStateChanged?.Invoke(state);
+            var key = string.Concat(state.ScreenId, "\u001F", state.SensorId);
+            var version = _sensorStates.TryGetValue(key, out var prior) ? checked(prior.Version + 1) : 1;
+            var snapshot = new RadarSensorRuntimeStateSnapshot(state, 1, version);
+            _sensorStates[key] = snapshot;
+            SensorStateSnapshotChanged?.Invoke(snapshot);
+        }
+        public void PublishSensorStateSnapshot(RadarSensorRuntimeStateSnapshot snapshot)
+        {
+            var state = snapshot.State;
+            _sensorStates[string.Concat(state.ScreenId, "\u001F", state.SensorId)] = snapshot;
+            SensorStateSnapshotChanged?.Invoke(snapshot);
+        }
+        public Action<RadarSensorRuntimeStateSnapshot>? CaptureSensorStateSubscribers() => SensorStateSnapshotChanged;
         public void PublishUnityStatus(UnityClientStatus status)
         {
             UnityStatus = status;
@@ -703,8 +744,12 @@ public sealed class MainViewModelTests
             handler(UnityStatus);
         }
         public void UnsubscribeUnityStatus(Action<UnityClientStatus> handler) => UnityStatusChanged -= handler;
-        public void SubscribeSensorStates(Action<RadarSensorRuntimeStateChanged> handler) => SensorStateChanged += handler;
-        public void UnsubscribeSensorStates(Action<RadarSensorRuntimeStateChanged> handler) => SensorStateChanged -= handler;
+        public void SubscribeSensorStates(Action<RadarSensorRuntimeStateSnapshot> handler)
+        {
+            SensorStateSnapshotChanged += handler;
+            foreach (var snapshot in _sensorStates.Values) handler(snapshot);
+        }
+        public void UnsubscribeSensorStates(Action<RadarSensorRuntimeStateSnapshot> handler) => SensorStateSnapshotChanged -= handler;
         public event Action<RadarSensorRuntimeStateChanged>? SensorStateChanged;
         public event Action? ConfigurationChanged;
     }

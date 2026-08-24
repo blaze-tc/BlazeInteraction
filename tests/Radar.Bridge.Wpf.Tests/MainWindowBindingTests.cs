@@ -404,8 +404,8 @@ public sealed class MainWindowBindingTests
         public UnityClientStatus UnityStatus { get; } = UnityClientStatus.Disconnected;
         public void SubscribeUnityStatus(Action<UnityClientStatus> handler) => handler(UnityStatus);
         public void UnsubscribeUnityStatus(Action<UnityClientStatus> handler) { }
-        public void SubscribeSensorStates(Action<RadarSensorRuntimeStateChanged> handler) { }
-        public void UnsubscribeSensorStates(Action<RadarSensorRuntimeStateChanged> handler) { }
+        public void SubscribeSensorStates(Action<RadarSensorRuntimeStateSnapshot> handler) { }
+        public void UnsubscribeSensorStates(Action<RadarSensorRuntimeStateSnapshot> handler) { }
         public Task StartInfrastructureAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         public void PublishSensorSnapshot(RadarSensorRuntimeSnapshot snapshot) => SensorSnapshotUpdated?.Invoke(snapshot);

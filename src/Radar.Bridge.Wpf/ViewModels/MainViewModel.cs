@@ -24,6 +24,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private string _selectedLogScreenId = "*";
     private string _selectedLogSensorId = "*";
     private UnityClientStatus _unityStatus;
+    private Action<RadarSensorRuntimeStateSnapshot>? _sensorStateSubscription;
+    private long _sensorStateSubscriptionToken;
+    private readonly Dictionary<string, (long BindingGeneration, long Version)> _acceptedSensorStates = new(StringComparer.OrdinalIgnoreCase);
     private bool _disposed;
 
     public MainViewModel(RadarAppConfiguration configuration, IRadarBridgeRuntime runtime, IFileDialogService? fileDialogs = null)
@@ -73,7 +76,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _runtime.ConfigurationChanged += OnConfigurationChanged;
         _runtime.LogReceived += OnLogReceived;
         _runtime.SubscribeUnityStatus(OnUnityStatusChanged);
-        _runtime.SubscribeSensorStates(OnSensorStateChanged);
+        SubscribeSensorStates();
     }
 
     public ObservableCollection<ScreenItemViewModel> Screens { get; }
@@ -301,7 +304,30 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         FindScreen(snapshot.ScreenId)?.Sensors.FirstOrDefault(sensor => string.Equals(sensor.SensorId, snapshot.SensorId, StringComparison.OrdinalIgnoreCase))?.ApplySnapshot(snapshot);
     });
     private void OnScreenSnapshotUpdated(RadarScreenRuntimeSnapshot snapshot) => Dispatch(() => FindScreen(snapshot.Screen.ScreenId)?.ApplySnapshot(snapshot));
-    private void OnSensorStateChanged(RadarSensorRuntimeStateChanged state) => Dispatch(() => FindScreen(state.ScreenId)?.Sensors.FirstOrDefault(sensor => string.Equals(sensor.SensorId, state.SensorId, StringComparison.OrdinalIgnoreCase))?.ApplyRuntimeState(state.State));
+    private void SubscribeSensorStates()
+    {
+        if (_sensorStateSubscription is not null) _runtime.UnsubscribeSensorStates(_sensorStateSubscription);
+        _acceptedSensorStates.Clear();
+        var token = checked(++_sensorStateSubscriptionToken);
+        _sensorStateSubscription = snapshot => OnSensorStateSnapshot(token, snapshot);
+        _runtime.SubscribeSensorStates(_sensorStateSubscription);
+    }
+
+    private void OnSensorStateSnapshot(long subscriptionToken, RadarSensorRuntimeStateSnapshot snapshot) => Dispatch(() =>
+    {
+        if (subscriptionToken != _sensorStateSubscriptionToken) return;
+        var state = snapshot.State;
+        var key = string.Concat(state.ScreenId, "\u001F", state.SensorId);
+        if (_acceptedSensorStates.TryGetValue(key, out var accepted) &&
+            (snapshot.BindingGeneration < accepted.BindingGeneration ||
+             (snapshot.BindingGeneration == accepted.BindingGeneration && snapshot.Version <= accepted.Version)))
+        {
+            return;
+        }
+        _acceptedSensorStates[key] = (snapshot.BindingGeneration, snapshot.Version);
+        FindScreen(state.ScreenId)?.Sensors.FirstOrDefault(sensor =>
+            string.Equals(sensor.SensorId, state.SensorId, StringComparison.OrdinalIgnoreCase))?.ApplyRuntimeState(state.State);
+    });
     private void OnConfigurationChanged() => Dispatch(RefreshScreensFromConfiguration);
     private void OnLogReceived(string entry) => Dispatch(() => ReceiveLog(entry));
     private void OnUnityStatusChanged(UnityClientStatus status) => Dispatch(() => UnityStatus = status);
@@ -353,8 +379,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(Screens));
         NotifyRadarConnectionStatus();
         NotifyCommandState();
-        _runtime.UnsubscribeSensorStates(OnSensorStateChanged);
-        _runtime.SubscribeSensorStates(OnSensorStateChanged);
+        SubscribeSensorStates();
     }
 
     private void ReceiveLog(string entry, DateTimeOffset? timestamp = null)
@@ -456,7 +481,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _runtime.ConfigurationChanged -= OnConfigurationChanged;
         _runtime.LogReceived -= OnLogReceived;
         _runtime.UnsubscribeUnityStatus(OnUnityStatusChanged);
-        _runtime.UnsubscribeSensorStates(OnSensorStateChanged);
+        if (_sensorStateSubscription is not null) _runtime.UnsubscribeSensorStates(_sensorStateSubscription);
+        _sensorStateSubscription = null;
+        checked { _sensorStateSubscriptionToken++; }
         if (_selectedSensor is not null) _selectedSensor.PropertyChanged -= OnSelectedSensorPropertyChanged;
         UnsubscribeFromScreens();
     }

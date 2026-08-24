@@ -32,6 +32,12 @@ public sealed record RadarScreenRuntimeSnapshot(
 
 public sealed record RadarSensorRuntimeStateChanged(string ScreenId, string SensorId, RadarSensorRuntimeState State, string? Error = null);
 
+/// <summary>Versioned state for one concrete sensor-pipeline binding.</summary>
+public sealed record RadarSensorRuntimeStateSnapshot(
+    RadarSensorRuntimeStateChanged State,
+    long BindingGeneration,
+    long Version);
+
 public interface IRadarBridgeRuntime : IAsyncDisposable
 {
     event Action<RadarSensorRuntimeSnapshot>? SensorSnapshotUpdated { add { } remove { } }
@@ -45,17 +51,18 @@ public interface IRadarBridgeRuntime : IAsyncDisposable
 
     /// <summary>
     /// Atomically registers a Unity-status observer and delivers the current status before a newer
-    /// status can be delivered to that observer. The callback must not synchronously re-enter this runtime.
+    /// status can be delivered to that observer.
     /// </summary>
     void SubscribeUnityStatus(Action<UnityClientStatus> handler);
     void UnsubscribeUnityStatus(Action<UnityClientStatus> handler);
 
     /// <summary>
     /// Atomically registers a sensor-state observer and delivers the current state of every known sensor
-    /// before a newer state can be delivered to that observer. The callback must not synchronously re-enter this runtime.
+    /// before a newer state can be delivered to that observer. Snapshots identify the concrete pipeline binding
+    /// and monotonically order states within that binding.
     /// </summary>
-    void SubscribeSensorStates(Action<RadarSensorRuntimeStateChanged> handler);
-    void UnsubscribeSensorStates(Action<RadarSensorRuntimeStateChanged> handler);
+    void SubscribeSensorStates(Action<RadarSensorRuntimeStateSnapshot> handler);
+    void UnsubscribeSensorStates(Action<RadarSensorRuntimeStateSnapshot> handler);
 
     Task StartInfrastructureAsync(CancellationToken cancellationToken = default);
 
