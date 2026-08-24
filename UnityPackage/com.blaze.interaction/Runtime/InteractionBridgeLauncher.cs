@@ -44,6 +44,7 @@ namespace Blaze.Interaction
         private CancellationTokenSource cancellation;
         private string executableOverride;
         private InteractionManager interactionManager;
+        private InteractionProjectScope projectScope;
         private bool managerStarted;
 
         public bool ReusedExistingBridge { get; private set; }
@@ -63,7 +64,11 @@ namespace Blaze.Interaction
                 cancellation = new CancellationTokenSource();
                 await EnsureBridgeRunningAsync(cancellation.Token);
                 cancellation.Token.ThrowIfCancellationRequested();
-                interactionManager = InteractionManager.Instance;
+                interactionManager = InteractionManager.ConfigureShared(
+                    projectScope.PipeName,
+                    settings.ConnectTimeoutMilliseconds,
+                    settings.ReconnectDelayMilliseconds,
+                    settings.ServerResponseTimeoutMilliseconds);
                 interactionManager.Connect(CreateHelloPayload());
                 managerStarted = true;
             }
@@ -84,9 +89,10 @@ namespace Blaze.Interaction
                 settings = InteractionRuntimeSettings.LoadOrCreateRuntimeDefaults();
             }
 
+            projectScope = ResolveProjectScope();
             ReusedExistingBridge = false;
             if (await probe.CanConnectAsync(
-                    settings.PipeName,
+                    projectScope.PipeName,
                     settings.ConnectTimeoutMilliseconds,
                     cancellationToken))
             {
@@ -109,7 +115,12 @@ namespace Blaze.Interaction
 
             var arguments =
                 "--parent-pid " + Process.GetCurrentProcess().Id +
-                " --minimized --pipe-name \"" + settings.PipeName.Replace("\"", "\\\"") + "\"";
+                " --minimized --pipe-name " + QuoteArgument(projectScope.PipeName) +
+                " --data-root " + QuoteArgument(projectScope.DataRoot);
+            if (!string.IsNullOrWhiteSpace(projectScope.ProfilePath))
+            {
+                arguments += " --profile " + QuoteArgument(projectScope.ProfilePath);
+            }
 
             ownedProcess = processStarter.Start(
                 executable,
@@ -192,6 +203,21 @@ namespace Blaze.Interaction
             executableOverride = testExecutable;
             AutoStart = settings.AutoStart;
             ExitBridgeWithUnity = settings.ExitBridgeWithUnity;
+        }
+
+        private InteractionProjectScope ResolveProjectScope()
+        {
+            return InteractionProjectScopeResolver.Resolve(
+                Application.isEditor,
+                Application.dataPath,
+                Application.persistentDataPath,
+                settings.PipeName,
+                settings.ProfilePath);
+        }
+
+        private static string QuoteArgument(string value)
+        {
+            return "\"" + (value ?? string.Empty).Replace("\"", "\\\"") + "\"";
         }
 
         private string ResolveBridgeExecutable()

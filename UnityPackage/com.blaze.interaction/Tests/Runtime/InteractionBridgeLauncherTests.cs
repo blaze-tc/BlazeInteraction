@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Blaze.Interaction.Internal;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
@@ -92,6 +93,33 @@ namespace Blaze.Interaction.Tests
             Assert.That(typeof(InteractionBridgeLauncher).GetMethod("OnApplicationQuit", flags).IsFamily, Is.True);
         }
 
+        [Test]
+        public void ConfigureShared_ReplacesOnlyAnUnconnectedManager()
+        {
+            var first = InteractionManager.ConfigureShared("Blaze.InteractionBridge.First", 50, 25, 250);
+            var replacement = InteractionManager.ConfigureShared("Blaze.InteractionBridge.Replacement", 50, 25, 250);
+            var dispatcherField = typeof(InteractionManager).GetField(
+                "_dispatcher",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            var dispatcher = (InteractionFrameDispatcher)dispatcherField.GetValue(replacement);
+            try
+            {
+                Assert.That(replacement, Is.Not.SameAs(first));
+                Assert.That(InteractionManager.Instance, Is.SameAs(replacement));
+
+                dispatcher.SetConnectionState(true);
+
+                Assert.That(
+                    () => InteractionManager.ConfigureShared("Blaze.InteractionBridge.AfterConnect", 50, 25, 250),
+                    Throws.InvalidOperationException);
+            }
+            finally
+            {
+                dispatcher.SetConnectionState(false);
+                InteractionManager.ConfigureShared("Blaze.InteractionBridge.Cleanup", 50, 25, 250);
+            }
+        }
+
         private static async Task VerifyExistingBridgeIsReusedAsync()
         {
             var settings = Settings();
@@ -107,6 +135,7 @@ namespace Blaze.Interaction.Tests
 
                 Assert.That(launcher.ReusedExistingBridge, Is.True);
                 Assert.That(starter.StartCount, Is.Zero);
+                Assert.That(probe.LastPipeName, Is.EqualTo(CurrentScope(settings).PipeName));
             }
             finally
             {
@@ -129,17 +158,22 @@ namespace Blaze.Interaction.Tests
             var starter = new RecordingProcessStarter();
             try
             {
-                launcher.ConfigureForTests(settings, new ConstantProbe(false), starter, executable);
+                var probe = new ConstantProbe(false);
+                launcher.ConfigureForTests(settings, probe, starter, executable);
 
                 await launcher.EnsureBridgeRunningAsync(CancellationToken.None);
+
+                var scope = CurrentScope(settings);
 
                 Assert.That(launcher.ReusedExistingBridge, Is.False);
                 Assert.That(starter.StartCount, Is.EqualTo(1));
                 Assert.That(Path.GetFileName(starter.FileName), Is.EqualTo("BlazeInteractionBridge.exe"));
                 Assert.That(starter.Arguments, Does.Contain("--parent-pid " + Process.GetCurrentProcess().Id));
                 Assert.That(starter.Arguments, Does.Contain("--minimized"));
-                Assert.That(starter.Arguments, Does.Contain("--pipe-name \"Blaze.InteractionBridge.Tests\""));
-                Assert.That(starter.Arguments, Does.Not.Contain("--profile"));
+                Assert.That(probe.LastPipeName, Is.EqualTo(scope.PipeName));
+                Assert.That(starter.Arguments, Does.Contain("--pipe-name \"" + scope.PipeName + "\""));
+                Assert.That(starter.Arguments, Does.Contain("--data-root \"" + scope.DataRoot + "\""));
+                Assert.That(starter.Arguments, Does.Contain("--profile \"" + scope.ProfilePath + "\""));
             }
             finally
             {
@@ -158,6 +192,16 @@ namespace Blaze.Interaction.Tests
             return settings;
         }
 
+        private static InteractionProjectScope CurrentScope(InteractionRuntimeSettings settings)
+        {
+            return InteractionProjectScopeResolver.Resolve(
+                Application.isEditor,
+                Application.dataPath,
+                Application.persistentDataPath,
+                settings.PipeName,
+                settings.ProfilePath);
+        }
+
         private static void SetField(object target, string name, object value)
         {
             var field = target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic);
@@ -174,11 +218,14 @@ namespace Blaze.Interaction.Tests
                 this.result = result;
             }
 
+            public string LastPipeName { get; private set; }
+
             public Task<bool> CanConnectAsync(
                 string pipeName,
                 int timeoutMilliseconds,
                 CancellationToken cancellationToken)
             {
+                LastPipeName = pipeName;
                 return Task.FromResult(result);
             }
         }

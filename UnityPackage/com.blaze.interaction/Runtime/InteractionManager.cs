@@ -8,7 +8,8 @@ namespace Blaze.Interaction
 {
     public sealed class InteractionManager : IDisposable
     {
-        private static readonly InteractionManager SharedInstance = new InteractionManager();
+        private static readonly object SharedInstanceGate = new object();
+        private static InteractionManager sharedInstance = new InteractionManager();
         private readonly InteractionPipeClient _client;
         private readonly InteractionFrameDispatcher _dispatcher;
         private IReadOnlyList<InteractionSurface> _surfaces = Array.Empty<InteractionSurface>();
@@ -36,7 +37,41 @@ namespace Blaze.Interaction
             _client.ConnectionChanged += _dispatcher.SetConnectionState;
         }
 
-        public static InteractionManager Instance { get { return SharedInstance; } }
+        public static InteractionManager Instance
+        {
+            get
+            {
+                lock (SharedInstanceGate)
+                {
+                    return sharedInstance;
+                }
+            }
+        }
+
+        internal static InteractionManager ConfigureShared(
+            string pipeName,
+            int connectTimeoutMilliseconds,
+            int reconnectDelayMilliseconds,
+            int serverResponseTimeoutMilliseconds)
+        {
+            lock (SharedInstanceGate)
+            {
+                if (sharedInstance.IsConnected)
+                {
+                    throw new InvalidOperationException(
+                        "The shared InteractionManager cannot be replaced after it is connected.");
+                }
+
+                var previous = sharedInstance;
+                sharedInstance = new InteractionManager(
+                    pipeName,
+                    connectTimeoutMilliseconds,
+                    reconnectDelayMilliseconds,
+                    serverResponseTimeoutMilliseconds);
+                previous.Dispose();
+                return sharedInstance;
+            }
+        }
         public IReadOnlyList<InteractionPoint> Points { get { return _dispatcher.Points; } }
         public bool IsConnected { get { return _dispatcher.IsConnected; } }
         public ProviderReferencePayload ActiveProvider { get { return _dispatcher.ActiveProvider; } }

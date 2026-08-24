@@ -151,7 +151,10 @@ public sealed class PackageIdentityTests
         Assert.Contains("protected virtual void Update()", source, StringComparison.Ordinal);
         Assert.Contains("protected virtual async void OnApplicationQuit()", source, StringComparison.Ordinal);
         Assert.Contains("--pipe-name", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("arguments += \" --profile", source, StringComparison.Ordinal);
+        Assert.Contains("InteractionProjectScopeResolver.Resolve", source, StringComparison.Ordinal);
+        Assert.Contains("projectScope.PipeName", source, StringComparison.Ordinal);
+        Assert.Contains("\" --data-root \" + QuoteArgument(projectScope.DataRoot)", source, StringComparison.Ordinal);
+        Assert.Contains("\" --profile \" + QuoteArgument(projectScope.ProfilePath)", source, StringComparison.Ordinal);
     }
 
     [Fact]
