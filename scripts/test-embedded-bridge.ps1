@@ -21,6 +21,18 @@ function Assert-ExactSmokeDirectory {
     }
 }
 
+function Assert-SmokeChildDirectory {
+    param([Parameter(Mandatory)] [string]$Path, [Parameter(Mandatory)] [string]$ParentPath)
+    $actual = [System.IO.Path]::GetFullPath($Path).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
+    $parent = [System.IO.Path]::GetFullPath($ParentPath).TrimEnd([System.IO.Path]::DirectorySeparatorChar)
+    $parentPrefix = $parent + [System.IO.Path]::DirectorySeparatorChar
+    if (-not [System.IO.Path]::IsPathRooted($Path) -or
+        [string]::Equals($actual, $parent, [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not $actual.StartsWith($parentPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Smoke-test child cleanup target must be beneath '$parent'; got '$actual'."
+    }
+}
+
 function Stop-OwnedProcess {
     param([System.Diagnostics.Process]$Process)
     if ($null -eq $Process) { return }
@@ -61,7 +73,7 @@ function Invoke-ProviderSmoke {
 
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
     $startInfo.FileName = $executable
-    $startInfo.Arguments = "--providers-root `"$providersRoot`" --pipe-name `"$pipeName`" --parent-pid $($script:parentProcess.Id) --minimized"
+    $startInfo.Arguments = "--providers-root `"$providersRoot`" --data-root `"$dataRoot`" --pipe-name `"$pipeName`" --parent-pid $($script:parentProcess.Id) --minimized"
     if (-not [string]::IsNullOrWhiteSpace($SelectedProviderId)) {
         $startInfo.Arguments += " --provider `"$SelectedProviderId`""
     }
@@ -132,6 +144,7 @@ $providersRoot = Join-Path $smokeDirectory 'Providers'
 $radarProviderDirectory = Join-Path $providersRoot 'Radar'
 $cameraProviderDirectory = Join-Path $providersRoot 'CameraVision'
 $profile = Join-Path $radarProviderDirectory 'profiles\radar-default.json'
+$dataRoot = [System.IO.Path]::GetFullPath((Join-Path $smokeDirectory ("Data-" + [Guid]::NewGuid().ToString('N'))))
 $clientResult = Join-Path $smokeDirectory 'client-result.txt'
 $parentProcess = $null
 $bridgeProcess = $null
@@ -149,6 +162,8 @@ try {
         Remove-Item -LiteralPath $smokeDirectory -Recurse -Force
     }
     New-Item -ItemType Directory -Force -Path $smokeDirectory | Out-Null
+    Assert-SmokeChildDirectory -Path $dataRoot -ParentPath $smokeDirectory
+    New-Item -ItemType Directory -Force -Path $dataRoot | Out-Null
 
     New-Item -ItemType Directory -Force -Path $providersRoot | Out-Null
     Copy-Item -LiteralPath (Join-Path $embeddedDirectory 'Providers\Radar') `
@@ -186,6 +201,10 @@ try {
 finally {
     Stop-OwnedProcess -Process $bridgeProcess
     Stop-OwnedProcess -Process $parentProcess
+    Assert-SmokeChildDirectory -Path $dataRoot -ParentPath $smokeDirectory
+    if (Test-Path -LiteralPath $dataRoot) {
+        Remove-Item -LiteralPath $dataRoot -Recurse -Force
+    }
     Assert-ExactSmokeDirectory -Path $smokeDirectory -ExpectedPath $expectedSmokeDirectory
     if (Test-Path -LiteralPath $smokeDirectory) {
         Remove-Item -LiteralPath $smokeDirectory -Recurse -Force

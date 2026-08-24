@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 
 namespace Radar.Unity.Compatibility.Tests;
 
@@ -30,6 +32,8 @@ public sealed class EmbeddedBridgePayloadTests
 
         Assert.Equal("BlazeInteractionBridge.exe", Path.GetFileName(Assert.Single(
             Directory.EnumerateFiles(publishDirectory, "*.exe", SearchOption.AllDirectories))));
+        Assert.Equal("BlazeInteractionBridge.exe", Path.GetFileName(Assert.Single(
+            Directory.EnumerateFiles(publishDirectory, "*.exe", SearchOption.TopDirectoryOnly))));
         Assert.Equal("1.0.0", File.ReadAllText(Path.Combine(publishDirectory, "bridge-version.txt")).Trim());
 
         using var runtimeConfig = JsonDocument.Parse(File.ReadAllText(Path.Combine(
@@ -53,6 +57,25 @@ public sealed class EmbeddedBridgePayloadTests
                 "*.dll",
                 SearchOption.AllDirectories),
             path => string.Equals(Path.GetFileName(path), "OpenCvSharpExtern.dll", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void EmbeddedContractsExposeInteractionFootprint()
+    {
+        var assemblyPath = Path.Combine(
+            FindRepositoryRoot(),
+            "UnityPackage", "com.blaze.interaction", "Bridge~", "win-x64",
+            "Blaze.Interaction.Contracts.dll");
+        using var stream = File.OpenRead(assemblyPath);
+        using var pe = new PEReader(stream);
+        var metadata = pe.GetMetadataReader();
+        var interactionPoint = metadata.TypeDefinitions
+            .Select(metadata.GetTypeDefinition)
+            .Single(type => metadata.GetString(type.Namespace) == "Blaze.Interaction.Contracts" &&
+                            metadata.GetString(type.Name) == "InteractionPoint");
+
+        Assert.Contains(interactionPoint.GetProperties(), handle =>
+            metadata.GetString(metadata.GetPropertyDefinition(handle).Name) == "Fp");
     }
 
     private static string FindRepositoryRoot()
