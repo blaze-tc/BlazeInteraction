@@ -510,13 +510,8 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
     {
         foreach (var cluster in clusters)
         {
-            if (!TryMapPoint(cluster.CenterX, cluster.CenterY, out var center))
-            {
-                continue;
-            }
-
             var footprint = new RadarScreenPoint[cluster.Points.Count];
-            var footprintIsValid = true;
+            string? rejectionReason = null;
             for (var index = 0; index < cluster.Points.Count; index++)
             {
                 var actualPoint = cluster.Points[index];
@@ -525,13 +520,19 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
                     continue;
                 }
 
-                footprintIsValid = false;
-                PublishLog($"Rejected cluster {cluster.ClusterIndex} because its footprint contains an unmappable actual point.");
+                rejectionReason = "its footprint contains an unmappable actual point";
                 break;
             }
 
-            if (!footprintIsValid)
+            var center = default(RadarScreenPoint);
+            if (rejectionReason is null && !TryMapPoint(cluster.CenterX, cluster.CenterY, out center))
             {
+                rejectionReason = "its center is unmappable";
+            }
+
+            if (rejectionReason is not null)
+            {
+                PublishLog($"Rejected cluster {cluster.ClusterIndex} because {rejectionReason}.");
                 continue;
             }
 

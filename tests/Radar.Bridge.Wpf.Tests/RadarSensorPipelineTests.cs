@@ -246,6 +246,40 @@ public sealed class RadarSensorPipelineTests
     }
 
     [Fact]
+    public async Task Mapping_EmitsOneDiagnosticWhenInvalidActualPointsAlsoMakeTheCenterUnmappable()
+    {
+        var (screen, sensor) = CreateConfiguration("main", "sensor-1", new ConfigurationPixelRect(0, 0, 1000, 1000));
+        sensor.Range.ActivePolygon = [];
+        sensor.Calibration = new RadarCalibrationConfiguration
+        {
+            IsValid = true,
+            PhysicalCorners = [new(-5f, -5f), new(5f, -5f), new(5f, 5f), new(-5f, 5f)]
+        };
+        await using var pipeline = CreatePipeline(screen, sensor);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var logs = new List<string>();
+        var received = new TaskCompletionSource<RadarSensorRuntimeSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+        pipeline.LogReceived += logs.Add;
+        pipeline.SnapshotUpdated += snapshot =>
+        {
+            if (snapshot.RawPoints.Count == 2) received.TrySetResult(snapshot);
+        };
+
+        await pipeline.StartAsync(cancellation.Token);
+        pipeline.PublishScan(new RadarScanFrame(
+            74,
+            DateTimeOffset.UtcNow,
+            [
+                new RadarPoint(500, 6000, 60f, float.NaN, -3f),
+                new RadarPoint(500, 6001, 60.01f, float.NaN, -2.9f)
+            ]));
+        var snapshot = await received.Task.WaitAsync(cancellation.Token);
+
+        Assert.Empty(snapshot.Detections);
+        Assert.Single(logs.Where(message => message.Contains("footprint", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [Fact]
     public async Task RealSource_RemainsNonRunningUntilConnected()
     {
         var (screen, sensor) = CreateConfiguration("main", "sensor-1", new ConfigurationPixelRect(0, 0, 1920, 1080));
