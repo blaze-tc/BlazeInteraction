@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace Radar.Unity.Compatibility.Tests;
 
@@ -77,6 +78,34 @@ public sealed class PackageIdentityTests
         Assert.Contains("cursorImage.raycastTarget = false", source, StringComparison.Ordinal);
         Assert.DoesNotContain("CameraVision", source, StringComparison.Ordinal);
         Assert.DoesNotContain("NamedPipe", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BasicInteractionScene_WiresItsVisibleInteractionDiagnostics()
+    {
+        var sampleRoot = Path.Combine(PackageRoot(), "Samples~", "BasicInteraction");
+        var presenterMetaPath = Path.Combine(sampleRoot, "BasicInteractionPresenter.cs.meta");
+        Assert.True(File.Exists(presenterMetaPath), "BasicInteractionPresenter.cs.meta");
+
+        var presenterGuid = File.ReadLines(presenterMetaPath)
+            .Select(line => line.Trim())
+            .Single(line => line.StartsWith("guid: ", StringComparison.Ordinal))["guid: ".Length..];
+        var scene = File.ReadAllText(Path.Combine(sampleRoot, "BasicInteraction.unity"));
+        var presenter = FindYamlObjectByScriptGuid(scene, presenterGuid);
+        var statusReference = Regex.Match(
+            presenter,
+            @"^  statusText: \{fileID: (?<fileId>\d+)\}$",
+            RegexOptions.Multiline);
+
+        Assert.True(statusReference.Success, "BasicInteractionPresenter.statusText must be serialized.");
+        Assert.NotEqual("0", statusReference.Groups["fileId"].Value);
+
+        var statusText = FindYamlObjectByAnchor(scene, "114", statusReference.Groups["fileId"].Value);
+        Assert.Contains(
+            "m_Script: {fileID: 11500000, guid: 5f7201a12d95ffc409449d95f23cf332, type: 3}",
+            statusText,
+            StringComparison.Ordinal);
+        Assert.Contains("m_Text: IPC: DISCONNECTED", statusText, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -229,6 +258,27 @@ public sealed class PackageIdentityTests
         }
 
         return count;
+    }
+
+    private static string FindYamlObjectByScriptGuid(string scene, string scriptGuid)
+    {
+        var marker = "m_Script: {fileID: 11500000, guid: " + scriptGuid + ", type: 3}";
+        var markerIndex = scene.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(markerIndex >= 0, "Scene does not reference script GUID " + scriptGuid + ".");
+
+        var objectStart = scene.LastIndexOf("--- !u!", markerIndex, StringComparison.Ordinal);
+        var objectEnd = scene.IndexOf("--- !u!", markerIndex + marker.Length, StringComparison.Ordinal);
+        return scene.Substring(objectStart, objectEnd < 0 ? scene.Length - objectStart : objectEnd - objectStart);
+    }
+
+    private static string FindYamlObjectByAnchor(string scene, string classId, string fileId)
+    {
+        var marker = "--- !u!" + classId + " &" + fileId;
+        var objectStart = scene.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(objectStart >= 0, "Scene does not contain YAML object " + marker + ".");
+
+        var objectEnd = scene.IndexOf("--- !u!", objectStart + marker.Length, StringComparison.Ordinal);
+        return scene.Substring(objectStart, objectEnd < 0 ? scene.Length - objectStart : objectEnd - objectStart);
     }
 
     private static string FindRepositoryRoot()
