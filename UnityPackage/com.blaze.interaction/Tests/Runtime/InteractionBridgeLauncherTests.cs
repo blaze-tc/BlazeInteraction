@@ -127,9 +127,10 @@ namespace Blaze.Interaction.Tests
             gameObject.SetActive(false);
             var launcher = gameObject.AddComponent<InteractionBridgeLauncher>();
             var starter = new RecordingProcessStarter();
+            var probe = new ConstantProbe(true);
             try
             {
-                launcher.ConfigureForTests(settings, new ConstantProbe(true), starter, "missing.exe");
+                launcher.ConfigureForTests(settings, probe, starter, "missing.exe");
 
                 await launcher.EnsureBridgeRunningAsync(CancellationToken.None);
 
