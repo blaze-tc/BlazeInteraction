@@ -81,6 +81,7 @@ namespace Blaze.Interaction.Tests
             InteractionPoint removed = null;
             dispatcher.PointRemoved += value => removed = value;
 
+            dispatcher.SetConnectionState(true);
             dispatcher.ApplyFrame(Frame(1, point));
             dispatcher.SetConnectionState(false);
 

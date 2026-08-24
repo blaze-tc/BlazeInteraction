@@ -53,7 +53,7 @@ namespace Blaze.Interaction.Tests
             Assert.That(point.Fp, Has.Count.EqualTo(2));
             Assert.That(point.Fp[1].X, Is.EqualTo(33f));
 
-            const string missingFootprintJson = "{\"messageType\":\"InteractionFrame\",\"protocolVersion\":1,\"sequence\":1,\"payload\":{\"providerId\":\"p\",\"providerInstanceId\":\"i\",\"surfaceId\":\"front\",\"sequence\":1,\"timestampUnixMs\":2,\"points\":[{" + pointJson + "]}}";
+            const string missingFootprintJson = "{\"messageType\":\"InteractionFrame\",\"protocolVersion\":1,\"sequence\":1,\"payload\":{\"providerId\":\"p\",\"providerInstanceId\":\"i\",\"surfaceId\":\"front\",\"sequence\":1,\"timestampUnixMs\":2,\"points\":[{" + pointJson + "}]}}";
             var missingFootprintPoint = InteractionIpcProtocol.Deserialize(missingFootprintJson)
                 .DeserializePayload<InteractionFrame>().Points[0];
 
