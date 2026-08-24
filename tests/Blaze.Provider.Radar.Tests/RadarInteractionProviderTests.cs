@@ -1,12 +1,19 @@
 using Blaze.Interaction.Contracts;
 using Blaze.Interaction.Provider.Abstractions;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Diagnostics;
 using Yuexin.Radar.Bridge.Wpf.Services;
 using Yuexin.Radar.Configuration;
 using Yuexin.Radar.Contracts;
 
 namespace Blaze.Provider.Radar.Tests;
 
+[CollectionDefinition("Radar trace listener isolation", DisableParallelization = true)]
+public sealed class RadarTraceListenerIsolationCollection
+{
+}
+
+[Collection("Radar trace listener isolation")]
 public sealed class RadarInteractionProviderTests
 {
     [Fact]
@@ -146,8 +153,12 @@ public sealed class RadarInteractionProviderTests
                 releaseFirstApply.Task.GetAwaiter().GetResult();
                 throw new InvalidOperationException("mapping failed");
             });
+        using var throwingListener = new ThrowingTraceListener();
+        var originalListeners = Trace.Listeners.Cast<TraceListener>().ToArray();
         try
         {
+            Trace.Listeners.Clear();
+            Trace.Listeners.Add(throwingListener);
             var first = Task.Run(() => hostStatus.Publish(new InteractionHostStatus(
                 true, 1, "v1", [Surface("front", true, 0, 1920, 1080)])));
             await firstApplyEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -161,6 +172,12 @@ public sealed class RadarInteractionProviderTests
         }
         finally
         {
+            releaseFirstApply.TrySetResult();
+            Trace.Listeners.Clear();
+            foreach (var listener in originalListeners)
+            {
+                Trace.Listeners.Add(listener);
+            }
             await runtime.DisposeAsync();
         }
     }
@@ -961,6 +978,12 @@ public sealed class RadarInteractionProviderTests
     {
         public string GetProviderDataDirectory(string providerId) =>
             Path.Combine(DataRoot, "Providers", providerId);
+    }
+
+    private sealed class ThrowingTraceListener : TraceListener
+    {
+        public override void Write(string? message) => throw new InvalidOperationException("trace listener failed");
+        public override void WriteLine(string? message) => throw new InvalidOperationException("trace listener failed");
     }
 
     private sealed class TestInteractionHostStatus : IInteractionHostStatus

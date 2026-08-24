@@ -10,6 +10,12 @@ using Blaze.Interaction.Runtime;
 
 namespace Blaze.Interaction.Bridge.Wpf.Tests;
 
+[CollectionDefinition("Trace listener isolation", DisableParallelization = true)]
+public sealed class TraceListenerIsolationCollection
+{
+}
+
+[Collection("Trace listener isolation")]
 public sealed class BridgeHostTests
 {
     private static readonly InteractionSurface Front = new()
@@ -121,17 +127,71 @@ public sealed class BridgeHostTests
         });
         var published = new List<bool>();
         status.Changed += value => published.Add(value.IsConnected);
+        using var throwingListener = new ThrowingTraceListener();
+        var originalListeners = Trace.Listeners.Cast<TraceListener>().ToArray();
 
-        var first = Task.Run(() => status.ApplyConnected(Hello()));
-        await firstHookEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var second = Task.Run(status.ApplyDisconnected);
-        await second.WaitAsync(TimeSpan.FromSeconds(5));
-        releaseFirstHook.TrySetResult();
-        await first.WaitAsync(TimeSpan.FromSeconds(5));
-        status.ApplyConnected(Hello());
+        try
+        {
+            Trace.Listeners.Clear();
+            Trace.Listeners.Add(throwingListener);
+            var first = Task.Run(() => status.ApplyConnected(Hello()));
+            await firstHookEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var second = Task.Run(status.ApplyDisconnected);
+            await second.WaitAsync(TimeSpan.FromSeconds(5));
+            releaseFirstHook.TrySetResult();
+            await first.WaitAsync(TimeSpan.FromSeconds(5));
+            status.ApplyConnected(Hello());
+        }
+        finally
+        {
+            releaseFirstHook.TrySetResult();
+            Trace.Listeners.Clear();
+            foreach (var listener in originalListeners)
+            {
+                Trace.Listeners.Add(listener);
+            }
+        }
 
-        Assert.Equal([false, true], published);
+        Assert.Equal([true, false, true], published);
         Assert.True(status.Current.IsConnected);
+    }
+
+    [Fact]
+    public async Task Dispose_AggregatesTerminalAndManagerFailuresAndStillReleasesOwnedResources()
+    {
+        var status = new BridgeInteractionHostStatus(initialVersion: long.MaxValue - 1);
+        status.ApplyConnected(Hello());
+        var provider = new RecordingProvider("radar-main")
+        {
+            DisposeException = new InvalidOperationException("manager dispose failed")
+        };
+        var manager = new ProviderManager();
+        manager.Register(Descriptor(), provider.ProviderInstanceId, () => provider);
+        var resource = new TrackingAsyncDisposable();
+        await using var server = new InteractionPipeServer(new InteractionPipeServerOptions
+        {
+            PipeName = $"Blaze.InteractionBridge.DisposeAggregate.{Guid.NewGuid():N}"
+        });
+        var host = new BridgeHost(
+            manager,
+            new RecordingMessageSink(),
+            _ => Task.CompletedTask,
+            new RecordingParentProcessMonitor(),
+            null,
+            provider.ProviderInstanceId,
+            new Dictionary<string, ProviderDescriptor> { [provider.ProviderInstanceId] = Descriptor() },
+            [resource, server],
+            services: new BridgeServiceProvider([status]));
+        await host.HandleHelloAsync(Hello(), CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<AggregateException>(async () => await host.DisposeAsync());
+
+        Assert.Contains(exception.Flatten().InnerExceptions, item => item is OverflowException);
+        Assert.Contains(exception.Flatten().InnerExceptions,
+            item => item is InvalidOperationException { Message: "manager dispose failed" });
+        Assert.True(provider.DisposeCount >= 1);
+        Assert.True(resource.Disposed);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => server.RunAsync());
     }
 
     [Fact]
@@ -1196,6 +1256,7 @@ public sealed class BridgeHostTests
         public ProviderRuntimeStatus Status { get; private set; }
         public List<string> Operations { get; } = [];
         public int DisposeCount { get; private set; }
+        public Exception? DisposeException { get; init; }
         public event EventHandler<InteractionFrameEventArgs>? FrameReceived;
         public event EventHandler<ProviderStatusChangedEventArgs>? StatusChanged
         {
@@ -1232,7 +1293,9 @@ public sealed class BridgeHostTests
             DisposeCount++;
             Operations.Add("dispose");
             Status = ProviderRuntimeStatus.Stopped;
-            return ValueTask.CompletedTask;
+            return DisposeException is null
+                ? ValueTask.CompletedTask
+                : ValueTask.FromException(DisposeException);
         }
 
         internal void Emit(InteractionFrame frame) =>
@@ -1535,6 +1598,12 @@ public sealed class BridgeHostTests
         internal string Output => _output.ToString();
         public override void Write(string? message) => _output.Append(message);
         public override void WriteLine(string? message) => _output.AppendLine(message);
+    }
+
+    private sealed class ThrowingTraceListener : TraceListener
+    {
+        public override void Write(string? message) => throw new InvalidOperationException("trace listener failed");
+        public override void WriteLine(string? message) => throw new InvalidOperationException("trace listener failed");
     }
 
     private sealed class EmptyServices : IServiceProvider

@@ -164,8 +164,7 @@ internal sealed class BridgeInteractionHostStatus : IInteractionHostStatus
             }
             catch (Exception exception)
             {
-                Trace.TraceWarning("Bridge host status observer failed: {0}", exception);
-                continue;
+                ReportPublicationFailure(exception);
             }
             if (publication.Handlers is null)
             {
@@ -183,6 +182,25 @@ internal sealed class BridgeInteractionHostStatus : IInteractionHostStatus
                     // A provider status subscriber cannot disrupt the Bridge IPC lifecycle.
                 }
             }
+        }
+    }
+
+    private static void ReportPublicationFailure(Exception exception)
+    {
+        try
+        {
+            try
+            {
+                Trace.TraceWarning("Bridge host status observer failed: {0}", exception);
+            }
+            catch
+            {
+                // Trace listeners are external observers and cannot disrupt the status lifecycle.
+            }
+        }
+        catch
+        {
+            // Diagnostics must never escape a status publication drain.
         }
     }
 

@@ -363,7 +363,7 @@ public sealed class BridgeHost : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            failure = exception;
+            failure = AddFailure(failure, exception);
         }
         if (_interactionServer is not null)
         {
@@ -376,7 +376,7 @@ public sealed class BridgeHost : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            failure = exception;
+            failure = AddFailure(failure, exception);
         }
 
         try
@@ -386,9 +386,7 @@ public sealed class BridgeHost : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            failure = failure is null
-                ? exception
-                : new AggregateException(failure, exception);
+            failure = AddFailure(failure, exception);
         }
 
         _manager.FrameReceived -= OnFrameReceived;
@@ -411,9 +409,7 @@ public sealed class BridgeHost : IAsyncDisposable
             }
             catch (Exception exception)
             {
-                failure = failure is null
-                    ? exception
-                    : new AggregateException(failure, exception);
+                failure = AddFailure(failure, exception);
             }
         }
 
@@ -424,6 +420,9 @@ public sealed class BridgeHost : IAsyncDisposable
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
         }
     }
+
+    private static Exception AddFailure(Exception? current, Exception next) =>
+        current is null ? next : new AggregateException(current, next);
 
     private static string? SelectDefaultProviderInstance(
         IReadOnlyDictionary<string, ProviderDescriptor> descriptors,

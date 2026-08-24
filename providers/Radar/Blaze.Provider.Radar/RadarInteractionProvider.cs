@@ -778,8 +778,27 @@ public sealed class RadarInteractionProvider : IInteractionProvider
                 }
                 catch (Exception exception)
                 {
+                    ReportHostStatusPublicationFailure(exception);
+                }
+            }
+        }
+
+        private static void ReportHostStatusPublicationFailure(Exception exception)
+        {
+            try
+            {
+                try
+                {
                     Trace.TraceWarning("Radar provider host-status publication failed: {0}", exception);
                 }
+                catch
+                {
+                    // Trace listeners are external observers and cannot disrupt the provider lifecycle.
+                }
+            }
+            catch
+            {
+                // Diagnostics must never escape a host-status publication drain.
             }
         }
 
