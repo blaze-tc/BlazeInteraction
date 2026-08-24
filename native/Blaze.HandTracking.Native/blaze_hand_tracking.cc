@@ -193,6 +193,7 @@ int32_t BLAZE_HAND_CALL blaze_hand_process_frame(
     }
 
     std::vector<uint8_t> contiguous;
+    std::vector<uint8_t> square_frame;
     const uint8_t* input = rgb_data;
     const int32_t pixel_bytes = row_bytes * height;
     if (stride_bytes != row_bytes) {
@@ -205,10 +206,39 @@ int32_t BLAZE_HAND_CALL blaze_hand_process_frame(
       input = contiguous.data();
     }
 
+    // MediaPipe's Windows FrameBuffer converter does not implement the zero
+    // border requested by the palm detector. Apply the equivalent letterbox
+    // before entering the graph, then map landmarks back to the source frame.
+    const int32_t square_side = std::max(width, height);
+    if (square_side > std::numeric_limits<int32_t>::max() / 3) {
+      throw std::invalid_argument("RGB frame dimensions are too large to letterbox.");
+    }
+    const int32_t square_row_bytes = square_side * 3;
+    if (square_side >
+        std::numeric_limits<int32_t>::max() / square_row_bytes) {
+      throw std::invalid_argument("RGB frame is too large to letterbox.");
+    }
+    const int32_t square_pixel_bytes = square_side * square_row_bytes;
+    const int32_t offset_x = (square_side - width) / 2;
+    const int32_t offset_y = (square_side - height) / 2;
+    if (width != height) {
+      square_frame.assign(static_cast<size_t>(square_pixel_bytes), 0);
+      for (int32_t row = 0; row < height; ++row) {
+        std::memcpy(
+            square_frame.data() +
+                static_cast<size_t>(row + offset_y) * square_row_bytes +
+                static_cast<size_t>(offset_x) * 3,
+            input + static_cast<size_t>(row) * row_bytes,
+            static_cast<size_t>(row_bytes));
+      }
+      input = square_frame.data();
+    }
+
     ScopedImage image;
     char* error_message = nullptr;
     MpStatus status = MpImageCreateFromUint8Data(
-        kMpImageFormatSrgb, width, height, input, pixel_bytes, image.Out(),
+        kMpImageFormatSrgb, square_side, square_side, input,
+        width == height ? pixel_bytes : square_pixel_bytes, image.Out(),
         &error_message);
     ThrowIfMediaPipeFailed(status, error_message,
                            "MediaPipe failed to create an RGB image.");
@@ -251,7 +281,10 @@ int32_t BLAZE_HAND_CALL blaze_hand_process_frame(
             !std::isfinite(source.z)) {
           throw std::runtime_error("MediaPipe returned a non-finite hand landmark.");
         }
-        hand.landmarks[landmark_index] = {source.x, source.y, source.z};
+        hand.landmarks[landmark_index] = {
+            (source.x * square_side - offset_x) / width,
+            (source.y * square_side - offset_y) / height,
+            source.z * square_side / width};
       }
       snapshot.push_back(hand);
     }

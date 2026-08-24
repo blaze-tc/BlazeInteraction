@@ -128,6 +128,86 @@ if ($imageToTensorSource.Contains($imageToTensorOriginal)) {
     throw "MediaPipe image_to_tensor_calculator.h does not match the pinned MSVC compatibility patch."
 }
 
+# The FrameBuffer CPU converter selected by MEDIAPIPE_ENABLE_HALIDE rejects
+# BORDER_ZERO at runtime (the pinned MediaPipe source marks it as a TODO). The
+# hand detector is the only hand pipeline stage requesting that mode; later
+# landmark ROIs already use BORDER_REPLICATE. Select the converter's supported
+# border behavior so the Windows CPU graph can run without an OpenCV runtime.
+$handDetectorGraphPath = Join-Path $sourceRoot 'mediapipe\tasks\cc\vision\hand_detector\hand_detector_graph.cc'
+$handDetectorGraphSource = Get-Content -LiteralPath $handDetectorGraphPath -Raw
+$handDetectorBorderOriginal = 'mediapipe::ImageToTensorCalculatorOptions::BORDER_ZERO);'
+$handDetectorBorderPatched = 'mediapipe::ImageToTensorCalculatorOptions::BORDER_REPLICATE);'
+if ($handDetectorGraphSource.Contains($handDetectorBorderOriginal)) {
+    $handDetectorGraphSource = $handDetectorGraphSource.Replace(
+        $handDetectorBorderOriginal,
+        $handDetectorBorderPatched)
+    [System.IO.File]::WriteAllText($handDetectorGraphPath, $handDetectorGraphSource, [System.Text.UTF8Encoding]::new($false))
+} elseif (-not $handDetectorGraphSource.Contains($handDetectorBorderPatched)) {
+    throw "MediaPipe hand detector graph does not match the pinned FrameBuffer compatibility patch."
+}
+
+$frameBufferRotationPatchPath = Join-Path $repositoryRoot 'native\Blaze.HandTracking.Native\patches\mediapipe-frame-buffer-arbitrary-rotation.patch'
+$savedErrorActionPreference = $ErrorActionPreference
+try {
+    $ErrorActionPreference = 'Continue'
+    & git -C $sourceRoot apply --reverse --check $frameBufferRotationPatchPath 2>$null
+    $rotationPatchAlreadyApplied = $LASTEXITCODE -eq 0
+} finally {
+    $ErrorActionPreference = $savedErrorActionPreference
+}
+if (-not $rotationPatchAlreadyApplied) {
+    try {
+        $ErrorActionPreference = 'Continue'
+        & git -C $sourceRoot apply --check $frameBufferRotationPatchPath 2>$null
+        $rotationPatchMatches = $LASTEXITCODE -eq 0
+    } finally {
+        $ErrorActionPreference = $savedErrorActionPreference
+    }
+    if (-not $rotationPatchMatches) {
+        throw 'MediaPipe FrameBuffer arbitrary-rotation patch does not match the pinned checkout.'
+    }
+    & git -C $sourceRoot apply $frameBufferRotationPatchPath
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Failed to apply the MediaPipe FrameBuffer arbitrary-rotation patch.'
+    }
+}
+
+# MediaPipe's Halide rule puts GCC -Wno-* options in the platform-common list.
+# Bazel translates them to invalid /W... values for MSVC, so remove only those
+# warning-suppression entries in this Windows-only pinned build checkout.
+$halideRulesPath = Join-Path $sourceRoot 'third_party\halide\halide.bzl'
+$halideRulesSource = Get-Content -LiteralPath $halideRulesPath -Raw
+$halideRulesOriginalSource = $halideRulesSource
+foreach ($unsupportedWarningOption in @('        "-Wno-conversion",' + "`n", '        "-Wno-sign-compare",' + "`n")) {
+    if ($halideRulesSource.Contains($unsupportedWarningOption)) {
+        $halideRulesSource = $halideRulesSource.Replace($unsupportedWarningOption, '')
+    }
+}
+
+# Halide's generator executables dynamically load Halide.dll on Windows. The
+# pinned rule supplies a small explicit environment dictionary, which prevents
+# Bazel's action PATH (including the fetched Halide runtime directory) from
+# reaching the generator process. Preserve that dictionary while also
+# inheriting the action environment configured below.
+$halideRunOriginalPattern = '        env = env,\r?\n        executable = generator_binary\.files_to_run\.executable,'
+$halideRunPatchedPattern = '        env = env,\r?\n        use_default_shell_env = True,\r?\n        executable = generator_binary\.files_to_run\.executable,'
+if ([regex]::IsMatch($halideRulesSource, $halideRunOriginalPattern)) {
+    $halideRulesSource = [regex]::Replace(
+        $halideRulesSource,
+        $halideRunOriginalPattern,
+        "        env = env,`r`n        use_default_shell_env = True,`r`n        executable = generator_binary.files_to_run.executable,",
+        1)
+} elseif (-not [regex]::IsMatch($halideRulesSource, $halideRunPatchedPattern)) {
+    throw "MediaPipe Halide generator action does not match the pinned Windows PATH compatibility patch."
+}
+if ($halideRulesSource.Contains('"-Wno-conversion"') -or
+    $halideRulesSource.Contains('"-Wno-sign-compare"')) {
+    throw "MediaPipe Halide rules do not match the pinned MSVC compatibility patch."
+}
+if ($halideRulesSource -ne $halideRulesOriginalSource) {
+    [System.IO.File]::WriteAllText($halideRulesPath, $halideRulesSource, [System.Text.UTF8Encoding]::new($false))
+}
+
 New-Item -ItemType Directory -Force -Path $overlayRoot | Out-Null
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'native\Blaze.HandTracking.Native\BUILD.bazel') -Destination (Join-Path $overlayRoot 'BUILD.bazel') -Force
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'native\Blaze.HandTracking.Native\blaze_hand_tracking.h') -Destination (Join-Path $overlayRoot 'blaze_hand_tracking.h') -Force
@@ -173,6 +253,34 @@ try {
 
     Push-Location $sourceRoot
     try {
+        $outputBaseLines = & $bazeliskPath "--output_user_root=$bazelUserRoot" info output_base
+        if ($LASTEXITCODE -ne 0) {
+            throw "Bazel failed to resolve its output base (exit $LASTEXITCODE)."
+        }
+        $outputBase = [string]($outputBaseLines | Select-Object -Last 1)
+        $halideRuntimeDirectory = Join-Path $outputBase 'external\windows_halide\bin\Release'
+        $halideRuntimePath = Join-Path $halideRuntimeDirectory 'Halide.dll'
+        if (-not (Test-Path -LiteralPath $halideRuntimePath -PathType Leaf)) {
+            & $bazeliskPath `
+                "--output_user_root=$bazelUserRoot" `
+                fetch `
+                --define MEDIAPIPE_DISABLE_GPU=1 `
+                --define MEDIAPIPE_DISABLE_OPENCV=1 `
+                --define MEDIAPIPE_ENABLE_HALIDE=1 `
+                --repo_env=HERMETIC_PYTHON_VERSION=3.11 `
+                "--repo_env=PATH=$($env:Path)" `
+                //mediapipe/tasks/c/blaze_hand_tracking:Blaze.HandTracking.Native.dll
+            if ($LASTEXITCODE -ne 0) {
+                throw "Bazel failed to fetch MediaPipe/Halide dependencies (exit $LASTEXITCODE)."
+            }
+        }
+        if (-not (Test-Path -LiteralPath $halideRuntimePath -PathType Leaf)) {
+            throw "The pinned Windows Halide runtime was not found after fetch: $halideRuntimePath"
+        }
+        $gitUtilitiesDirectory = Split-Path -Parent $bashPath
+        $actionPath = "$halideRuntimeDirectory;$gitUtilitiesDirectory;$($env:Path)"
+        $env:Path = $actionPath
+
         & $bazeliskPath `
             "--output_user_root=$bazelUserRoot" `
             build `
@@ -180,8 +288,10 @@ try {
             --strip=always `
             --define MEDIAPIPE_DISABLE_GPU=1 `
             --define MEDIAPIPE_DISABLE_OPENCV=1 `
+            --define MEDIAPIPE_ENABLE_HALIDE=1 `
             --repo_env=HERMETIC_PYTHON_VERSION=3.11 `
             "--repo_env=PATH=$($env:Path)" `
+            --action_env=PATH `
             --conlyopt=/std:c11 `
             --conlyopt=/experimental:c11atomics `
             --cxxopt=/std:c++20 `
@@ -213,16 +323,23 @@ New-Item -ItemType Directory -Force -Path $nativeOutputDirectory | Out-Null
 Copy-Item -LiteralPath $builtDllPath -Destination $nativeOutputPath -Force
 
 New-Item -ItemType Directory -Force -Path $modelOutputDirectory | Out-Null
-$modelTemporaryPath = "$modelOutputPath.download"
-& curl.exe --fail --location --output $modelTemporaryPath $manifest.modelUrl
-if ($LASTEXITCODE -ne 0) {
-    throw "Failed to download the hand landmarker model from $($manifest.modelUrl)."
+$actualModelHash = if (Test-Path -LiteralPath $modelOutputPath -PathType Leaf) {
+    (Get-FileHash -LiteralPath $modelOutputPath -Algorithm SHA256).Hash.ToLowerInvariant()
+} else {
+    ''
 }
-$actualModelHash = (Get-FileHash -LiteralPath $modelTemporaryPath -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actualModelHash -ne [string]$manifest.modelSha256) {
-    throw "Hand landmarker model SHA-256 mismatch. Expected $($manifest.modelSha256), actual $actualModelHash."
+    $modelTemporaryPath = "$modelOutputPath.download"
+    & curl.exe --fail --location --output $modelTemporaryPath $manifest.modelUrl
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to download the hand landmarker model from $($manifest.modelUrl)."
+    }
+    $actualModelHash = (Get-FileHash -LiteralPath $modelTemporaryPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualModelHash -ne [string]$manifest.modelSha256) {
+        throw "Hand landmarker model SHA-256 mismatch. Expected $($manifest.modelSha256), actual $actualModelHash."
+    }
+    Move-Item -LiteralPath $modelTemporaryPath -Destination $modelOutputPath -Force
 }
-Move-Item -LiteralPath $modelTemporaryPath -Destination $modelOutputPath -Force
 
 $nativeDllHash = (Get-FileHash -LiteralPath $nativeOutputPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $manifest | Add-Member -NotePropertyName nativeDllSha256 -NotePropertyValue $nativeDllHash -Force

@@ -5,5 +5,5 @@
     "modelUrl":  "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
     "modelSha256":  "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1",
     "abiVersion":  1,
-    "nativeDllSha256":  "04c87e2b2e5c19c914e2321ca79ecc0397e85d2b1abd7a21c7a2eb25f2d514c9"
+    "nativeDllSha256":  "393a12955032c00d3f15294237518405b87075af651cb168eab4850b8dd18fca"
 }
