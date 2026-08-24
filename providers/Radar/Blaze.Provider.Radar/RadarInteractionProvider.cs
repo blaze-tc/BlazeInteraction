@@ -501,24 +501,30 @@ public sealed class RadarInteractionProvider : IInteractionProvider
     {
         private readonly RadarBridgeCoordinator _coordinator;
         private readonly RadarAppConfiguration _configuration;
+        private readonly object _hostStatusGate = new();
+        private readonly Queue<InteractionHostStatus> _hostStatusPublications = new();
+        private readonly Action<InteractionHostStatus>? _beforeApplyHostStatus;
         private IInteractionHostStatusSubscription? _hostStatusSubscription;
         private long _lastHostStatusVersion = -1;
+        private bool _isDrainingHostStatus;
         private int _disposed;
 
         private RadarCoordinatorRuntime(
             RadarBridgeCoordinator coordinator,
             RadarAppConfiguration configuration,
-            IInteractionHostStatus? hostStatus)
+            IInteractionHostStatus? hostStatus,
+            Action<InteractionHostStatus>? beforeApplyHostStatus)
         {
             _coordinator = coordinator;
             _configuration = configuration;
+            _beforeApplyHostStatus = beforeApplyHostStatus;
             if (hostStatus is not null)
             {
                 var subscription = hostStatus.Subscribe(OnHostStatusChanged);
                 _hostStatusSubscription = subscription;
                 try
                 {
-                    ApplyHostStatus(subscription.Current);
+                    QueueHostStatus(subscription.Current);
                 }
                 catch
                 {
@@ -535,7 +541,8 @@ public sealed class RadarInteractionProvider : IInteractionProvider
             ProviderCreateContext createContext,
             IReadOnlyList<InteractionSurface> surfaces,
             Func<PointerBatchPayload, CancellationToken, Task<bool>> publishPointerBatchAsync,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            Action<InteractionHostStatus>? beforeApplyHostStatus = null)
         {
             var services = createContext.Services;
             var storedConfiguration = services.GetService(typeof(IProviderStorageContext)) as IProviderStorageContext;
@@ -576,7 +583,11 @@ public sealed class RadarInteractionProvider : IInteractionProvider
                             surface.IsPrimary,
                             surface.Order)).ToArray()),
                     cancellationToken).ConfigureAwait(false);
-                return new RadarCoordinatorRuntime(coordinator, configuration, hostStatus);
+                return new RadarCoordinatorRuntime(
+                    coordinator,
+                    configuration,
+                    hostStatus,
+                    beforeApplyHostStatus);
             }
             catch
             {
@@ -676,7 +687,7 @@ public sealed class RadarInteractionProvider : IInteractionProvider
         {
             try
             {
-                ApplyHostStatus(status);
+                QueueHostStatus(status);
             }
             catch (ObjectDisposedException)
             {
@@ -684,37 +695,80 @@ public sealed class RadarInteractionProvider : IInteractionProvider
             }
         }
 
-        private void ApplyHostStatus(InteractionHostStatus status)
+        private void QueueHostStatus(InteractionHostStatus status)
         {
             ArgumentNullException.ThrowIfNull(status);
-            while (true)
+            var shouldDrain = false;
+            lock (_hostStatusGate)
             {
-                var observed = Volatile.Read(ref _lastHostStatusVersion);
-                if (status.Version <= observed)
+                if (Volatile.Read(ref _disposed) != 0)
                 {
                     return;
                 }
 
-                if (Interlocked.CompareExchange(ref _lastHostStatusVersion, status.Version, observed) == observed)
+                _hostStatusPublications.Enqueue(status);
+                if (!_isDrainingHostStatus)
                 {
-                    break;
+                    _isDrainingHostStatus = true;
+                    shouldDrain = true;
                 }
             }
 
-            _coordinator.ApplyUnityConnectionStatus(new UnityClientStatus(
-                status.IsConnected,
-                status.ProcessId,
-                status.ClientVersion,
-                status.Surfaces.Select(surface => new RadarScreenInfo(
-                    surface.SurfaceId,
-                    surface.Name,
-                    surface.LogicalWidth,
-                    surface.LogicalHeight,
-                    surface.IsPrimary,
-                    surface.Order)).ToArray(),
-                null,
-                0,
-                null));
+            if (shouldDrain)
+            {
+                DrainHostStatusPublications();
+            }
+        }
+
+        private void DrainHostStatusPublications()
+        {
+            while (true)
+            {
+                InteractionHostStatus status;
+                lock (_hostStatusGate)
+                {
+                    if (Volatile.Read(ref _disposed) != 0)
+                    {
+                        _hostStatusPublications.Clear();
+                        _isDrainingHostStatus = false;
+                        return;
+                    }
+
+                    if (_hostStatusPublications.Count == 0)
+                    {
+                        _isDrainingHostStatus = false;
+                        return;
+                    }
+
+                    status = _hostStatusPublications.Dequeue();
+                    if (status.Version <= _lastHostStatusVersion)
+                    {
+                        continue;
+                    }
+
+                    _lastHostStatusVersion = status.Version;
+                }
+
+                _beforeApplyHostStatus?.Invoke(status);
+                if (Volatile.Read(ref _disposed) != 0)
+                {
+                    continue;
+                }
+                _coordinator.ApplyUnityConnectionStatus(new UnityClientStatus(
+                    status.IsConnected,
+                    status.ProcessId,
+                    status.ClientVersion,
+                    status.Surfaces.Select(surface => new RadarScreenInfo(
+                        surface.SurfaceId,
+                        surface.Name,
+                        surface.LogicalWidth,
+                        surface.LogicalHeight,
+                        surface.IsPrimary,
+                        surface.Order)).ToArray(),
+                    null,
+                    0,
+                    null));
+            }
         }
 
         private void UnsubscribeHostStatus()

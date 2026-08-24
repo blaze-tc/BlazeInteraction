@@ -73,6 +73,38 @@ public sealed class RadarBridgeCoordinatorTests
     }
 
     [Fact]
+    public async Task Coordinator_StatusChangedPublishesInCommitOrderWhenFirstHandlerBlocks()
+    {
+        var firstPublicationEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstPublication = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var published = new List<bool>();
+        await using var coordinator = new RadarBridgeCoordinator(
+            new RadarAppConfiguration(),
+            NullLogger<RadarBridgeCoordinator>.Instance,
+            new FakePipelineFactory(),
+            sendPointerBatchAsync: (_, _) => Task.FromResult(true),
+            enableLegacyIpc: false);
+        coordinator.UnityStatusChanged += status =>
+        {
+            published.Add(status.IsConnected);
+            if (!status.IsConnected || firstPublicationEntered.Task.IsCompleted) return;
+            firstPublicationEntered.TrySetResult();
+            releaseFirstPublication.Task.GetAwaiter().GetResult();
+        };
+
+        var connected = Task.Run(() => coordinator.ApplyUnityConnectionStatus(new UnityClientStatus(
+            true, 42, "2021.3.45f1", [], null, 0, null)));
+        await firstPublicationEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var disconnected = Task.Run(() => coordinator.ApplyUnityConnectionStatus(UnityClientStatus.Disconnected));
+        await disconnected.WaitAsync(TimeSpan.FromSeconds(5));
+        releaseFirstPublication.TrySetResult();
+        await connected.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal([true, false], published);
+        Assert.False(coordinator.UnityStatus.IsConnected);
+    }
+
+    [Fact]
     public void RuntimeContract_DoesNotExposePrimarySensorFacade()
     {
         var forbidden = new[] { "SnapshotUpdated", "ConnectionStateChanged", "ConnectionState" };

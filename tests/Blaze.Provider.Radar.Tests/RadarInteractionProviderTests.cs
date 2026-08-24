@@ -73,6 +73,51 @@ public sealed class RadarInteractionProviderTests
             await runtime.DisposeAsync();
         }
     }
+
+    [Fact]
+    public async Task ProductionProvider_QueuedHostStatusCallbacksCommitHighestVersionLast()
+    {
+        using var providerDirectory = new TemporaryDirectory();
+        using var data = new TemporaryDirectory();
+        await WriteBundledDefaultAsync(providerDirectory.Path);
+        var firstCallbackEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstCallback = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var hostStatus = new TestInteractionHostStatus();
+        var services = new DictionaryServiceProvider(new Dictionary<Type, object>
+        {
+            [typeof(IProviderStorageContext)] = new FakeProviderStorageContext(data.Path, null),
+            [typeof(IInteractionHostStatus)] = hostStatus,
+            [typeof(IRadarSensorPipelineFactory)] = new RadarSensorPipelineFactory(NullLoggerFactory.Instance)
+        });
+        var runtime = (RadarInteractionProvider.RadarCoordinatorRuntime)await RadarInteractionProvider.RadarCoordinatorRuntime.CreateAsync(
+            new ProviderCreateContext(providerDirectory.Path, services),
+            [Surface("front", true, 0, 1920, 1080)],
+            (_, _) => Task.FromResult(true),
+            CancellationToken.None,
+            beforeApplyHostStatus: status =>
+            {
+                if (status.ProcessId != 1) return;
+                firstCallbackEntered.TrySetResult();
+                releaseFirstCallback.Task.GetAwaiter().GetResult();
+            });
+        try
+        {
+            var first = Task.Run(() => hostStatus.Publish(new InteractionHostStatus(
+                true, 1, "v1", [Surface("front", true, 0, 1920, 1080)])));
+            await firstCallbackEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var second = Task.Run(() => hostStatus.Publish(new InteractionHostStatus(
+                true, 2, "v2", [Surface("front", true, 0, 1920, 1080)])));
+            await second.WaitAsync(TimeSpan.FromSeconds(5));
+            releaseFirstCallback.TrySetResult();
+            await first.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(2, runtime.Coordinator.UnityStatus.ProcessId);
+        }
+        finally
+        {
+            await runtime.DisposeAsync();
+        }
+    }
     [Fact]
     public async Task FirstLoad_CopiesBundledDefaultThenSaveSurvivesReload()
     {
@@ -874,29 +919,49 @@ public sealed class RadarInteractionProviderTests
 
     private sealed class TestInteractionHostStatus : IInteractionHostStatus
     {
+        private readonly object _gate = new();
         private Action<InteractionHostStatus>? _changed;
         private long _version;
 
         public InteractionHostStatus Current { get; private set; } = InteractionHostStatus.Disconnected;
         public Action? BeforeSubscribeReturns { get; set; }
-        public event Action<InteractionHostStatus>? Changed { add => _changed += value; remove => _changed -= value; }
+        public event Action<InteractionHostStatus>? Changed
+        {
+            add { lock (_gate) _changed += value; }
+            remove { lock (_gate) _changed -= value; }
+        }
 
         public IInteractionHostStatusSubscription Subscribe(Action<InteractionHostStatus> changed)
         {
             ArgumentNullException.ThrowIfNull(changed);
-            _changed += changed;
-            var snapshot = Current;
-            BeforeSubscribeReturns?.Invoke();
-            return new TestSubscription(this, changed, snapshot);
+            lock (_gate)
+            {
+                _changed += changed;
+                var snapshot = Current;
+                BeforeSubscribeReturns?.Invoke();
+                return new TestSubscription(this, changed, snapshot);
+            }
         }
 
         public void Publish(InteractionHostStatus status)
         {
-            Current = status with { Version = Interlocked.Increment(ref _version) };
-            _changed?.Invoke(Current);
+            Action<InteractionHostStatus>? handlers;
+            InteractionHostStatus published;
+            lock (_gate)
+            {
+                _version = checked(_version + 1);
+                published = status with { Version = _version };
+                Current = published;
+                handlers = _changed;
+            }
+
+            handlers?.Invoke(published);
         }
 
-        private void Unsubscribe(Action<InteractionHostStatus> changed) => _changed -= changed;
+        private void Unsubscribe(Action<InteractionHostStatus> changed)
+        {
+            lock (_gate) _changed -= changed;
+        }
 
         private sealed class TestSubscription(
             TestInteractionHostStatus owner,

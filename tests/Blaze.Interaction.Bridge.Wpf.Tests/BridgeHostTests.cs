@@ -77,6 +77,36 @@ public sealed class BridgeHostTests
     }
 
     [Fact]
+    public void HostStatus_ReentrantTerminalPublicationPreservesOrderForEverySubscriber()
+    {
+        var status = new BridgeInteractionHostStatus();
+        var first = new List<bool>();
+        var second = new List<bool>();
+        status.Changed += value =>
+        {
+            first.Add(value.IsConnected);
+            if (value.IsConnected) status.Terminate();
+        };
+        status.Changed += value => second.Add(value.IsConnected);
+
+        status.ApplyConnected(Hello());
+        status.ApplyConnected(Hello());
+
+        Assert.Equal([true, false], first);
+        Assert.Equal([true, false], second);
+        Assert.False(status.Current.IsConnected);
+    }
+
+    [Fact]
+    public void HostStatus_FailsFastBeforeVersionWouldOverflow()
+    {
+        var status = new BridgeInteractionHostStatus(initialVersion: long.MaxValue);
+
+        Assert.Throws<OverflowException>(() => status.ApplyConnected(Hello()));
+        Assert.False(status.Current.IsConnected);
+    }
+
+    [Fact]
     public async Task Host_MapsOnlyAcknowledgedPipeLifecycleIntoProviderStatus()
     {
         var provider = new RecordingProvider("radar-main");

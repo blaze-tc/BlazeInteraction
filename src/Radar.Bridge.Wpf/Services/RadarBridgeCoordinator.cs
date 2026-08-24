@@ -21,6 +21,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private readonly bool _enableLegacyIpc;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly object _unityStatusGate = new();
+    private readonly Queue<UnityStatusPublication> _unityStatusPublications = new();
     private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
     private readonly SemaphoreSlim _topologyLock = new(1, 1);
     private readonly Dictionary<string, ScreenRuntime> _screens = new(StringComparer.OrdinalIgnoreCase);
@@ -39,6 +40,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private Task? _pipeTask;
     private Task? _schedulerTask;
     private UnityClientStatus _unityStatus = UnityClientStatus.Disconnected;
+    private bool _isDrainingUnityStatus;
     private long _batchSequence;
     private int _started;
     private int _disposed;
@@ -1338,15 +1340,45 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     {
         ArgumentNullException.ThrowIfNull(update);
         UnityClientStatus value;
+        var shouldDrain = false;
         lock (_unityStatusGate)
         {
             var updated = update(_unityStatus);
             ArgumentNullException.ThrowIfNull(updated);
             value = updated with { Screens = Array.AsReadOnly(updated.Screens.ToArray()) };
             _unityStatus = value;
+            _unityStatusPublications.Enqueue(new UnityStatusPublication(value, UnityStatusChanged));
+            if (!_isDrainingUnityStatus)
+            {
+                _isDrainingUnityStatus = true;
+                shouldDrain = true;
+            }
         }
 
-        InvokeSafely(UnityStatusChanged, value);
+        if (shouldDrain)
+        {
+            DrainUnityStatusPublications();
+        }
+    }
+
+    private void DrainUnityStatusPublications()
+    {
+        while (true)
+        {
+            UnityStatusPublication publication;
+            lock (_unityStatusGate)
+            {
+                if (_unityStatusPublications.Count == 0)
+                {
+                    _isDrainingUnityStatus = false;
+                    return;
+                }
+
+                publication = _unityStatusPublications.Dequeue();
+            }
+
+            InvokeSafely(publication.Handlers, publication.Value);
+        }
     }
     private void PublishLog(string message) { _logger.LogInformation("{Message}", message); InvokeSafely(LogReceived, message); }
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
@@ -1411,4 +1443,5 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
 
     private sealed record TransitionFrame(RadarScreenInfo Screen, IReadOnlyList<RadarScreenPointer> Pointers, Func<Task>? OnDelivered = null);
     private sealed record PreparedBatch(long Sequence, DateTimeOffset Timestamp, PointerBatchPayload Payload, TransitionFrame? Transition);
+    private sealed record UnityStatusPublication(UnityClientStatus Value, Action<UnityClientStatus>? Handlers);
 }

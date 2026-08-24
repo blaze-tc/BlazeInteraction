@@ -17,7 +17,10 @@ public sealed record InteractionHostStatus(
     string ClientVersion,
     IReadOnlyList<InteractionSurface> Surfaces)
 {
-    /// <summary>Monotonically increases for each host status transition.</summary>
+    /// <summary>
+    /// Monotonically increases for each host status transition. Producers must fail fast rather than wrap at
+    /// <see cref="long.MaxValue"/>, so consumers can safely reject a lower version as stale.
+    /// </summary>
     public long Version { get; init; }
 
     public static InteractionHostStatus Disconnected { get; } =
