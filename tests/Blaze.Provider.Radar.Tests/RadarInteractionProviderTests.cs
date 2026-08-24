@@ -88,7 +88,7 @@ public sealed class RadarInteractionProviderTests
         using var data = new TemporaryDirectory();
         await WriteBundledDefaultAsync(providerDirectory.Path);
         var firstCallbackEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseFirstCallback = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseFirstCallback = new ManualResetEventSlim();
         var hostStatus = new TestInteractionHostStatus();
         var services = new DictionaryServiceProvider(new Dictionary<Type, object>
         {
@@ -105,7 +105,10 @@ public sealed class RadarInteractionProviderTests
             {
                 if (status.ProcessId != 1) return;
                 firstCallbackEntered.TrySetResult();
-                releaseFirstCallback.Task.GetAwaiter().GetResult();
+                if (!releaseFirstCallback.Wait(TimeSpan.FromSeconds(5)))
+                {
+                    throw new TimeoutException("Timed out waiting to release the first host status callback.");
+                }
             });
         try
         {
@@ -115,7 +118,7 @@ public sealed class RadarInteractionProviderTests
             var second = Task.Run(() => hostStatus.Publish(new InteractionHostStatus(
                 true, 2, "v2", [Surface("front", true, 0, 1920, 1080)])));
             await second.WaitAsync(TimeSpan.FromSeconds(5));
-            releaseFirstCallback.TrySetResult();
+            releaseFirstCallback.Set();
             await first.WaitAsync(TimeSpan.FromSeconds(5));
 
             Assert.Equal(2, runtime.Coordinator.UnityStatus.ProcessId);
@@ -133,7 +136,7 @@ public sealed class RadarInteractionProviderTests
         using var data = new TemporaryDirectory();
         await WriteBundledDefaultAsync(providerDirectory.Path);
         var firstApplyEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseFirstApply = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseFirstApply = new ManualResetEventSlim();
         var hostStatus = new TestInteractionHostStatus();
         var services = new DictionaryServiceProvider(new Dictionary<Type, object>
         {
@@ -150,7 +153,10 @@ public sealed class RadarInteractionProviderTests
             {
                 if (status.ProcessId != 1) return;
                 firstApplyEntered.TrySetResult();
-                releaseFirstApply.Task.GetAwaiter().GetResult();
+                if (!releaseFirstApply.Wait(TimeSpan.FromSeconds(5)))
+                {
+                    throw new TimeoutException("Timed out waiting to release the first host status apply.");
+                }
                 throw new InvalidOperationException("mapping failed");
             });
         using var throwingListener = new ThrowingTraceListener();
@@ -165,14 +171,14 @@ public sealed class RadarInteractionProviderTests
             var second = Task.Run(() => hostStatus.Publish(new InteractionHostStatus(
                 true, 2, "v2", [Surface("front", true, 0, 1920, 1080)])));
             await second.WaitAsync(TimeSpan.FromSeconds(5));
-            releaseFirstApply.TrySetResult();
+            releaseFirstApply.Set();
             await first.WaitAsync(TimeSpan.FromSeconds(5));
 
             Assert.Equal(2, runtime.Coordinator.UnityStatus.ProcessId);
         }
         finally
         {
-            releaseFirstApply.TrySetResult();
+            releaseFirstApply.Set();
             Trace.Listeners.Clear();
             foreach (var listener in originalListeners)
             {
@@ -199,7 +205,7 @@ public sealed class RadarInteractionProviderTests
         var reloaded = await RadarProviderConfiguration.LoadAsync(provider.Path, storage, CancellationToken.None);
 
         Assert.Equal(2222, reloaded.Configuration.Screens[0].WidthPixels);
-        Assert.True(reloaded.ConfigurationPath.StartsWith(Path.GetFullPath(data.Path), StringComparison.OrdinalIgnoreCase));
+        Assert.StartsWith(Path.GetFullPath(data.Path), reloaded.ConfigurationPath, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -216,8 +222,8 @@ public sealed class RadarInteractionProviderTests
             provider.Path, new FakeProviderStorageContext(secondData.Path, null), CancellationToken.None);
 
         Assert.False(string.Equals(first.ConfigurationPath, second.ConfigurationPath, StringComparison.OrdinalIgnoreCase));
-        Assert.True(first.ConfigurationPath.StartsWith(Path.GetFullPath(firstData.Path), StringComparison.OrdinalIgnoreCase));
-        Assert.True(second.ConfigurationPath.StartsWith(Path.GetFullPath(secondData.Path), StringComparison.OrdinalIgnoreCase));
+        Assert.StartsWith(Path.GetFullPath(firstData.Path), first.ConfigurationPath, StringComparison.OrdinalIgnoreCase);
+        Assert.StartsWith(Path.GetFullPath(secondData.Path), second.ConfigurationPath, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

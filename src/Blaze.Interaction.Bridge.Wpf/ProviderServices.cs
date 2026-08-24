@@ -1,6 +1,8 @@
 using System.Text.RegularExpressions;
 using System.Diagnostics;
+using System.IO;
 using Blaze.Interaction.Contracts;
+using Blaze.Interaction.Ipc;
 using Blaze.Interaction.Provider.Abstractions;
 
 namespace Blaze.Interaction.Bridge.Wpf;
