@@ -1,0 +1,8 @@
+package(default_visibility = ["//visibility:public"])
+
+# Task 2 replaces this source-contract filegroup with the Windows shared-library
+# target after the MediaPipe overlay implementation is added.
+filegroup(
+    name = "native_abi",
+    srcs = ["blaze_hand_tracking.h"],
+)
