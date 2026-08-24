@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using System.Diagnostics;
 using Blaze.Interaction.Contracts;
 using Blaze.Interaction.Provider.Abstractions;
 
@@ -83,17 +84,20 @@ internal sealed class BridgeInteractionHostStatus : IInteractionHostStatus
         var shouldDrain = false;
         lock (_gate)
         {
-            if (Interlocked.Exchange(ref _terminated, 1) != 0)
+            if (Volatile.Read(ref _terminated) != 0)
             {
                 return;
             }
 
             if (_current.IsConnected)
             {
-                var value = InteractionHostStatus.Disconnected with { Version = NextVersionLocked() };
+                var nextVersion = NextVersionLocked();
+                var value = InteractionHostStatus.Disconnected with { Version = nextVersion };
                 _current = value;
                 shouldDrain = EnqueueLocked(value);
             }
+
+            Volatile.Write(ref _terminated, 1);
         }
 
         if (shouldDrain)
@@ -151,7 +155,15 @@ internal sealed class BridgeInteractionHostStatus : IInteractionHostStatus
                 publication = _publications.Dequeue();
             }
 
-            _beforePublish?.Invoke(publication.Value);
+            try
+            {
+                _beforePublish?.Invoke(publication.Value);
+            }
+            catch (Exception exception)
+            {
+                Trace.TraceWarning("Bridge host status observer failed: {0}", exception);
+                continue;
+            }
             if (publication.Handlers is null)
             {
                 continue;

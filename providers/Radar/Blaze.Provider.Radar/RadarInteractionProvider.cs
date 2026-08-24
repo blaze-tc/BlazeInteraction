@@ -1,5 +1,6 @@
 using Blaze.Interaction.Contracts;
 using Blaze.Interaction.Provider.Abstractions;
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Yuexin.Radar.Bridge.Wpf;
@@ -749,25 +750,36 @@ public sealed class RadarInteractionProvider : IInteractionProvider
                     _lastHostStatusVersion = status.Version;
                 }
 
-                _beforeApplyHostStatus?.Invoke(status);
-                if (Volatile.Read(ref _disposed) != 0)
+                try
                 {
-                    continue;
+                    _beforeApplyHostStatus?.Invoke(status);
+                    if (Volatile.Read(ref _disposed) != 0)
+                    {
+                        continue;
+                    }
+                    _coordinator.ApplyUnityConnectionStatus(new UnityClientStatus(
+                        status.IsConnected,
+                        status.ProcessId,
+                        status.ClientVersion,
+                        status.Surfaces.Select(surface => new RadarScreenInfo(
+                            surface.SurfaceId,
+                            surface.Name,
+                            surface.LogicalWidth,
+                            surface.LogicalHeight,
+                            surface.IsPrimary,
+                            surface.Order)).ToArray(),
+                        null,
+                        0,
+                        null));
                 }
-                _coordinator.ApplyUnityConnectionStatus(new UnityClientStatus(
-                    status.IsConnected,
-                    status.ProcessId,
-                    status.ClientVersion,
-                    status.Surfaces.Select(surface => new RadarScreenInfo(
-                        surface.SurfaceId,
-                        surface.Name,
-                        surface.LogicalWidth,
-                        surface.LogicalHeight,
-                        surface.IsPrimary,
-                        surface.Order)).ToArray(),
-                    null,
-                    0,
-                    null));
+                catch (ObjectDisposedException) when (Volatile.Read(ref _disposed) != 0)
+                {
+                    // A captured callback raced normal provider shutdown.
+                }
+                catch (Exception exception)
+                {
+                    Trace.TraceWarning("Radar provider host-status publication failed: {0}", exception);
+                }
             }
         }
 

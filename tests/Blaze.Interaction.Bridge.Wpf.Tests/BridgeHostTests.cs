@@ -107,6 +107,63 @@ public sealed class BridgeHostTests
     }
 
     [Fact]
+    public async Task HostStatus_HookFailureDoesNotStrandQueuedPublicationOrFutureDrain()
+    {
+        var firstHookEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstHook = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var connectedHookCount = 0;
+        var status = new BridgeInteractionHostStatus(beforePublish: value =>
+        {
+            if (!value.IsConnected || Interlocked.Increment(ref connectedHookCount) != 1) return;
+            firstHookEntered.TrySetResult();
+            releaseFirstHook.Task.GetAwaiter().GetResult();
+            throw new InvalidOperationException("observer failed");
+        });
+        var published = new List<bool>();
+        status.Changed += value => published.Add(value.IsConnected);
+
+        var first = Task.Run(() => status.ApplyConnected(Hello()));
+        await firstHookEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var second = Task.Run(status.ApplyDisconnected);
+        await second.WaitAsync(TimeSpan.FromSeconds(5));
+        releaseFirstHook.TrySetResult();
+        await first.WaitAsync(TimeSpan.FromSeconds(5));
+        status.ApplyConnected(Hello());
+
+        Assert.Equal([false, true], published);
+        Assert.True(status.Current.IsConnected);
+    }
+
+    [Fact]
+    public async Task Dispose_TerminateOverflowStillDisposesOwnedResources()
+    {
+        var status = new BridgeInteractionHostStatus(initialVersion: long.MaxValue - 1);
+        status.ApplyConnected(Hello());
+        var manager = new ProviderManager();
+        var resource = new TrackingAsyncDisposable();
+        await using var server = new InteractionPipeServer(new InteractionPipeServerOptions
+        {
+            PipeName = $"Blaze.InteractionBridge.DisposeOverflow.{Guid.NewGuid():N}"
+        });
+        var host = new BridgeHost(
+            manager,
+            new RecordingMessageSink(),
+            _ => Task.CompletedTask,
+            new RecordingParentProcessMonitor(),
+            null,
+            null,
+            new Dictionary<string, ProviderDescriptor>(),
+            [resource, server],
+            services: new BridgeServiceProvider([status]));
+
+        await Assert.ThrowsAsync<OverflowException>(async () => await host.DisposeAsync());
+
+        Assert.True(status.Current.IsConnected);
+        Assert.True(resource.Disposed);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => server.RunAsync());
+    }
+
+    [Fact]
     public async Task Host_MapsOnlyAcknowledgedPipeLifecycleIntoProviderStatus()
     {
         var provider = new RecordingProvider("radar-main");
@@ -1180,6 +1237,16 @@ public sealed class BridgeHostTests
 
         internal void Emit(InteractionFrame frame) =>
             FrameReceived?.Invoke(this, new InteractionFrameEventArgs(frame));
+    }
+
+    private sealed class TrackingAsyncDisposable : IAsyncDisposable
+    {
+        public bool Disposed { get; private set; }
+        public ValueTask DisposeAsync()
+        {
+            Disposed = true;
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class RecordingMessageSink : IBridgeMessageSink
