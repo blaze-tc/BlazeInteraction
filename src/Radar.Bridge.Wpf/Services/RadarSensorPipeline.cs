@@ -510,26 +510,60 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
     {
         foreach (var cluster in clusters)
         {
-            if (!_options.Calibration.TryMap(cluster.CenterX, cluster.CenterY, out var localX, out var localY) ||
-                !float.IsFinite(localX) || !float.IsFinite(localY) || localX is < 0f or > 1f || localY is < 0f or > 1f)
+            if (!TryMapPoint(cluster.CenterX, cluster.CenterY, out var center))
             {
                 continue;
             }
 
-            var mapped = _options.OutputMapper.Map(localX, localY);
-            if (!float.IsFinite(mapped.PixelX) || !float.IsFinite(mapped.PixelY) ||
-                mapped.PixelX < 0f || mapped.PixelX > _options.ScreenWidth ||
-                mapped.PixelY < 0f || mapped.PixelY > _options.ScreenHeight)
+            var footprint = new RadarScreenPoint[cluster.Points.Count];
+            var footprintIsValid = true;
+            for (var index = 0; index < cluster.Points.Count; index++)
+            {
+                var actualPoint = cluster.Points[index];
+                if (TryMapPoint(actualPoint.X, actualPoint.Y, out footprint[index]))
+                {
+                    continue;
+                }
+
+                footprintIsValid = false;
+                PublishLog($"Rejected cluster {cluster.ClusterIndex} because its footprint contains an unmappable actual point.");
+                break;
+            }
+
+            if (!footprintIsValid)
             {
                 continue;
             }
 
             yield return new SensorDetection(
                 cluster.ClusterIndex,
-                mapped.PixelX,
-                mapped.PixelY,
-                Math.Clamp(cluster.Points.Count / 10f, 0f, 1f));
+                center.PixelX,
+                center.PixelY,
+                Math.Clamp(cluster.Points.Count / 10f, 0f, 1f),
+                footprint);
         }
+    }
+
+    private bool TryMapPoint(float physicalX, float physicalY, out RadarScreenPoint point)
+    {
+        point = default;
+        if (!_options.Calibration.TryMap(physicalX, physicalY, out var localX, out var localY) ||
+            !float.IsFinite(localX) || !float.IsFinite(localY) ||
+            localX is < 0f or > 1f || localY is < 0f or > 1f)
+        {
+            return false;
+        }
+
+        var mapped = _options.OutputMapper.Map(localX, localY);
+        if (!float.IsFinite(mapped.PixelX) || !float.IsFinite(mapped.PixelY) ||
+            mapped.PixelX < 0f || mapped.PixelX > _options.ScreenWidth ||
+            mapped.PixelY < 0f || mapped.PixelY > _options.ScreenHeight)
+        {
+            return false;
+        }
+
+        point = new RadarScreenPoint(mapped.PixelX, mapped.PixelY);
+        return true;
     }
 
     private void OnConnectionStateChanged(RadarConnectionState state, long generation)

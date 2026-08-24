@@ -37,13 +37,17 @@ public sealed class MultiScreenRadarEndToEndTests
         await coordinator.ConnectAllAsync();
         var deadline = DateTimeOffset.UtcNow.Add(AcceptanceTimeout);
 
-        factory.Publish("left", "l1", Detection("l1", 500, 600));
+        var leftFootprint = new[] { new RadarScreenPoint(500, 600), new RadarScreenPoint(520, 620) };
+        factory.Publish("left", "l1", Detection("l1", 500, 600, footprint: leftFootprint));
         OrderedPointerBatch leftActive;
         do
         {
             leftActive = await reader.ReadNextAsync(deadline);
         }
         while (!leftActive.Payload.Screens.Single(frame => frame.Screen.ScreenId == "left").Pointers.Any());
+        Assert.Equal(
+            leftFootprint,
+            Assert.Single(leftActive.Payload.Screens.Single(frame => frame.Screen.ScreenId == "left").Pointers).Footprint);
         var preFailureSequence = leftActive.EnvelopeSequence;
 
         factory.Fail("left", "l1", new IOException("simulated disconnect"));
@@ -56,9 +60,12 @@ public sealed class MultiScreenRadarEndToEndTests
 
         snapshots.Clear();
         var freshTimestamp = DateTimeOffset.UtcNow;
-        factory.Publish("front", "f1", Detection("f1", 1900, 700, freshTimestamp));
-        factory.Publish("front", "f2", Detection("f2", 1940, 710, freshTimestamp));
-        factory.Publish("right", "r1", Detection("r1", 600, 500, freshTimestamp));
+        var frontF1Footprint = new[] { new RadarScreenPoint(3000, 700), new RadarScreenPoint(3010, 705) };
+        var frontF2Footprint = new[] { new RadarScreenPoint(3100, 710) };
+        var rightFootprint = new[] { new RadarScreenPoint(600, 500), new RadarScreenPoint(620, 520) };
+        factory.Publish("front", "f1", Detection("f1", 1900, 700, freshTimestamp, frontF1Footprint));
+        factory.Publish("front", "f2", Detection("f2", 1940, 710, freshTimestamp, frontF2Footprint));
+        factory.Publish("right", "r1", Detection("r1", 600, 500, freshTimestamp, rightFootprint));
 
         OrderedPointerBatch observed;
         RadarScreenRuntimeSnapshot frontSnapshot;
@@ -81,11 +88,58 @@ public sealed class MultiScreenRadarEndToEndTests
         Assert.Equal(3, observed.Payload.Screens.Count);
         var mergedTarget = Assert.Single(frontSnapshot.Targets);
         Assert.Equal(2, mergedTarget.SourceSensorCount);
-        Assert.Single(Front(observed.Payload).Pointers);
+        var frontPointer = Assert.Single(Front(observed.Payload).Pointers);
+        Assert.Equal(frontF1Footprint.Concat(frontF2Footprint), frontPointer.Footprint);
         Assert.Empty(observed.Payload.Screens.Single(frame => frame.Screen.ScreenId == "left").Pointers);
-        Assert.Single(observed.Payload.Screens.Single(frame => frame.Screen.ScreenId == "right").Pointers);
+        var rightPointer = Assert.Single(observed.Payload.Screens.Single(frame => frame.Screen.ScreenId == "right").Pointers);
+        Assert.Equal(rightFootprint, rightPointer.Footprint);
+        Assert.All(frontPointer.Footprint, point => Assert.InRange(point.PixelX, 1920f, 4096f));
+        Assert.All(rightPointer.Footprint, point => Assert.InRange(point.PixelX, 0f, 1920f));
+        Assert.DoesNotContain(frontPointer.Footprint, rightPointer.Footprint.Contains);
+        Assert.DoesNotContain(rightPointer.Footprint, frontPointer.Footprint.Contains);
         Assert.Equal(RadarSensorRuntimeState.Running, factory.Get("right", "r1").State);
         Assert.Equal(RadarSensorRuntimeState.Faulted, factory.Get("left", "l1").State);
+    }
+
+    [Fact]
+    public async Task ActualSensorPipelines_MapFootprintsInsideTheirOwnScreenOutputRegions()
+    {
+        var factory = new RadarSensorPipelineFactory(NullLoggerFactory.Instance);
+        var leftScreen = Screen(
+            "left",
+            1920,
+            1440,
+            Sensor("l1", new Yuexin.Radar.Configuration.RadarPixelRect(0, 0, 900, 1440)));
+        var frontScreen = Screen(
+            "front",
+            4096,
+            1536,
+            Sensor("f1", new Yuexin.Radar.Configuration.RadarPixelRect(2500, 0, 1000, 1536)));
+        await using var left = factory.Create(leftScreen, leftScreen.Sensors[0]);
+        await using var front = factory.Create(frontScreen, frontScreen.Sensors[0]);
+        using var cancellation = new CancellationTokenSource(AcceptanceTimeout);
+        var leftFrame = new TaskCompletionSource<SensorDetectionFrame>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var frontFrame = new TaskCompletionSource<SensorDetectionFrame>(TaskCreationOptions.RunContinuationsAsynchronously);
+        left.DetectionFrameUpdated += frame =>
+        {
+            if (frame.Detections.Count > 0) leftFrame.TrySetResult(frame);
+        };
+        front.DetectionFrameUpdated += frame =>
+        {
+            if (frame.Detections.Count > 0) frontFrame.TrySetResult(frame);
+        };
+
+        await left.StartAsync(cancellation.Token);
+        await front.StartAsync(cancellation.Token);
+        var leftDetection = Assert.Single((await leftFrame.Task.WaitAsync(cancellation.Token)).Detections);
+        var frontDetection = Assert.Single((await frontFrame.Task.WaitAsync(cancellation.Token)).Detections);
+
+        Assert.NotEmpty(leftDetection.Footprint);
+        Assert.NotEmpty(frontDetection.Footprint);
+        Assert.All(leftDetection.Footprint, point => Assert.InRange(point.PixelX, 0f, 900f));
+        Assert.All(frontDetection.Footprint, point => Assert.InRange(point.PixelX, 2500f, 3500f));
+        Assert.DoesNotContain(leftDetection.Footprint, frontDetection.Footprint.Contains);
+        Assert.DoesNotContain(frontDetection.Footprint, leftDetection.Footprint.Contains);
     }
 
     [Fact]
@@ -136,6 +190,7 @@ public sealed class MultiScreenRadarEndToEndTests
         }
         Assert.NotEqual(firstDown.PointerId, activeDown.PointerId);
 
+        factory.Publish("front", "f1", Detection("f1", 1900, 700));
         while (true)
         {
             var batch = (await reader.ReadNextAsync(deadline)).Payload;
@@ -466,11 +521,20 @@ public sealed class MultiScreenRadarEndToEndTests
         OutputRectPixels = outputRect
     };
 
-    private static SensorDetectionFrame Detection(string sensorId, float x, float y) =>
-        Detection(sensorId, x, y, DateTimeOffset.UtcNow);
+    private static SensorDetectionFrame Detection(
+        string sensorId,
+        float x,
+        float y,
+        IReadOnlyList<RadarScreenPoint>? footprint = null) =>
+        Detection(sensorId, x, y, DateTimeOffset.UtcNow, footprint);
 
-    private static SensorDetectionFrame Detection(string sensorId, float x, float y, DateTimeOffset timestamp) =>
-        new(sensorId, timestamp, [new SensorDetection(1, x, y, 1f)]);
+    private static SensorDetectionFrame Detection(
+        string sensorId,
+        float x,
+        float y,
+        DateTimeOffset timestamp,
+        IReadOnlyList<RadarScreenPoint>? footprint = null) =>
+        new(sensorId, timestamp, [new SensorDetection(1, x, y, 1f, footprint ?? [])]);
 
     private static async Task SendHeartbeatsAsync(Stream stream, CancellationToken cancellationToken)
     {

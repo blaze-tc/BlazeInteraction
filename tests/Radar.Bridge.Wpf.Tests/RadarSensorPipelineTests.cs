@@ -139,6 +139,113 @@ public sealed class RadarSensorPipelineTests
     }
 
     [Fact]
+    public async Task Mapping_MapsEveryActualClusterPointInAcquisitionOrderAndPreservesDuplicates()
+    {
+        await using var pipeline = CreatePipeline("main", "sensor-1", new ConfigurationPixelRect(0, 0, 1000, 1000));
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var received = new TaskCompletionSource<RadarSensorRuntimeSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+        pipeline.SnapshotUpdated += snapshot =>
+        {
+            if (snapshot.RawPoints.Count == 3) received.TrySetResult(snapshot);
+        };
+
+        await pipeline.StartAsync(cancellation.Token);
+        pipeline.PublishScan(new RadarScanFrame(
+            71,
+            DateTimeOffset.UtcNow,
+            [
+                new RadarPoint(500, 6000, 60f, -4f, 3f),
+                new RadarPoint(500, 6001, 60.01f, -3.9f, 2.9f),
+                new RadarPoint(500, 6001, 60.01f, -3.9f, 2.9f)
+            ]));
+        var snapshot = await received.Task.WaitAsync(cancellation.Token);
+
+        var detection = Assert.Single(snapshot.Detections);
+        Assert.Equal(110f, detection.PixelX, 3);
+        Assert.Equal(210f, detection.PixelY, 3);
+        Assert.Equal(3, detection.Footprint.Count);
+        Assert.Equal(100f, detection.Footprint[0].PixelX, 3);
+        Assert.Equal(200f, detection.Footprint[0].PixelY, 3);
+        Assert.Equal(110f, detection.Footprint[1].PixelX, 3);
+        Assert.Equal(210f, detection.Footprint[1].PixelY, 3);
+        Assert.Equal(detection.Footprint[1], detection.Footprint[2]);
+    }
+
+    [Fact]
+    public async Task Mapping_DoesNotInsertASyntheticClusterCenterIntoTheFootprint()
+    {
+        await using var pipeline = CreatePipeline("main", "sensor-1", new ConfigurationPixelRect(0, 0, 1000, 1000));
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var received = new TaskCompletionSource<RadarSensorRuntimeSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+        pipeline.SnapshotUpdated += snapshot =>
+        {
+            if (snapshot.RawPoints.Count == 2) received.TrySetResult(snapshot);
+        };
+
+        await pipeline.StartAsync(cancellation.Token);
+        pipeline.PublishScan(new RadarScanFrame(
+            72,
+            DateTimeOffset.UtcNow,
+            [
+                new RadarPoint(500, 6000, 60f, -4f, 3f),
+                new RadarPoint(500, 6001, 60.01f, -3.9f, 2.9f)
+            ]));
+        var snapshot = await received.Task.WaitAsync(cancellation.Token);
+
+        var detection = Assert.Single(snapshot.Detections);
+        Assert.Equal(105f, detection.PixelX, 3);
+        Assert.Equal(205f, detection.PixelY, 3);
+        Assert.Collection(
+            detection.Footprint,
+            point =>
+            {
+                Assert.Equal(100f, point.PixelX, 3);
+                Assert.Equal(200f, point.PixelY, 3);
+            },
+            point =>
+            {
+                Assert.Equal(110f, point.PixelX, 3);
+                Assert.Equal(210f, point.PixelY, 3);
+            });
+        Assert.DoesNotContain(new RadarScreenPoint(detection.PixelX, detection.PixelY), detection.Footprint);
+    }
+
+    [Fact]
+    public async Task Mapping_RejectsTheEntireDetectionWithOneDiagnosticWhenAnyActualPointIsUnmappable()
+    {
+        var (screen, sensor) = CreateConfiguration("main", "sensor-1", new ConfigurationPixelRect(0, 0, 1000, 1000));
+        sensor.Range.ActivePolygon = [];
+        sensor.Calibration = new RadarCalibrationConfiguration
+        {
+            IsValid = true,
+            PhysicalCorners = [new(-5f, -5f), new(5f, -5f), new(5f, 5f), new(-5f, 5f)]
+        };
+        await using var pipeline = CreatePipeline(screen, sensor);
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var logs = new List<string>();
+        var received = new TaskCompletionSource<RadarSensorRuntimeSnapshot>(TaskCreationOptions.RunContinuationsAsynchronously);
+        pipeline.LogReceived += logs.Add;
+        pipeline.SnapshotUpdated += snapshot =>
+        {
+            if (snapshot.RawPoints.Count == 3) received.TrySetResult(snapshot);
+        };
+
+        await pipeline.StartAsync(cancellation.Token);
+        pipeline.PublishScan(new RadarScanFrame(
+            73,
+            DateTimeOffset.UtcNow,
+            [
+                new RadarPoint(500, 6000, 60f, -4f, -3f),
+                new RadarPoint(500, 6001, 60.01f, -3.9f, -2.9f),
+                new RadarPoint(500, 6002, 60.02f, float.NaN, -3f)
+            ]));
+        var snapshot = await received.Task.WaitAsync(cancellation.Token);
+
+        Assert.Empty(snapshot.Detections);
+        Assert.Single(logs.Where(message => message.Contains("footprint", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [Fact]
     public async Task RealSource_RemainsNonRunningUntilConnected()
     {
         var (screen, sensor) = CreateConfiguration("main", "sensor-1", new ConfigurationPixelRect(0, 0, 1920, 1080));

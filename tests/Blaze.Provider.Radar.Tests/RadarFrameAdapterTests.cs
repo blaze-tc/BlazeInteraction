@@ -51,6 +51,30 @@ public sealed class RadarFrameAdapterTests
         Assert.Empty(frames[1].Points);
     }
 
+    [Fact]
+    public void Adapt_MapsEveryFrozenRadarFootprintPointWithoutChangingTheCenter()
+    {
+        var adapter = new RadarFrameAdapter("radar-instance-a");
+        var pointer = new RadarScreenPointer(
+            7,
+            RadarPointerPhase.Move,
+            .5f,
+            .5f,
+            50f,
+            50f,
+            1f,
+            123,
+            [
+                new RadarScreenPoint(100f, 200f),
+                new RadarScreenPoint(110f, 210f)
+            ]);
+
+        var point = Assert.Single(Assert.Single(adapter.Adapt(Batch(pointer))).Points);
+
+        Assert.Equal(new Vector2Data(pointer.PixelX, pointer.PixelY), point.PixelPosition);
+        Assert.Equal([new Vector2Data(100f, 200f), new Vector2Data(110f, 210f)], point.Fp);
+    }
+
     [Theory]
     [InlineData(RadarPointerPhase.Hover, InteractionPhase.Hover)]
     [InlineData(RadarPointerPhase.Down, InteractionPhase.Down)]

@@ -67,6 +67,7 @@ public sealed class RadarFrameAdapter
             Phase = MapPhase(pointer.Phase),
             NormalizedPosition = new Vector2Data(pointer.NormalizedX, pointer.NormalizedY),
             PixelPosition = new Vector2Data(pointer.PixelX, pointer.PixelY),
+            Fp = pointer.Footprint.Select(item => new Vector2Data(item.PixelX, item.PixelY)).ToArray(),
             Confidence = pointer.Confidence,
             TimestampUnixMs = pointer.TimestampUnixMilliseconds,
             Extensions = new InteractionExtensions(
