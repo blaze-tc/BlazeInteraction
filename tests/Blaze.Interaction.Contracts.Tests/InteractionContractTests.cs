@@ -39,6 +39,42 @@ public sealed class InteractionContractTests
     }
 
     [Fact]
+    public void Point_FootprintIsAnImmutableSnapshot()
+    {
+        var source = new List<Vector2Data> { new(10f, 20f), new(30f, 40f) };
+        var point = CreatePoint(InteractionPhase.Move) with { Fp = source };
+
+        source.Clear();
+
+        Assert.Equal([new Vector2Data(10f, 20f), new Vector2Data(30f, 40f)], point.Fp);
+        Assert.IsAssignableFrom<IReadOnlyList<Vector2Data>>(point.Fp);
+        var exposed = Assert.IsAssignableFrom<IList<Vector2Data>>(point.Fp);
+        Assert.Throws<NotSupportedException>(() => exposed.Clear());
+    }
+
+    [Fact]
+    public void Point_RejectsNullFootprintAndNullElements()
+    {
+        Assert.Throws<ArgumentNullException>(() => CreatePoint(InteractionPhase.Move) with { Fp = null! });
+        Assert.Throws<ArgumentException>(() => CreatePoint(InteractionPhase.Move) with
+        {
+            Fp = new Vector2Data[] { null! }
+        });
+    }
+
+    [Fact]
+    public void Json_MissingFootprintUsesEmptyList()
+    {
+        var json = InteractionJson.Serialize(CreatePoint(InteractionPhase.Move));
+        var oldJson = json.Replace(",\"fp\":[]", string.Empty, StringComparison.Ordinal);
+
+        var decoded = InteractionJson.Deserialize<InteractionPoint>(oldJson);
+
+        Assert.NotNull(decoded.Fp);
+        Assert.Empty(decoded.Fp);
+    }
+
+    [Fact]
     public void InteractionFrameJsonRejectsNullPoint()
     {
         var validJson = InteractionJson.Serialize(CreateFrame(InteractionPhase.Move));

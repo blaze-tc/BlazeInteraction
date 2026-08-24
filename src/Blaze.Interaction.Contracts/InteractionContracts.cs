@@ -97,6 +97,7 @@ public sealed record InteractionPoint
     private InteractionPhase _phase;
     private Vector2Data _normalizedPosition = null!;
     private Vector2Data _pixelPosition = null!;
+    private IReadOnlyList<Vector2Data> _fp = Array.Empty<Vector2Data>();
     private float _confidence;
 
     public required long Id { get; init; }
@@ -150,6 +151,22 @@ public sealed record InteractionPoint
         {
             ArgumentNullException.ThrowIfNull(value);
             _pixelPosition = value;
+        }
+    }
+
+    public IReadOnlyList<Vector2Data> Fp
+    {
+        get => _fp;
+        init
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            var snapshot = value.ToArray();
+            if (snapshot.Any(static point => point is null))
+            {
+                throw new ArgumentException("The footprint cannot contain null elements.", nameof(value));
+            }
+
+            _fp = Array.AsReadOnly(snapshot);
         }
     }
 

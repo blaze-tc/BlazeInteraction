@@ -79,7 +79,7 @@ Ack 写入前不得向客户端发布业务帧。默认握手超时 5 秒、心�
 | `timestampUnixMs` | frame 采样/输出时间 |
 | `points` | 不可为 null；允许空列表表示视觉状态刷新 |
 
-每个 point 含 `id`、Surface/Provider/Source identity、`Hover|Down|Move|Up|Cancel`、normalized `[0,1]`、logical pixel、confidence `[0,1]`、timestamp 和可选 `extensions`。Point ID 的稳定域由 Provider 定义；Radar Gate A 中按 Surface 保持既有 Screen-local 语义。
+每个 point 含 `id`、Surface/Provider/Source identity、`Hover|Down|Move|Up|Cancel`、normalized `[0,1]`、logical pixel、confidence `[0,1]`、timestamp、可选的 `fp` footprint 和可选 `extensions`。`fp` 是按 point 关联的 footprint 坐标数组，坐标使用与 `pixelPosition` 相同的像素坐标空间；数组顺序由 Provider 定义且消费者必须保留，重复坐标也是有效数据。旧 JSON 缺少 `fp` 时按空列表处理。Point ID 的稳定域由 Provider 定义；Radar Gate A 中按 Surface 保持既有 Screen-local 语义。`fp` 的生命周期归外层 point 所有，point 被撤销或离开 frame 后消费者不得将其视为独立生命周期对象。
 
 `extensions` 是新增设备类型的可选数据面，不能改变核心字段含义。消费者必须能在忽略未知扩展时继续处理基础 InteractionPoint。
 

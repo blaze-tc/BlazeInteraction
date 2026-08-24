@@ -194,7 +194,8 @@ public sealed class InteractionFrameCodecTests
                     NormalizedPosition = new Vector2Data(0.25f, 0.75f),
                     PixelPosition = new Vector2Data(480f, 270f),
                     Confidence = 1f,
-                    TimestampUnixMs = 1234
+                    TimestampUnixMs = 1234,
+                    Fp = [new Vector2Data(10f, 20f), new Vector2Data(30f, 40f), new Vector2Data(10f, 20f)]
                 }
             ]
         };
@@ -210,6 +211,9 @@ public sealed class InteractionFrameCodecTests
         Assert.Equal("blaze.camera.vision", payload.ProviderId);
         Assert.Equal("camera-vision-main", payload.ProviderInstanceId);
         Assert.Equal(InteractionPhase.Hover, Assert.Single(payload.Points).Phase);
+        Assert.Equal(
+            [new Vector2Data(10f, 20f), new Vector2Data(30f, 40f), new Vector2Data(10f, 20f)],
+            Assert.Single(payload.Points).Fp);
         Assert.DoesNotContain(
             Enum.GetNames<InteractionMessageType>(),
             name => name.Contains("Camera", StringComparison.OrdinalIgnoreCase));
