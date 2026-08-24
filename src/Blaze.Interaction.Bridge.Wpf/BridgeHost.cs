@@ -10,6 +10,8 @@ namespace Blaze.Interaction.Bridge.Wpf;
 public sealed class BridgeHostOptions
 {
     public required string ProvidersRoot { get; init; }
+    public required string DataRoot { get; init; }
+    public string? ProfilePath { get; init; }
     public int? ParentProcessId { get; init; }
     public string? PreferredProviderId { get; init; }
     public string PipeName { get; init; } = InteractionIpcProtocol.PipeName;
@@ -51,6 +53,7 @@ public sealed class BridgeHost : IAsyncDisposable
     private readonly IReadOnlyDictionary<string, ProviderDescriptor> _descriptors;
     private readonly IReadOnlyDictionary<string, BridgeProviderUiRegistration> _providerUi;
     private readonly IReadOnlyList<object> _ownedResources;
+    private readonly IServiceProvider _services;
     private readonly SemaphoreSlim _helloGate = new(1, 1);
     private readonly CancellationTokenSource _outboundCancellation = new();
     private readonly object _outboundGate = new();
@@ -70,7 +73,8 @@ public sealed class BridgeHost : IAsyncDisposable
         IReadOnlyDictionary<string, ProviderDescriptor> descriptors,
         IReadOnlyList<object> ownedResources,
         IReadOnlyList<BridgeStartupDiagnostic>? startupDiagnostics = null,
-        IReadOnlyDictionary<string, BridgeProviderUiRegistration>? providerUi = null)
+        IReadOnlyDictionary<string, BridgeProviderUiRegistration>? providerUi = null,
+        IServiceProvider? services = null)
     {
         _manager = manager ?? throw new ArgumentNullException(nameof(manager));
         _messageSink = messageSink ?? throw new ArgumentNullException(nameof(messageSink));
@@ -81,6 +85,7 @@ public sealed class BridgeHost : IAsyncDisposable
         _descriptors = descriptors ?? throw new ArgumentNullException(nameof(descriptors));
         _providerUi = providerUi ?? new Dictionary<string, BridgeProviderUiRegistration>();
         _ownedResources = ownedResources ?? throw new ArgumentNullException(nameof(ownedResources));
+        _services = services ?? EmptyServiceProvider.Instance;
         StartupDiagnostics = Array.AsReadOnly((startupDiagnostics ?? []).ToArray());
 
         _manager.FrameReceived += OnFrameReceived;
@@ -99,9 +104,15 @@ public sealed class BridgeHost : IAsyncDisposable
         {
             throw new ArgumentException("A Providers root directory is required.", nameof(options));
         }
+        if (string.IsNullOrWhiteSpace(options.DataRoot))
+        {
+            throw new ArgumentException("A project data root directory is required.", nameof(options));
+        }
 
         var discovery = BridgeProviderDiscovery.Discover(options.ProvidersRoot);
         var manager = new ProviderManager();
+        var storage = new BridgeProviderStorageContext(options.DataRoot, options.ProfilePath);
+        var services = new BridgeServiceProvider([storage]);
         var descriptors = new Dictionary<string, ProviderDescriptor>(StringComparer.Ordinal);
         var diagnostics = discovery.LoadResults
             .Where(result => !result.IsSuccess)
@@ -122,7 +133,7 @@ public sealed class BridgeHost : IAsyncDisposable
                     .CatalogEntry.ProviderDirectory;
                 var context = new ProviderCreateContext(
                     providerDirectory,
-                    EmptyServiceProvider.Instance);
+                    services);
                 var factory = BridgeProviderRegistrar.TryRegister(
                     manager,
                     loaded.Plugin,
@@ -162,7 +173,8 @@ public sealed class BridgeHost : IAsyncDisposable
                 descriptors,
                 [discovery, .. prefetched, server],
                 diagnostics,
-                providerUi);
+                providerUi,
+                services);
             return host;
         }
         catch (Exception startupFailure)
@@ -231,7 +243,7 @@ public sealed class BridgeHost : IAsyncDisposable
             var requestedTopology = Array.AsReadOnly(hello.Surfaces.ToArray());
             var initializationContext = new ProviderInitializationContext(
                 requestedTopology,
-                EmptyServiceProvider.Instance);
+                _services);
             var active = _manager.ActiveProvider;
             var targetInstanceId = active?.ProviderInstanceId ?? _defaultProviderInstanceId;
             if (active is not null && !TopologyEquals(_activeTopology, requestedTopology))

@@ -10,6 +10,95 @@ namespace Blaze.Provider.Radar.Tests;
 public sealed class RadarInteractionProviderTests
 {
     [Fact]
+    public async Task FirstLoad_CopiesBundledDefaultThenSaveSurvivesReload()
+    {
+        using var provider = new TemporaryDirectory();
+        using var data = new TemporaryDirectory();
+        var bundledPath = Path.Combine(provider.Path, "profiles", "radar-default.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(bundledPath)!);
+        var bundled = RadarAppConfiguration.CreateDefault();
+        bundled.Screens[0].WidthPixels = 1111;
+        await RadarConfigurationStore.SaveAsync(bundledPath, bundled);
+        var storage = new FakeProviderStorageContext(data.Path, null);
+
+        var loaded = await RadarProviderConfiguration.LoadAsync(provider.Path, storage, CancellationToken.None);
+        loaded.Configuration.Screens[0].WidthPixels = 2222;
+        await RadarConfigurationStore.SaveAsync(loaded.ConfigurationPath, loaded.Configuration);
+        var reloaded = await RadarProviderConfiguration.LoadAsync(provider.Path, storage, CancellationToken.None);
+
+        Assert.Equal(2222, reloaded.Configuration.Screens[0].WidthPixels);
+        Assert.True(reloaded.ConfigurationPath.StartsWith(Path.GetFullPath(data.Path), StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Load_UsesDistinctProjectStorageRootsForDistinctProjects()
+    {
+        using var provider = new TemporaryDirectory();
+        using var firstData = new TemporaryDirectory();
+        using var secondData = new TemporaryDirectory();
+        await WriteBundledDefaultAsync(provider.Path);
+
+        var first = await RadarProviderConfiguration.LoadAsync(
+            provider.Path, new FakeProviderStorageContext(firstData.Path, null), CancellationToken.None);
+        var second = await RadarProviderConfiguration.LoadAsync(
+            provider.Path, new FakeProviderStorageContext(secondData.Path, null), CancellationToken.None);
+
+        Assert.False(string.Equals(first.ConfigurationPath, second.ConfigurationPath, StringComparison.OrdinalIgnoreCase));
+        Assert.True(first.ConfigurationPath.StartsWith(Path.GetFullPath(firstData.Path), StringComparison.OrdinalIgnoreCase));
+        Assert.True(second.ConfigurationPath.StartsWith(Path.GetFullPath(secondData.Path), StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Load_UsesExplicitProfileWithoutCreatingProjectDefault()
+    {
+        using var provider = new TemporaryDirectory();
+        using var data = new TemporaryDirectory();
+        using var custom = new TemporaryDirectory();
+        await WriteBundledDefaultAsync(provider.Path);
+        var profilePath = Path.Combine(custom.Path, "custom.json");
+        var customConfiguration = RadarAppConfiguration.CreateDefault();
+        customConfiguration.Screens[0].WidthPixels = 3333;
+        await RadarConfigurationStore.SaveAsync(profilePath, customConfiguration);
+        var storage = new FakeProviderStorageContext(data.Path, profilePath);
+
+        var loaded = await RadarProviderConfiguration.LoadAsync(provider.Path, storage, CancellationToken.None);
+
+        Assert.Equal(Path.GetFullPath(profilePath), loaded.ConfigurationPath);
+        Assert.Equal(3333, loaded.Configuration.Screens[0].WidthPixels);
+        Assert.False(File.Exists(Path.Combine(data.Path, "Providers", RadarFrameAdapter.ProviderId, "config.json")));
+    }
+
+    [Fact]
+    public async Task Load_ThrowsWhenProjectStorageRootCannotBeCreated()
+    {
+        using var provider = new TemporaryDirectory();
+        using var dataRootFile = new TemporaryFile();
+        await WriteBundledDefaultAsync(provider.Path);
+
+        await Assert.ThrowsAnyAsync<IOException>(() => RadarProviderConfiguration.LoadAsync(
+            provider.Path,
+            new FakeProviderStorageContext(dataRootFile.Path, null),
+            CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Load_PreservesMalformedExplicitProfileBytes()
+    {
+        using var provider = new TemporaryDirectory();
+        using var data = new TemporaryDirectory();
+        using var custom = new TemporaryDirectory();
+        var profilePath = Path.Combine(custom.Path, "malformed.json");
+        var malformed = new byte[] { 0x7B, 0x22, 0x73, 0x63, 0x68, 0x65, 0x6D, 0x61, 0x22, 0x3A, 0x7D };
+        await File.WriteAllBytesAsync(profilePath, malformed);
+
+        var loaded = await RadarProviderConfiguration.LoadAsync(
+            provider.Path, new FakeProviderStorageContext(data.Path, profilePath), CancellationToken.None);
+
+        Assert.False(loaded.Configuration.CanPersist);
+        Assert.Equal(malformed, await File.ReadAllBytesAsync(profilePath));
+    }
+
+    [Fact]
     public void PluginDescriptorMatchesThePublishedRadarIdentityAndCapabilities()
     {
         var descriptor = new RadarPlugin().Descriptor;
@@ -500,6 +589,13 @@ public sealed class RadarInteractionProviderTests
     private static ProviderInitializationContext InitializationContext(params InteractionSurface[] surfaces) =>
         new(surfaces, EmptyServiceProvider.Instance);
 
+    private static async Task WriteBundledDefaultAsync(string providerDirectory)
+    {
+        var path = Path.Combine(providerDirectory, "profiles", "radar-default.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await RadarConfigurationStore.SaveAsync(path, RadarAppConfiguration.CreateDefault());
+    }
+
     private static InteractionSurface Surface(string id, bool primary, int order, int width = 1920, int height = 1080) => new()
     {
         SurfaceId = id,
@@ -613,5 +709,28 @@ public sealed class RadarInteractionProviderTests
         {
             if (Directory.Exists(Path)) Directory.Delete(Path, recursive: true);
         }
+    }
+
+    private sealed class TemporaryFile : IDisposable
+    {
+        public TemporaryFile()
+        {
+            Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Blaze.Provider.Radar.Tests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
+            File.WriteAllText(Path, "not a directory");
+        }
+
+        public string Path { get; }
+
+        public void Dispose()
+        {
+            if (File.Exists(Path)) File.Delete(Path);
+        }
+    }
+
+    private sealed record FakeProviderStorageContext(string DataRoot, string? ProfilePath) : IProviderStorageContext
+    {
+        public string GetProviderDataDirectory(string providerId) =>
+            Path.Combine(DataRoot, "Providers", providerId);
     }
 }

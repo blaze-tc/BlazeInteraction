@@ -8,7 +8,9 @@ public sealed record BridgeLaunchOptions(
     bool Minimized,
     string? ProvidersRoot,
     string? ProviderId,
-    string PipeName);
+    string PipeName,
+    string DataRoot,
+    string? ProfilePath);
 
 public static class BridgeCommandLine
 {
@@ -19,6 +21,8 @@ public static class BridgeCommandLine
         var minimized = false;
         string? providersRoot = null;
         string? providerId = null;
+        string? dataRoot = null;
+        string? profilePath = null;
         var pipeName = InteractionIpcProtocol.PipeName;
 
         for (var index = 0; index < arguments.Count; index++)
@@ -52,13 +56,26 @@ public static class BridgeCommandLine
             {
                 pipeName = RequireText(value, argument);
             }
+            else if (string.Equals(argument, "--data-root", StringComparison.OrdinalIgnoreCase))
+            {
+                dataRoot = Path.GetFullPath(value);
+            }
+            else if (string.Equals(argument, "--profile", StringComparison.OrdinalIgnoreCase))
+            {
+                profilePath = Path.GetFullPath(value);
+            }
             else
             {
                 throw new ArgumentException($"Unknown bridge argument: {argument}", nameof(arguments));
             }
         }
 
-        return new BridgeLaunchOptions(parentProcessId, minimized, providersRoot, providerId, pipeName);
+        if (dataRoot is null)
+        {
+            throw new ArgumentException("--data-root is required for project-scoped provider storage.", nameof(arguments));
+        }
+
+        return new BridgeLaunchOptions(parentProcessId, minimized, providersRoot, providerId, pipeName, dataRoot, profilePath);
     }
 
     private static string ReadValue(IReadOnlyList<string> arguments, ref int index, string argument)

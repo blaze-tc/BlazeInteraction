@@ -518,8 +518,16 @@ public sealed class RadarInteractionProvider : IInteractionProvider
             CancellationToken cancellationToken)
         {
             var services = createContext.Services;
+            var storedConfiguration = services.GetService(typeof(IProviderStorageContext)) as IProviderStorageContext;
+            var loadedConfiguration = storedConfiguration is null
+                ? null
+                : await RadarProviderConfiguration.LoadAsync(
+                    createContext.ProviderDirectory,
+                    storedConfiguration,
+                    cancellationToken).ConfigureAwait(false);
             var configuration = services.GetService(typeof(RadarAppConfiguration)) as RadarAppConfiguration
-                ?? await LoadProviderConfigurationAsync(createContext.ProviderDirectory, cancellationToken).ConfigureAwait(false);
+                ?? loadedConfiguration?.Configuration
+                ?? await LoadBundledDefaultAsync(createContext.ProviderDirectory, cancellationToken).ConfigureAwait(false);
             var loggerFactory = services.GetService(typeof(ILoggerFactory)) as ILoggerFactory
                 ?? NullLoggerFactory.Instance;
             var pipelineFactory = services.GetService(typeof(IRadarSensorPipelineFactory)) as IRadarSensorPipelineFactory
@@ -530,6 +538,7 @@ public sealed class RadarInteractionProvider : IInteractionProvider
                 configuration,
                 logger,
                 pipelineFactory,
+                configurationPath: loadedConfiguration?.ConfigurationPath,
                 sendPointerBatchAsync: publishPointerBatchAsync,
                 enableLegacyIpc: false);
             try
@@ -640,7 +649,7 @@ public sealed class RadarInteractionProvider : IInteractionProvider
             return _coordinator.DisposeAsync();
         }
 
-        private static async Task<RadarAppConfiguration> LoadProviderConfigurationAsync(
+        private static async Task<RadarAppConfiguration> LoadBundledDefaultAsync(
             string providerDirectory,
             CancellationToken cancellationToken)
         {

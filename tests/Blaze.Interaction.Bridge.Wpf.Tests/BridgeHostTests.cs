@@ -134,6 +134,7 @@ public sealed class BridgeHostTests
         await using var host = BridgeHost.Create(new BridgeHostOptions
         {
             ProvidersRoot = providers.Root,
+            DataRoot = Path.Combine(providers.Root, "data"),
             PipeName = $"Blaze.InteractionBridge.Diagnostics.{Guid.NewGuid():N}"
         });
 
@@ -801,8 +802,8 @@ public sealed class BridgeHostTests
     }
 
     [Theory]
-    [InlineData(new string[0], null, false)]
-    [InlineData(new[] { "--parent-pid", "42", "--minimized" }, 42, true)]
+    [InlineData(new[] { "--data-root", "C:\\Blaze\\Project" }, null, false)]
+    [InlineData(new[] { "--data-root", "C:\\Blaze\\Project", "--parent-pid", "42", "--minimized" }, 42, true)]
     public void CommandLine_ParsesManualAndUnityLaunchModes(
         string[] arguments,
         int? expectedParentPid,
@@ -817,9 +818,55 @@ public sealed class BridgeHostTests
     [Fact]
     public void CommandLine_AcceptsAnIsolatedInteractionPipeForSmokeDiagnostics()
     {
-        var options = BridgeCommandLine.Parse(["--pipe-name", "Blaze.InteractionBridge.Test.42"]);
+        var options = BridgeCommandLine.Parse(
+            ["--data-root", Path.GetTempPath(), "--pipe-name", "Blaze.InteractionBridge.Test.42"]);
 
         Assert.Equal("Blaze.InteractionBridge.Test.42", options.PipeName);
+    }
+
+    [Fact]
+    public void CommandLine_ParsesProjectDataRootAndProfileOverride()
+    {
+        var options = BridgeCommandLine.Parse(
+        [
+            "--data-root", @"E:\Unity\Game\Library\BlazeInteraction",
+            "--profile", @"E:\Unity\Game\Radar\custom.json"
+        ]);
+
+        Assert.Equal(Path.GetFullPath(@"E:\Unity\Game\Library\BlazeInteraction"), options.DataRoot);
+        Assert.Equal(Path.GetFullPath(@"E:\Unity\Game\Radar\custom.json"), options.ProfilePath);
+    }
+
+    [Fact]
+    public void CommandLine_RejectsMissingProjectDataRoot()
+    {
+        var exception = Assert.Throws<ArgumentException>(() =>
+            BridgeCommandLine.Parse(["--pipe-name", "Blaze.InteractionBridge.Test.42"]));
+
+        Assert.Contains("--data-root", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ProviderStorageContext_UsesProjectScopedProviderDirectories()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "Blaze", Guid.NewGuid().ToString("N"));
+        var storage = new BridgeProviderStorageContext(root, null);
+
+        Assert.Equal(Path.GetFullPath(root), storage.DataRoot);
+        Assert.Equal(
+            Path.Combine(Path.GetFullPath(root), "Providers", "blaze.radar.f10f20"),
+            storage.GetProviderDataDirectory("blaze.radar.f10f20"));
+        Assert.Throws<ArgumentException>(() => storage.GetProviderDataDirectory("../outside"));
+    }
+
+    [Fact]
+    public void ProviderServiceProvider_ReturnsTheExactRegisteredStorageInstance()
+    {
+        var storage = new BridgeProviderStorageContext(Path.GetTempPath(), null);
+        var services = new BridgeServiceProvider([storage]);
+
+        Assert.Same(storage, services.GetService(typeof(IProviderStorageContext)));
+        Assert.Null(services.GetService(typeof(IDisposable)));
     }
 
     private static HelloPayload Hello() => new(
@@ -1293,6 +1340,7 @@ public sealed class BridgeHostTests
         Assert.Throws<ArgumentException>(() => BridgeHost.Create(new BridgeHostOptions
         {
             ProvidersRoot = providersRoot,
+            DataRoot = Path.Combine(providersRoot, "data"),
             PipeName = "",
             ProviderFactoryObserved = (factory, loadContext) =>
             {
@@ -1315,6 +1363,7 @@ public sealed class BridgeHostTests
         var host = BridgeHost.Create(new BridgeHostOptions
         {
             ProvidersRoot = providersRoot,
+            DataRoot = Path.Combine(providersRoot, "data"),
             PipeName = $"Blaze.InteractionBridge.Dispose.{Guid.NewGuid():N}",
             ProviderFactoryObserved = (factory, loadContext) =>
             {

@@ -25,6 +25,8 @@ public partial class App : Application
             _host = BridgeHost.Create(new BridgeHostOptions
             {
                 ProvidersRoot = launch.ProvidersRoot ?? Path.Combine(AppContext.BaseDirectory, "Providers"),
+                DataRoot = launch.DataRoot,
+                ProfilePath = launch.ProfilePath,
                 ParentProcessId = launch.ParentProcessId,
                 PreferredProviderId = launch.ProviderId,
                 PipeName = launch.PipeName
