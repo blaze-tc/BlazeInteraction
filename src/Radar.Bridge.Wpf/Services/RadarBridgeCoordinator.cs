@@ -694,8 +694,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             UpdateUnityStatus(current => current with
             {
                 LastBatchSentAt = batch.Timestamp,
-                LastBatchSequence = batch.Sequence,
-                LastError = null
+                LastBatchSequence = batch.Sequence
             });
             var seamCleanup = await ConfirmTransitionAsync(batch, cancellationToken).ConfigureAwait(false);
             if (seamCleanup is not null) TrackRetirement(seamCleanup);

@@ -450,7 +450,9 @@ public sealed class MainViewModelTests
         {
             if (args.PropertyName == nameof(MainViewModel.RadarConnectionText)) notificationsAfterRefresh++;
         };
-        originalScreen.Sensors[0].Enabled = false;
+        // Runtime state belongs to the retired row, unlike Enabled which intentionally writes through
+        // to the shared configuration consumed by the rebuilt row.
+        originalScreen.Sensors[0].ApplyRuntimeState(RadarSensorRuntimeState.Running);
         await Task.Delay(25);
 
         Assert.Equal(0, notificationsAfterRefresh);

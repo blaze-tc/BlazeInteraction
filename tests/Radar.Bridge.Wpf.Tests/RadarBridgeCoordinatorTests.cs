@@ -67,7 +67,7 @@ public sealed class RadarBridgeCoordinatorTests
     public async Task Coordinator_UnityStatusSubscription_DrainsInitialSnapshotOutsideItsLockInOrder()
     {
         var initialEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseInitial = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseInitial = new ManualResetEventSlim();
         var received = new List<bool>();
         await using var coordinator = new RadarBridgeCoordinator(
             new RadarAppConfiguration(),
@@ -79,13 +79,13 @@ public sealed class RadarBridgeCoordinatorTests
         var subscribe = Task.Run(() => coordinator.SubscribeUnityStatus(status =>
         {
             received.Add(status.IsConnected);
-            if (initialEntered.TrySetResult()) releaseInitial.Task.GetAwaiter().GetResult();
+            if (initialEntered.TrySetResult()) releaseInitial.Wait();
         }));
         await initialEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var update = Task.Run(() => coordinator.ApplyUnityConnectionStatus(
             new UnityClientStatus(true, 42, "2021.3.45f1", [], null, 0, null)));
         await update.WaitAsync(TimeSpan.FromSeconds(5));
-        releaseInitial.TrySetResult();
+        releaseInitial.Set();
         await subscribe.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal([false, true], received);
@@ -96,7 +96,7 @@ public sealed class RadarBridgeCoordinatorTests
     {
         var configuration = new RadarAppConfiguration { Screens = [ScreenConfiguration("front", "f1", 1920, 1080)] };
         var initialEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseInitial = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseInitial = new ManualResetEventSlim();
         var received = new List<RadarSensorRuntimeStateSnapshot>();
         var factory = new FakePipelineFactory();
         await using var coordinator = CreateCoordinator(configuration, factory);
@@ -105,11 +105,11 @@ public sealed class RadarBridgeCoordinatorTests
         var subscribe = Task.Run(() => coordinator.SubscribeSensorStates(snapshot =>
         {
             received.Add(snapshot);
-            if (initialEntered.TrySetResult()) releaseInitial.Task.GetAwaiter().GetResult();
+            if (initialEntered.TrySetResult()) releaseInitial.Wait();
         }));
         await initialEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await coordinator.ConnectSensorAsync("front", "f1").WaitAsync(TimeSpan.FromSeconds(5));
-        releaseInitial.TrySetResult();
+        releaseInitial.Set();
         await subscribe.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal([RadarSensorRuntimeState.Stopped, RadarSensorRuntimeState.Running], received.Select(snapshot => snapshot.State.State));
@@ -138,7 +138,9 @@ public sealed class RadarBridgeCoordinatorTests
         coordinator.SubscribeSensorStates(snapshot =>
         {
             if (!string.Equals(snapshot.State.ScreenId, "left", StringComparison.OrdinalIgnoreCase)) return;
+#pragma warning disable xUnit1031 // This callback must synchronously re-enter to prove the production deadlock boundary.
             coordinator.ApplyUnityTopologyAsync(expandedTopology).GetAwaiter().GetResult();
+#pragma warning restore xUnit1031
             reentered.TrySetResult();
         });
 
@@ -213,11 +215,11 @@ public sealed class RadarBridgeCoordinatorTests
         using var ui = new DedicatedSynchronizationContext();
         var viewModel = ui.Invoke(() => new MainViewModel(configuration, coordinator));
         var oldHandlerBlocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseOldHandler = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseOldHandler = new ManualResetEventSlim();
         var lateOldHandler = Task.Run(() => oldPipeline.PublishStateTo(state =>
         {
             oldHandlerBlocked.TrySetResult();
-            releaseOldHandler.Task.GetAwaiter().GetResult();
+            releaseOldHandler.Wait();
             oldHandlers!(state);
         }, RadarSensorRuntimeState.Faulted));
         await oldHandlerBlocked.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -225,7 +227,7 @@ public sealed class RadarBridgeCoordinatorTests
         await coordinator.StartAllSimulationAsync().WaitAsync(TimeSpan.FromSeconds(5));
         var replacement = factory.GetInstances("front", "f1").Last();
         Assert.NotSame(oldPipeline, replacement);
-        releaseOldHandler.TrySetResult();
+        releaseOldHandler.Set();
         await lateOldHandler.WaitAsync(TimeSpan.FromSeconds(5));
         await ui.DrainAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -269,7 +271,7 @@ public sealed class RadarBridgeCoordinatorTests
     public async Task Coordinator_StatusChangedPublishesInCommitOrderWhenFirstHandlerBlocks()
     {
         var firstPublicationEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseFirstPublication = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseFirstPublication = new ManualResetEventSlim();
         var published = new List<bool>();
         await using var coordinator = new RadarBridgeCoordinator(
             new RadarAppConfiguration(),
@@ -282,7 +284,7 @@ public sealed class RadarBridgeCoordinatorTests
             published.Add(status.IsConnected);
             if (!status.IsConnected || firstPublicationEntered.Task.IsCompleted) return;
             firstPublicationEntered.TrySetResult();
-            releaseFirstPublication.Task.GetAwaiter().GetResult();
+            releaseFirstPublication.Wait();
         };
 
         var connected = Task.Run(() => coordinator.ApplyUnityConnectionStatus(new UnityClientStatus(
@@ -290,7 +292,7 @@ public sealed class RadarBridgeCoordinatorTests
         await firstPublicationEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var disconnected = Task.Run(() => coordinator.ApplyUnityConnectionStatus(UnityClientStatus.Disconnected));
         await disconnected.WaitAsync(TimeSpan.FromSeconds(5));
-        releaseFirstPublication.TrySetResult();
+        releaseFirstPublication.Set();
         await connected.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal([true, false], published);
@@ -1325,10 +1327,10 @@ public sealed class RadarBridgeCoordinatorTests
         private TaskCompletionSource? _recordingRelease;
         private bool _ignoreStartCancellation;
         private bool _ignoreRecordingCancellation;
-        public event Action<RadarSensorRuntimeSnapshot>? SnapshotUpdated;
+        public event Action<RadarSensorRuntimeSnapshot>? SnapshotUpdated { add { } remove { } }
         public event Action<SensorDetectionFrame>? DetectionFrameUpdated;
         public event Action<RadarSensorRuntimeState>? StateChanged;
-        public event Action<string>? LogReceived;
+        public event Action<string>? LogReceived { add { } remove { } }
         public async Task StartAsync(CancellationToken cancellationToken = default)
         {
             StartCallCount++;
