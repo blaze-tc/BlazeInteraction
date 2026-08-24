@@ -118,6 +118,126 @@ public sealed class RadarBridgeCoordinatorTests
     }
 
     [Fact]
+    public async Task Coordinator_SensorRefreshHandlerCanSynchronouslyReenterTopologyWithoutDeadlock()
+    {
+        var configuration = new RadarAppConfiguration
+        {
+            Screens =
+            [
+                ScreenConfiguration("front", "f1", 1920, 1080),
+                ScreenConfiguration("left", "l1", 1920, 1080)
+            ]
+        };
+        var factory = new FakePipelineFactory();
+        await using var coordinator = CreateCoordinator(configuration, factory);
+        var expandedTopology = Hello(
+            Screen("front", "Front", true, 1920, 1080, 0),
+            Screen("left", "Left", false, 1920, 1080, 1));
+        await coordinator.ApplyUnityTopologyAsync(Hello(Screen("front", "Front", true, 1920, 1080, 0)));
+        var reentered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        coordinator.SubscribeSensorStates(snapshot =>
+        {
+            if (!string.Equals(snapshot.State.ScreenId, "left", StringComparison.OrdinalIgnoreCase)) return;
+            coordinator.ApplyUnityTopologyAsync(expandedTopology).GetAwaiter().GetResult();
+            reentered.TrySetResult();
+        });
+
+        await coordinator.ApplyUnityTopologyAsync(expandedTopology).WaitAsync(TimeSpan.FromSeconds(5));
+
+        await reentered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task Coordinator_SensorRefreshGenerationOverflowDoesNotCommitEarlierVersionChange()
+    {
+        var configuration = new RadarAppConfiguration
+        {
+            Screens =
+            [
+                ScreenConfiguration("front", "f1", 1920, 1080),
+                ScreenConfiguration("left", "l1", 1920, 1080)
+            ]
+        };
+        var factory = new FakePipelineFactory();
+        await using var coordinator = CreateCoordinator(configuration, factory);
+        await coordinator.ApplyUnityTopologyAsync(Hello(Screen("front", "Front", true, 1920, 1080, 0)));
+        coordinator.SetSensorStateSequenceForTest("front", "f1", long.MaxValue - 1, long.MaxValue);
+        factory["front", "f1"].SetStateWithoutPublishing(RadarSensorRuntimeState.Running);
+        var before = coordinator.GetSensorStateBookkeepingForTest();
+
+        await Assert.ThrowsAsync<OverflowException>(() => coordinator.ApplyUnityTopologyAsync(Hello(
+            Screen("front", "Front", true, 1920, 1080, 0),
+            Screen("left", "Left", false, 1920, 1080, 1))));
+
+        var after = coordinator.GetSensorStateBookkeepingForTest();
+        Assert.Equal(before.NextBindingGeneration, after.NextBindingGeneration);
+        Assert.Equal(before.PublicationCount, after.PublicationCount);
+        Assert.Equal(before.IsDraining, after.IsDraining);
+        Assert.Equal(before.IsDrainDeferred, after.IsDrainDeferred);
+        Assert.Equal(before.States, after.States);
+    }
+
+    [Fact]
+    public async Task Coordinator_SensorStateVersionOverflowLeavesBookkeepingUnchanged()
+    {
+        var configuration = new RadarAppConfiguration { Screens = [ScreenConfiguration("front", "f1", 1920, 1080)] };
+        var factory = new FakePipelineFactory();
+        await using var coordinator = CreateCoordinator(configuration, factory);
+        await coordinator.ApplyUnityTopologyAsync(Hello(Screen("front", "Front", true, 1920, 1080, 0)));
+        coordinator.SetSensorStateSequenceForTest("front", "f1", long.MaxValue, 1);
+        var before = coordinator.GetSensorStateBookkeepingForTest();
+
+        Assert.Throws<OverflowException>(() => factory["front", "f1"].PublishState(RadarSensorRuntimeState.Running));
+
+        var after = coordinator.GetSensorStateBookkeepingForTest();
+        Assert.Equal(before.NextBindingGeneration, after.NextBindingGeneration);
+        Assert.Equal(before.PublicationCount, after.PublicationCount);
+        Assert.Equal(before.IsDraining, after.IsDraining);
+        Assert.Equal(before.IsDrainDeferred, after.IsDrainDeferred);
+        Assert.Equal(before.States, after.States);
+    }
+
+    [Fact]
+    public async Task Coordinator_ReplacementGenerationWinsAfterLateOldPipelineHandler()
+    {
+        var configuration = new RadarAppConfiguration { Screens = [ScreenConfiguration("front", "f1", 1920, 1080)] };
+        configuration.Screens[0].Sensors[0].SourceMode = RadarSensorSourceMode.Real;
+        var factory = new FakePipelineFactory();
+        await using var coordinator = CreateCoordinator(configuration, factory);
+        await coordinator.ApplyUnityTopologyAsync(Hello(Screen("front", "Front", true, 1920, 1080, 0)));
+        var oldPipeline = factory["front", "f1"];
+        var oldHandlers = oldPipeline.CaptureStateChangedSubscribers();
+        Assert.NotNull(oldHandlers);
+        var observed = new List<RadarSensorRuntimeStateSnapshot>();
+        coordinator.SubscribeSensorStates(observed.Add);
+        using var ui = new DedicatedSynchronizationContext();
+        var viewModel = ui.Invoke(() => new MainViewModel(configuration, coordinator));
+        var oldHandlerBlocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseOldHandler = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lateOldHandler = Task.Run(() => oldPipeline.PublishStateTo(state =>
+        {
+            oldHandlerBlocked.TrySetResult();
+            releaseOldHandler.Task.GetAwaiter().GetResult();
+            oldHandlers!(state);
+        }, RadarSensorRuntimeState.Faulted));
+        await oldHandlerBlocked.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await coordinator.StartAllSimulationAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var replacement = factory.GetInstances("front", "f1").Last();
+        Assert.NotSame(oldPipeline, replacement);
+        releaseOldHandler.TrySetResult();
+        await lateOldHandler.WaitAsync(TimeSpan.FromSeconds(5));
+        await ui.DrainAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(observed[^1].BindingGeneration > observed[0].BindingGeneration);
+        Assert.Equal(RadarSensorRuntimeState.Running, observed[^1].State.State);
+        Assert.Equal(RadarSensorRuntimeState.Running, viewModel.SelectedScreen!.Sensors.Single().RuntimeState);
+        Assert.Equal(1, viewModel.ConnectedRadarCount);
+        Assert.Equal("雷达：1/1 已连接", viewModel.RadarConnectionText);
+        ui.Invoke(viewModel.Dispose);
+    }
+
+    [Fact]
     public async Task Coordinator_BlockedProviderSendCannotRestoreDisconnectedUnityStatus()
     {
         var sendEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1115,6 +1235,10 @@ public sealed class RadarBridgeCoordinatorTests
         public List<string> StartOrder { get; } = [];
 
         public FakePipeline this[string screenId, string sensorId] => _pipelines[(screenId, sensorId)];
+        public IReadOnlyList<FakePipeline> GetInstances(string screenId, string sensorId) => _instances
+            .Where(value => string.Equals(value.ScreenId, screenId, StringComparison.OrdinalIgnoreCase) &&
+                            string.Equals(value.SensorId, sensorId, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
 
         public IRadarSensorPipeline Create(RadarScreenConfiguration screen, RadarSensorConfiguration sensor)
         {
@@ -1255,5 +1379,13 @@ public sealed class RadarBridgeCoordinatorTests
         public void ReleaseRecording() => _recordingRelease?.TrySetResult();
         public void Publish(SensorDetectionFrame frame) => DetectionFrameUpdated?.Invoke(frame);
         public void Fault() { State = RadarSensorRuntimeState.Faulted; StateChanged?.Invoke(State); }
+        public void SetStateWithoutPublishing(RadarSensorRuntimeState state) => State = state;
+        public void PublishState(RadarSensorRuntimeState state) { State = state; StateChanged?.Invoke(state); }
+        public Action<RadarSensorRuntimeState>? CaptureStateChangedSubscribers() => StateChanged;
+        public void PublishStateTo(Action<RadarSensorRuntimeState>? handlers, RadarSensorRuntimeState state)
+        {
+            State = state;
+            handlers?.Invoke(state);
+        }
     }
 }

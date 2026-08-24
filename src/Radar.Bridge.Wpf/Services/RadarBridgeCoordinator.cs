@@ -45,6 +45,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private UnityClientStatus _unityStatus = UnityClientStatus.Disconnected;
     private bool _isDrainingUnityStatus;
     private bool _isDrainingSensorStates;
+    private bool _isSensorStateDrainDeferred;
     private long _nextSensorBindingGeneration;
     private long _batchSequence;
     private int _started;
@@ -140,7 +141,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             {
                 _sensorStatePublications.Enqueue(new SensorStatePublication(state, null, handler));
             }
-            if (!_isDrainingSensorStates)
+            if (!_isDrainingSensorStates && !_isSensorStateDrainDeferred)
             {
                 _isDrainingSensorStates = true;
                 shouldDrain = true;
@@ -219,6 +220,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         ThrowIfDisposed();
         EnsureConfigurationWritable();
         if (!TryValidateTopology(hello, out var error)) throw new InvalidOperationException($"{error.Code}: {error.Message}");
+        var shouldDrainSensorStates = false;
         await _topologyLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -295,12 +297,13 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             }
 
             RefreshAssociatedSnapshot();
-            RefreshSensorStateSnapshot();
+            shouldDrainSensorStates = RefreshSensorStateSnapshot();
         }
         finally
         {
             _topologyLock.Release();
         }
+        if (shouldDrainSensorStates) StartDeferredSensorStateDrainer();
         InvokeSafely(ConfigurationChanged);
     }
 
@@ -308,6 +311,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     {
         ThrowIfDisposed();
         EnsureConfigurationWritable();
+        var shouldDrainSensorStates = false;
         await _topologyLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -338,12 +342,13 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
                 RetireRuntime(runtime, now, remove: false, staged[runtime.Info.ScreenId]);
             }
             RefreshAssociatedSnapshot();
-            RefreshSensorStateSnapshot();
+            shouldDrainSensorStates = RefreshSensorStateSnapshot();
         }
         finally
         {
             _topologyLock.Release();
         }
+        if (shouldDrainSensorStates) StartDeferredSensorStateDrainer();
         InvokeSafely(ConfigurationChanged);
     }
 
@@ -379,6 +384,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     {
         ThrowIfDisposed();
         EnsureConfigurationWritable();
+        var shouldDrainSensorStates = false;
         await _topologyLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         var convertedSensorCount = 0;
         try
@@ -432,13 +438,14 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
                 RetireRuntime(runtime, now, remove: false, staged[runtime.Info.ScreenId]);
             }
             RefreshAssociatedSnapshot();
-            RefreshSensorStateSnapshot();
+            shouldDrainSensorStates = RefreshSensorStateSnapshot();
         }
         finally
         {
             _topologyLock.Release();
         }
 
+        if (shouldDrainSensorStates) StartDeferredSensorStateDrainer();
         InvokeSafely(ConfigurationChanged);
         PublishLog($"[GLOBAL/SIMULATION] One-click simulation started for {convertedSensorCount} enabled radar sensor(s).");
     }
@@ -1066,6 +1073,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         }
 
         if (Volatile.Read(ref _disposed) != 0) return;
+        var shouldDrainSensorStates = false;
         await _topologyLock.WaitAsync(_lifetime.Token).ConfigureAwait(false);
         try
         {
@@ -1084,9 +1092,10 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
                 }
             }
             RefreshAssociatedSnapshot();
-            RefreshSensorStateSnapshot();
+            shouldDrainSensorStates = RefreshSensorStateSnapshot();
         }
         finally { _topologyLock.Release(); }
+        if (shouldDrainSensorStates) StartDeferredSensorStateDrainer();
     }
 
     private async Task StopRuntimeAsync(ScreenRuntime runtime)
@@ -1466,7 +1475,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
                 checked(current.Snapshot.Version + 1));
             _sensorStates[key] = new SensorStateEntry(binding, snapshot);
             _sensorStatePublications.Enqueue(new SensorStatePublication(snapshot, _sensorStateChanged, _sensorStateSnapshotChanged));
-            if (!_isDrainingSensorStates)
+            if (!_isDrainingSensorStates && !_isSensorStateDrainDeferred)
             {
                 _isDrainingSensorStates = true;
                 shouldDrain = true;
@@ -1475,24 +1484,26 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         if (shouldDrain) DrainSensorStatePublications();
     }
 
-    private void RefreshSensorStateSnapshot()
+    private bool RefreshSensorStateSnapshot()
     {
         var bindings = _screens.Values
             .Select(runtime => runtime.IsRetiring ? runtime.PendingReplacement : runtime)
             .Where(runtime => runtime is { Associated: true, IsRetiring: false })
             .OfType<ScreenRuntime>()
             .Distinct()
-            .SelectMany(runtime => runtime.Pipelines.Values.Select(binding => (runtime, binding)))
+            .SelectMany(runtime => runtime.Pipelines.Values.Select(binding =>
+                (runtime, binding, state: binding.Pipeline.State)))
             .ToArray();
-        var shouldDrain = false;
         lock (_sensorStateGate)
         {
             var previous = _sensorStates;
             var refreshed = new Dictionary<string, SensorStateEntry>(StringComparer.OrdinalIgnoreCase);
-            foreach (var (runtime, binding) in bindings)
+            var publications = new List<SensorStatePublication>();
+            var nextBindingGeneration = _nextSensorBindingGeneration;
+            foreach (var (runtime, binding, pipelineState) in bindings)
             {
                 var key = SensorStateKey(runtime.Info.ScreenId, binding.Configuration.SensorId);
-                var state = new RadarSensorRuntimeStateChanged(runtime.Info.ScreenId, binding.Configuration.SensorId, binding.Pipeline.State);
+                var state = new RadarSensorRuntimeStateChanged(runtime.Info.ScreenId, binding.Configuration.SensorId, pipelineState);
                 if (previous.TryGetValue(key, out var existing) && ReferenceEquals(existing.Binding, binding))
                 {
                     var snapshot = existing.Snapshot.State == state
@@ -1501,17 +1512,39 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
                             checked(existing.Snapshot.Version + 1));
                     refreshed[key] = new SensorStateEntry(binding, snapshot);
                     if (snapshot != existing.Snapshot)
-                        _sensorStatePublications.Enqueue(new SensorStatePublication(snapshot, _sensorStateChanged, _sensorStateSnapshotChanged));
+                        publications.Add(new SensorStatePublication(snapshot, _sensorStateChanged, _sensorStateSnapshotChanged));
                 }
                 else
                 {
-                    var snapshot = new RadarSensorRuntimeStateSnapshot(state, checked(++_nextSensorBindingGeneration), 1);
+                    nextBindingGeneration = checked(nextBindingGeneration + 1);
+                    var snapshot = new RadarSensorRuntimeStateSnapshot(state, nextBindingGeneration, 1);
                     refreshed[key] = new SensorStateEntry(binding, snapshot);
-                    _sensorStatePublications.Enqueue(new SensorStatePublication(snapshot, _sensorStateChanged, _sensorStateSnapshotChanged));
+                    publications.Add(new SensorStatePublication(snapshot, _sensorStateChanged, _sensorStateSnapshotChanged));
                 }
             }
+
+            // Commit only after every checked generation/version calculation succeeds.
             _sensorStates.Clear();
             foreach (var (key, state) in refreshed) _sensorStates[key] = state;
+            _nextSensorBindingGeneration = nextBindingGeneration;
+            foreach (var publication in publications) _sensorStatePublications.Enqueue(publication);
+            if (publications.Count > 0)
+            {
+                // The topology caller still owns _topologyLock. Pause even an existing drainer at its
+                // next dequeue so no newly committed callback begins until that lock has been released.
+                _isSensorStateDrainDeferred = true;
+                return true;
+            }
+            return false;
+        }
+    }
+
+    private void StartDeferredSensorStateDrainer()
+    {
+        var shouldDrain = false;
+        lock (_sensorStateGate)
+        {
+            _isSensorStateDrainDeferred = false;
             if (_sensorStatePublications.Count > 0 && !_isDrainingSensorStates)
             {
                 _isDrainingSensorStates = true;
@@ -1521,6 +1554,38 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         if (shouldDrain) DrainSensorStatePublications();
     }
 
+    internal void SetSensorStateSequenceForTest(string screenId, string sensorId, long version, long nextBindingGeneration)
+    {
+        lock (_sensorStateGate)
+        {
+            var key = SensorStateKey(screenId, sensorId);
+            if (!_sensorStates.TryGetValue(key, out var current))
+                throw new InvalidOperationException($"Sensor state '{screenId}/{sensorId}' is not cached.");
+            _sensorStates[key] = current with
+            {
+                Snapshot = current.Snapshot with { Version = version }
+            };
+            _nextSensorBindingGeneration = nextBindingGeneration;
+        }
+    }
+
+    internal (long NextBindingGeneration, IReadOnlyList<RadarSensorRuntimeStateSnapshot> States, int PublicationCount, bool IsDraining, bool IsDrainDeferred)
+        GetSensorStateBookkeepingForTest()
+    {
+        lock (_sensorStateGate)
+        {
+            return (
+                _nextSensorBindingGeneration,
+                _sensorStates.Values.Select(value => value.Snapshot)
+                    .OrderBy(value => value.State.ScreenId, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(value => value.State.SensorId, StringComparer.OrdinalIgnoreCase)
+                    .ToArray(),
+                _sensorStatePublications.Count,
+                _isDrainingSensorStates,
+                _isSensorStateDrainDeferred);
+        }
+    }
+
     private void DrainSensorStatePublications()
     {
         while (true)
@@ -1528,6 +1593,11 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             SensorStatePublication publication;
             lock (_sensorStateGate)
             {
+                if (_isSensorStateDrainDeferred)
+                {
+                    _isDrainingSensorStates = false;
+                    return;
+                }
                 if (_sensorStatePublications.Count == 0)
                 {
                     _isDrainingSensorStates = false;

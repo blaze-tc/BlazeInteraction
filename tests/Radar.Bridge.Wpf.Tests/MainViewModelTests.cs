@@ -373,8 +373,15 @@ public sealed class MainViewModelTests
         var runtime = new TestRuntime();
         using var viewModel = new MainViewModel(configuration, runtime);
         runtime.PublishSensorStateSnapshot(new RadarSensorRuntimeStateSnapshot(
-            new RadarSensorRuntimeStateChanged("front", "s1", RadarSensorRuntimeState.Running), 2, 1));
+            new RadarSensorRuntimeStateChanged("front", "s1", RadarSensorRuntimeState.Running), 2, 5));
         await WaitUntilAsync(() => viewModel.ConnectedRadarCount == 1);
+
+        runtime.PublishSensorStateSnapshot(new RadarSensorRuntimeStateSnapshot(
+            new RadarSensorRuntimeStateChanged("front", "s1", RadarSensorRuntimeState.Stopped), 2, 5));
+        runtime.PublishSensorStateSnapshot(new RadarSensorRuntimeStateSnapshot(
+            new RadarSensorRuntimeStateChanged("front", "s1", RadarSensorRuntimeState.Faulted), 2, 4));
+        await Task.Delay(25);
+        Assert.Equal(RadarSensorRuntimeState.Running, viewModel.SelectedScreen!.Sensors.Single().RuntimeState);
 
         var oldSubscription = runtime.CaptureSensorStateSubscribers();
         runtime.PublishConfigurationChanged();
@@ -727,7 +734,13 @@ public sealed class MainViewModelTests
         public void PublishSensorStateSnapshot(RadarSensorRuntimeStateSnapshot snapshot)
         {
             var state = snapshot.State;
-            _sensorStates[string.Concat(state.ScreenId, "\u001F", state.SensorId)] = snapshot;
+            var key = string.Concat(state.ScreenId, "\u001F", state.SensorId);
+            if (!_sensorStates.TryGetValue(key, out var cached) ||
+                snapshot.BindingGeneration > cached.BindingGeneration ||
+                (snapshot.BindingGeneration == cached.BindingGeneration && snapshot.Version > cached.Version))
+            {
+                _sensorStates[key] = snapshot;
+            }
             SensorStateSnapshotChanged?.Invoke(snapshot);
         }
         public Action<RadarSensorRuntimeStateSnapshot>? CaptureSensorStateSubscribers() => SensorStateSnapshotChanged;
