@@ -12,7 +12,7 @@ public sealed class CameraVisionPlugin : IInteractionProviderPlugin
         "CameraVision RGB Camera",
         new Version(1, 0, 0),
         "Camera",
-        ["interaction-point", "preview"]);
+        ["interaction-point", "preview", "hand-landmarks"]);
 
     public IProviderSettingsViewFactory? SettingsViewFactory => null;
 

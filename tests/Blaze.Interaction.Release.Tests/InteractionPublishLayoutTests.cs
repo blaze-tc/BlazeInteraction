@@ -84,6 +84,16 @@ public sealed class InteractionPublishLayoutTests
             cameraDirectory,
             "profiles",
             "camera-vision-default.json")));
+        Assert.True(File.Exists(Path.Combine(
+            cameraDirectory,
+            "models",
+            "hand_landmarker.task")));
+        Assert.True(File.Exists(Path.Combine(
+            cameraDirectory,
+            "runtimes",
+            "win-x64",
+            "native",
+            "Blaze.HandTracking.Native.dll")));
         Assert.Contains(
             Directory.EnumerateFiles(cameraDirectory, "*.dll", SearchOption.AllDirectories),
             path => string.Equals(
@@ -107,7 +117,8 @@ public sealed class InteractionPublishLayoutTests
             dataRoot,
             expectedProviderId: "blaze.camera.vision",
             expectedInstanceId: "camera-vision-main",
-            selectedProviderId: "blaze.camera.vision");
+            selectedProviderId: "blaze.camera.vision",
+            expectInteractionFrame: false);
     }
 
     private static Task ConfigureRadarSimulationAsync(string radarDirectory) =>
@@ -147,7 +158,8 @@ public sealed class InteractionPublishLayoutTests
         string dataRoot,
         string expectedProviderId,
         string expectedInstanceId,
-        string? selectedProviderId = null)
+        string? selectedProviderId = null,
+        bool expectInteractionFrame = true)
     {
         var pipeName = $"Blaze.InteractionBridge.Release.{Guid.NewGuid():N}";
         var startInfo = new ProcessStartInfo(Path.Combine(publishRoot, "BlazeInteractionBridge.exe"))
@@ -209,10 +221,22 @@ public sealed class InteractionPublishLayoutTests
                 timeout.Token);
 
             var acknowledgement = await InteractionIpcStream.ReadAsync(client, timeout.Token);
+            if (acknowledgement.MessageType == InteractionMessageType.Error)
+            {
+                var error = acknowledgement.DeserializePayload<ErrorPayload>();
+                throw new InvalidOperationException(
+                    $"Bridge rejected Hello with {error.Code}: {error.Message}");
+            }
+
             Assert.Equal(InteractionMessageType.HelloAck, acknowledgement.MessageType);
             Assert.Equal(
                 expectedProviderId,
                 acknowledgement.DeserializePayload<HelloAckPayload>().ActiveProvider!.Id);
+
+            if (!expectInteractionFrame)
+            {
+                return;
+            }
 
             InteractionEnvelope frame;
             do
