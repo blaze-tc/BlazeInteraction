@@ -59,6 +59,11 @@ namespace Blaze.Interaction
                     continue;
                 }
 
+                if (point.Fp == null)
+                {
+                    throw new ArgumentException("InteractionPoint footprint is required.", nameof(frame));
+                }
+
                 var key = new PointKey(point.ProviderInstanceId, point.SurfaceId, point.Id);
                 InteractionPoint existing;
                 var exists = _pointsByKey.TryGetValue(key, out existing);
@@ -158,7 +163,8 @@ namespace Blaze.Interaction
                 PixelPosition = point.PixelPosition,
                 Confidence = point.Confidence,
                 TimestampUnixMs = point.TimestampUnixMs,
-                Extensions = point.Extensions
+                Extensions = point.Extensions,
+                Fp = new List<Vector2Data>(point.Fp)
             };
         }
 

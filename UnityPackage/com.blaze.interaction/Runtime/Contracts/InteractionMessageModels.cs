@@ -132,6 +132,9 @@ namespace Blaze.Interaction
         [JsonProperty("extensions")]
         public JObject Extensions { get; set; }
 
+        [JsonProperty("fp")]
+        public List<Vector2Data> Fp { get; set; } = new List<Vector2Data>();
+
         public bool TryGetExtension<T>(string key, out T extension) where T : class
         {
             extension = null;

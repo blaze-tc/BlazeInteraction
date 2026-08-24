@@ -42,6 +42,26 @@ namespace Blaze.Interaction.Tests
         }
 
         [Test]
+        public void Protocol_DeserializesFootprintAndDefaultsMissingFootprintToEmpty()
+        {
+            const string pointJson = "\"id\":7,\"surfaceId\":\"front\",\"providerId\":\"p\",\"providerInstanceId\":\"i\",\"sourceId\":\"s\",\"phase\":\"Move\",\"normalizedPosition\":{\"x\":0.5,\"y\":0.5},\"pixelPosition\":{\"x\":100,\"y\":200},\"confidence\":1,\"timestampUnixMs\":2,\"extensions\":null";
+            const string json = "{\"messageType\":\"InteractionFrame\",\"protocolVersion\":1,\"sequence\":1,\"payload\":{\"providerId\":\"p\",\"providerInstanceId\":\"i\",\"surfaceId\":\"front\",\"sequence\":1,\"timestampUnixMs\":2,\"points\":[{" + pointJson + ",\"fp\":[{\"x\":11,\"y\":22},{\"x\":33,\"y\":44}]}]}}";
+
+            var point = InteractionIpcProtocol.Deserialize(json)
+                .DeserializePayload<InteractionFrame>().Points[0];
+
+            Assert.That(point.Fp, Has.Count.EqualTo(2));
+            Assert.That(point.Fp[1].X, Is.EqualTo(33f));
+
+            const string missingFootprintJson = "{\"messageType\":\"InteractionFrame\",\"protocolVersion\":1,\"sequence\":1,\"payload\":{\"providerId\":\"p\",\"providerInstanceId\":\"i\",\"surfaceId\":\"front\",\"sequence\":1,\"timestampUnixMs\":2,\"points\":[{" + pointJson + "]}}";
+            var missingFootprintPoint = InteractionIpcProtocol.Deserialize(missingFootprintJson)
+                .DeserializePayload<InteractionFrame>().Points[0];
+
+            Assert.That(missingFootprintPoint.Fp, Is.Not.Null);
+            Assert.That(missingFootprintPoint.Fp, Is.Empty);
+        }
+
+        [Test]
         public void FragmentedAndStickyFrames_AreDecodedWithoutMessageBoundaryLoss()
         {
             var first = Frame("one");

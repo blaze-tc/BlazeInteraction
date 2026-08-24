@@ -73,6 +73,36 @@ namespace Blaze.Interaction.Tests
         }
 
         [Test]
+        public void DisconnectCancellation_PreservesFootprint()
+        {
+            var dispatcher = new InteractionFrameDispatcher();
+            var point = Point(7, InteractionPhase.Move, 100f);
+            point.Fp.Add(new Vector2Data { X = 90f, Y = 50f });
+            InteractionPoint removed = null;
+            dispatcher.PointRemoved += value => removed = value;
+
+            dispatcher.ApplyFrame(Frame(1, point));
+            dispatcher.SetConnectionState(false);
+
+            Assert.That(removed.Phase, Is.EqualTo(InteractionPhase.Cancel));
+            Assert.That(removed.Fp, Has.Count.EqualTo(1));
+            Assert.That(removed.Fp, Is.Not.SameAs(point.Fp));
+            point.Fp[0].X = 10f;
+            Assert.That(removed.Fp[0].X, Is.EqualTo(90f));
+        }
+
+        [Test]
+        public void ApplyFrame_RejectsExplicitlyNullFootprint()
+        {
+            var dispatcher = new InteractionFrameDispatcher();
+            var point = Point(7, InteractionPhase.Move, 100f);
+            point.Fp = null;
+
+            Assert.That(() => dispatcher.ApplyFrame(Frame(1, point)),
+                Throws.ArgumentException);
+        }
+
+        [Test]
         public void SamePointId_OnDifferentSurfaces_IsTrackedAndRemovedIndependently()
         {
             var dispatcher = new InteractionFrameDispatcher();
@@ -172,7 +202,8 @@ namespace Blaze.Interaction.Tests
                 NormalizedPosition = new Vector2Data { X = .5f, Y = .25f },
                 PixelPosition = new Vector2Data { X = pixelX, Y = 250f },
                 Confidence = .9f,
-                TimestampUnixMs = 1000
+                TimestampUnixMs = 1000,
+                Fp = new List<Vector2Data>()
             };
         }
     }
