@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Yuexin.Radar.Contracts;
 
 public readonly record struct RadarPixelRect(int X, int Y, int Width, int Height);
@@ -20,39 +22,47 @@ public sealed record RadarScreenInfo(
     bool IsPrimary,
     int Order);
 
-public sealed record RadarScreenPointer
+[method: JsonConstructor]
+public sealed record RadarScreenPointer(
+    int PointerId,
+    RadarPointerPhase Phase,
+    float NormalizedX,
+    float NormalizedY,
+    float PixelX,
+    float PixelY,
+    float Confidence,
+    long TimestampUnixMilliseconds)
 {
     public RadarScreenPointer(
-        int pointerId,
-        RadarPointerPhase phase,
-        float normalizedX,
-        float normalizedY,
-        float pixelX,
-        float pixelY,
-        float confidence,
-        long timestampUnixMilliseconds,
-        IReadOnlyList<RadarScreenPoint>? footprint = null)
+        int PointerId,
+        RadarPointerPhase Phase,
+        float NormalizedX,
+        float NormalizedY,
+        float PixelX,
+        float PixelY,
+        float Confidence,
+        long TimestampUnixMilliseconds,
+        IReadOnlyList<RadarScreenPoint> Footprint)
+        : this(
+            PointerId,
+            Phase,
+            NormalizedX,
+            NormalizedY,
+            PixelX,
+            PixelY,
+            Confidence,
+            TimestampUnixMilliseconds)
     {
-        PointerId = pointerId;
-        Phase = phase;
-        NormalizedX = normalizedX;
-        NormalizedY = normalizedY;
-        PixelX = pixelX;
-        PixelY = pixelY;
-        Confidence = confidence;
-        TimestampUnixMilliseconds = timestampUnixMilliseconds;
-        Footprint = RadarScreenFootprints.Freeze(footprint);
+        this.Footprint = Footprint;
     }
 
-    public int PointerId { get; }
-    public RadarPointerPhase Phase { get; }
-    public float NormalizedX { get; }
-    public float NormalizedY { get; }
-    public float PixelX { get; }
-    public float PixelY { get; }
-    public float Confidence { get; }
-    public long TimestampUnixMilliseconds { get; }
-    public IReadOnlyList<RadarScreenPoint> Footprint { get; }
+    private IReadOnlyList<RadarScreenPoint> _footprint = Array.Empty<RadarScreenPoint>();
+
+    public IReadOnlyList<RadarScreenPoint> Footprint
+    {
+        get => _footprint;
+        init => _footprint = RadarScreenFootprints.Freeze(value);
+    }
 }
 
 public sealed record RadarScreenPointerFrame(

@@ -2,27 +2,30 @@ using Yuexin.Radar.Contracts;
 
 namespace Yuexin.Radar.Processing;
 
-public readonly record struct SensorDetection
+public readonly record struct SensorDetection(
+    int DetectionId,
+    float PixelX,
+    float PixelY,
+    float Confidence)
 {
     public SensorDetection(
-        int detectionId,
-        float pixelX,
-        float pixelY,
-        float confidence,
-        IReadOnlyList<RadarScreenPoint>? footprint = null)
+        int DetectionId,
+        float PixelX,
+        float PixelY,
+        float Confidence,
+        IReadOnlyList<RadarScreenPoint> Footprint)
+        : this(DetectionId, PixelX, PixelY, Confidence)
     {
-        DetectionId = detectionId;
-        PixelX = pixelX;
-        PixelY = pixelY;
-        Confidence = confidence;
-        Footprint = RadarScreenFootprintSnapshots.Freeze(footprint);
+        this.Footprint = Footprint;
     }
 
-    public int DetectionId { get; }
-    public float PixelX { get; }
-    public float PixelY { get; }
-    public float Confidence { get; }
-    public IReadOnlyList<RadarScreenPoint> Footprint { get; }
+    private readonly IReadOnlyList<RadarScreenPoint>? _footprint = Array.Empty<RadarScreenPoint>();
+
+    public IReadOnlyList<RadarScreenPoint> Footprint
+    {
+        get => _footprint ?? Array.Empty<RadarScreenPoint>();
+        init => _footprint = RadarScreenFootprintSnapshots.Freeze(value);
+    }
 }
 
 internal static class RadarScreenFootprintSnapshots
@@ -48,33 +51,34 @@ public sealed class SensorDetectionFrame
     public IReadOnlyList<SensorDetection> Detections { get; }
 }
 
-public sealed record FusedScreenTarget
+public sealed record FusedScreenTarget(
+    int TrackId,
+    float PixelX,
+    float PixelY,
+    float Confidence,
+    int SourceSensorCount,
+    bool IsConfirmed)
 {
     public FusedScreenTarget(
-        int trackId,
-        float pixelX,
-        float pixelY,
-        float confidence,
-        int sourceSensorCount,
-        bool isConfirmed,
-        IReadOnlyList<RadarScreenPoint>? footprint = null)
+        int TrackId,
+        float PixelX,
+        float PixelY,
+        float Confidence,
+        int SourceSensorCount,
+        bool IsConfirmed,
+        IReadOnlyList<RadarScreenPoint> Footprint)
+        : this(TrackId, PixelX, PixelY, Confidence, SourceSensorCount, IsConfirmed)
     {
-        TrackId = trackId;
-        PixelX = pixelX;
-        PixelY = pixelY;
-        Confidence = confidence;
-        SourceSensorCount = sourceSensorCount;
-        IsConfirmed = isConfirmed;
-        Footprint = RadarScreenFootprintSnapshots.Freeze(footprint);
+        this.Footprint = Footprint;
     }
 
-    public int TrackId { get; }
-    public float PixelX { get; }
-    public float PixelY { get; }
-    public float Confidence { get; }
-    public int SourceSensorCount { get; }
-    public bool IsConfirmed { get; }
-    public IReadOnlyList<RadarScreenPoint> Footprint { get; }
+    private IReadOnlyList<RadarScreenPoint> _footprint = Array.Empty<RadarScreenPoint>();
+
+    public IReadOnlyList<RadarScreenPoint> Footprint
+    {
+        get => _footprint;
+        init => _footprint = RadarScreenFootprintSnapshots.Freeze(value);
+    }
 }
 
 public sealed class RadarScreenFusionResult

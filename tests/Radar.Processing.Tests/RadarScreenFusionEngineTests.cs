@@ -6,6 +6,98 @@ namespace Yuexin.Radar.Processing.Tests;
 public sealed class RadarScreenFusionEngineTests
 {
     [Fact]
+    public void PublicFootprintRecords_PreservePositionalSourceCompatibilityAndFreezeFootprints()
+    {
+        var source = new List<RadarScreenPoint> { new(90, 90) };
+        var detection = new SensorDetection(
+            DetectionId: 1,
+            PixelX: 100,
+            PixelY: 200,
+            Confidence: 0.8f,
+            Footprint: source);
+        var target = new FusedScreenTarget(
+            TrackId: 2,
+            PixelX: 300,
+            PixelY: 400,
+            Confidence: 0.7f,
+            SourceSensorCount: 1,
+            IsConfirmed: true,
+            Footprint: source);
+        var pointer = new RadarScreenPointer(
+            PointerId: 3,
+            Phase: RadarPointerPhase.Move,
+            NormalizedX: 0.1f,
+            NormalizedY: 0.2f,
+            PixelX: 500,
+            PixelY: 600,
+            Confidence: 0.6f,
+            TimestampUnixMilliseconds: 700,
+            Footprint: source);
+        var defaultDetection = new SensorDetection(DetectionId: 4, PixelX: 1, PixelY: 2, Confidence: 1f);
+        var defaultTarget = new FusedScreenTarget(
+            TrackId: 5,
+            PixelX: 3,
+            PixelY: 4,
+            Confidence: 1f,
+            SourceSensorCount: 1,
+            IsConfirmed: true);
+        var defaultPointer = new RadarScreenPointer(
+            PointerId: 6,
+            Phase: RadarPointerPhase.Move,
+            NormalizedX: 0f,
+            NormalizedY: 0f,
+            PixelX: 0f,
+            PixelY: 0f,
+            Confidence: 1f,
+            TimestampUnixMilliseconds: 0);
+        source.Clear();
+
+        var (detectionId, detectionX, detectionY, detectionConfidence) = detection;
+        var (trackId, targetX, targetY, targetConfidence, sourceSensorCount, isConfirmed) = target;
+        var (pointerId, phase, normalizedX, normalizedY, pointerX, pointerY, pointerConfidence, timestamp) = pointer;
+        var replacement = new List<RadarScreenPoint> { new(80, 80) };
+        var updatedDetection = detection with { Confidence = 0.5f, Footprint = replacement };
+        var updatedTarget = target with { Confidence = 0.4f, Footprint = replacement };
+        var updatedPointer = pointer with { Confidence = 0.3f, Footprint = replacement };
+        replacement.Clear();
+
+        Assert.Equal((1, 100f, 200f, 0.8f), (detectionId, detectionX, detectionY, detectionConfidence));
+        Assert.Equal((2, 300f, 400f, 0.7f, 1, true), (trackId, targetX, targetY, targetConfidence, sourceSensorCount, isConfirmed));
+        Assert.Equal((3, RadarPointerPhase.Move, 0.1f, 0.2f, 500f, 600f, 0.6f, 700L),
+            (pointerId, phase, normalizedX, normalizedY, pointerX, pointerY, pointerConfidence, timestamp));
+        Assert.Equal(0.5f, updatedDetection.Confidence);
+        Assert.Equal(0.4f, updatedTarget.Confidence);
+        Assert.Equal(0.3f, updatedPointer.Confidence);
+        Assert.All(
+            [detection.Footprint, target.Footprint, pointer.Footprint],
+            footprint => Assert.Equal([new RadarScreenPoint(90, 90)], footprint));
+        Assert.All(
+            [updatedDetection.Footprint, updatedTarget.Footprint, updatedPointer.Footprint],
+            footprint => Assert.Equal([new RadarScreenPoint(80, 80)], footprint));
+        Assert.All(
+            [defaultDetection.Footprint, defaultTarget.Footprint, defaultPointer.Footprint],
+            Assert.Empty);
+    }
+
+    [Fact]
+    public void Tick_UsesAcquisitionOrderWhenDetectionSortKeysTie()
+    {
+        var engine = CreateEngine(confirmFrames: 1);
+        var now = DateTimeOffset.UnixEpoch;
+        engine.Publish(new SensorDetectionFrame("sensor", now,
+        [
+            Detection(1, 100, 100, [new(20, 20)]),
+            Detection(1, 100, 100, [new(10, 10)])
+        ]));
+
+        var pointers = engine.Tick(now).Pointers;
+
+        Assert.Equal(
+            [new RadarScreenPoint(20, 20), new RadarScreenPoint(10, 10)],
+            pointers.Select(pointer => Assert.Single(pointer.Footprint)));
+    }
+
+    [Fact]
     public void Tick_MergesAllCurrentFootprintsInSensorThenAcquisitionOrder()
     {
         var engine = CreateEngine(confirmFrames: 1);
