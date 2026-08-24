@@ -19,12 +19,21 @@ internal sealed class BridgeProviderStorageContext : IProviderStorageContext
 
     public string GetProviderDataDirectory(string providerId)
     {
-        if (string.IsNullOrWhiteSpace(providerId) || !ProviderIdPattern.IsMatch(providerId))
+        if (string.IsNullOrWhiteSpace(providerId) ||
+            providerId is "." or ".." ||
+            !ProviderIdPattern.IsMatch(providerId))
         {
             throw new ArgumentException("Provider IDs may contain only letters, digits, '.', '_' and '-'.", nameof(providerId));
         }
 
-        return Path.Combine(DataRoot, "Providers", providerId);
+        var providersRoot = Path.GetFullPath(Path.Combine(DataRoot, "Providers"));
+        var candidate = Path.GetFullPath(Path.Combine(providersRoot, providerId));
+        if (!IsStrictChildDirectory(providersRoot, candidate))
+        {
+            throw new ArgumentException("The provider data directory must remain within the project Providers directory.", nameof(providerId));
+        }
+
+        return candidate;
     }
 }
 
@@ -63,5 +72,15 @@ internal sealed class BridgeServiceProvider : IServiceProvider
         }
 
         services[type] = service;
+    }
+
+    private static bool IsStrictChildDirectory(string parent, string candidate)
+    {
+        var relative = Path.GetRelativePath(parent, candidate);
+        return !string.Equals(relative, ".", StringComparison.Ordinal) &&
+               !Path.IsPathRooted(relative) &&
+               !string.Equals(relative, "..", StringComparison.Ordinal) &&
+               !relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
+               !relative.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal);
     }
 }

@@ -99,6 +99,64 @@ public sealed class RadarInteractionProviderTests
     }
 
     [Fact]
+    public async Task Load_RejectsExplicitProfileInsideTheProviderPackageWithoutModifyingIt()
+    {
+        using var provider = new TemporaryDirectory();
+        using var data = new TemporaryDirectory();
+        var bundledPath = await WriteBundledDefaultAsync(provider.Path);
+        var original = await File.ReadAllBytesAsync(bundledPath);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => RadarProviderConfiguration.LoadAsync(
+            provider.Path,
+            new FakeProviderStorageContext(data.Path, bundledPath),
+            CancellationToken.None));
+
+        Assert.Equal(original, await File.ReadAllBytesAsync(bundledPath));
+    }
+
+    [Fact]
+    public async Task FirstLoad_ConcurrentBootstrapLeavesNoTemporaryFiles()
+    {
+        using var provider = new TemporaryDirectory();
+        using var data = new TemporaryDirectory();
+        await WriteBundledDefaultAsync(provider.Path);
+        var storage = new FakeProviderStorageContext(data.Path, null);
+
+        var loads = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ =>
+            RadarProviderConfiguration.LoadAsync(provider.Path, storage, CancellationToken.None)));
+
+        var path = Assert.Single(loads.Select(result => result.ConfigurationPath).Distinct(StringComparer.OrdinalIgnoreCase));
+        Assert.True(File.Exists(path));
+        Assert.Empty(Directory.EnumerateFiles(Path.GetDirectoryName(path)!, ".config.json.*.tmp"));
+    }
+
+    [Fact]
+    public async Task ProductionProvider_PersistsTopologyThroughTheCoordinatorConfigurationPath()
+    {
+        using var providerDirectory = new TemporaryDirectory();
+        using var data = new TemporaryDirectory();
+        await WriteBundledDefaultAsync(providerDirectory.Path);
+        var storage = new FakeProviderStorageContext(data.Path, null);
+        var services = new DictionaryServiceProvider(new Dictionary<Type, object>
+        {
+            [typeof(IProviderStorageContext)] = storage,
+            [typeof(IRadarSensorPipelineFactory)] = new RadarSensorPipelineFactory(NullLoggerFactory.Instance)
+        });
+        var provider = new RadarPlugin().CreateProvider(new ProviderCreateContext(providerDirectory.Path, services));
+
+        await provider.InitializeAsync(
+            InitializationContext(Surface("project-front", true, 0, 2468, 1357)),
+            CancellationToken.None);
+        await provider.DisposeAsync();
+
+        var reloaded = await RadarProviderConfiguration.LoadAsync(providerDirectory.Path, storage, CancellationToken.None);
+        var screen = Assert.Single(reloaded.Configuration.Screens.Where(value => value.ScreenId == "project-front"));
+        Assert.Equal("project-front", screen.ScreenId);
+        Assert.Equal(2468, screen.UnityDefaultWidthPixels);
+        Assert.Equal(1357, screen.UnityDefaultHeightPixels);
+    }
+
+    [Fact]
     public void PluginDescriptorMatchesThePublishedRadarIdentityAndCapabilities()
     {
         var descriptor = new RadarPlugin().Descriptor;
@@ -589,11 +647,12 @@ public sealed class RadarInteractionProviderTests
     private static ProviderInitializationContext InitializationContext(params InteractionSurface[] surfaces) =>
         new(surfaces, EmptyServiceProvider.Instance);
 
-    private static async Task WriteBundledDefaultAsync(string providerDirectory)
+    private static async Task<string> WriteBundledDefaultAsync(string providerDirectory)
     {
         var path = Path.Combine(providerDirectory, "profiles", "radar-default.json");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await RadarConfigurationStore.SaveAsync(path, RadarAppConfiguration.CreateDefault());
+        return path;
     }
 
     private static InteractionSurface Surface(string id, bool primary, int order, int width = 1920, int height = 1080) => new()

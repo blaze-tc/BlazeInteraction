@@ -859,6 +859,16 @@ public sealed class BridgeHostTests
         Assert.Throws<ArgumentException>(() => storage.GetProviderDataDirectory("../outside"));
     }
 
+    [Theory]
+    [InlineData(".")]
+    [InlineData("..")]
+    public void ProviderStorageContext_RejectsProviderPathAliases(string providerId)
+    {
+        var storage = new BridgeProviderStorageContext(Path.GetTempPath(), null);
+
+        Assert.Throws<ArgumentException>(() => storage.GetProviderDataDirectory(providerId));
+    }
+
     [Fact]
     public void ProviderServiceProvider_ReturnsTheExactRegisteredStorageInstance()
     {
