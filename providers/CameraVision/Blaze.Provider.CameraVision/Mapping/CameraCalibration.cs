@@ -1,4 +1,5 @@
 using Blaze.Interaction.Contracts;
+using System.Text.Json.Serialization;
 
 namespace Blaze.Provider.CameraVision;
 
@@ -6,6 +7,7 @@ internal sealed class CameraCalibration
 {
     private const double DegenerateTolerance = 1e-6;
 
+    [JsonConstructor]
     public CameraCalibration(
         Vector2Data p1,
         Vector2Data p2,
@@ -31,6 +33,7 @@ internal sealed class CameraCalibration
     public Vector2Data P2 { get; }
     public Vector2Data P3 { get; }
     public Vector2Data P4 { get; }
+    [JsonIgnore]
     public IReadOnlyList<Vector2Data> Points { get; }
 
     private static void ValidateConvexQuadrilateral(IReadOnlyList<Vector2Data> points)
