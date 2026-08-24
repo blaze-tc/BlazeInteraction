@@ -6,6 +6,64 @@ namespace Yuexin.Radar.Processing.Tests;
 public sealed class RadarScreenFusionEngineTests
 {
     [Fact]
+    public void Tick_MergesAllCurrentFootprintsInSensorThenAcquisitionOrder()
+    {
+        var engine = CreateEngine(confirmFrames: 1);
+        var now = DateTimeOffset.UnixEpoch;
+        engine.Publish(new SensorDetectionFrame("sensor-b", now,
+        [
+            Detection(2, 100, 100, [new(12, 12), new(13, 13)])
+        ]));
+        engine.Publish(new SensorDetectionFrame("sensor-a", now,
+        [
+            Detection(1, 102, 100, [new(1, 1), new(2, 2)])
+        ]));
+
+        var pointer = Assert.Single(engine.Tick(now).Pointers);
+
+        Assert.Equal(
+            [new RadarScreenPoint(1, 1), new(2, 2), new(12, 12), new(13, 13)],
+            pointer.Footprint);
+    }
+
+    [Fact]
+    public void Tick_MissingTrackDoesNotRepeatPreviousFootprint()
+    {
+        var engine = CreateEngine(confirmFrames: 1, lostFrames: 3);
+        var now = DateTimeOffset.UnixEpoch;
+        engine.Publish(new SensorDetectionFrame("sensor", now,
+        [
+            Detection(1, 100, 100, [new(90, 90)])
+        ]));
+        Assert.NotEmpty(Assert.Single(engine.Tick(now).Pointers).Footprint);
+
+        var held = Assert.Single(engine.Tick(now.AddMilliseconds(1)).Pointers);
+
+        Assert.Empty(held.Footprint);
+    }
+
+    [Fact]
+    public void Tick_UsesFrozenFootprintSnapshots()
+    {
+        var source = new List<RadarScreenPoint> { new(90, 90) };
+        var detection = Detection(1, 100, 100, source);
+        source.Clear();
+        var engine = CreateEngine(confirmFrames: 1);
+        var now = DateTimeOffset.UnixEpoch;
+
+        engine.Publish(new SensorDetectionFrame("sensor", now, [detection]));
+
+        var result = engine.Tick(now);
+        var target = Assert.Single(result.Targets);
+        var pointer = Assert.Single(result.Pointers);
+
+        Assert.Equal([new RadarScreenPoint(90, 90)], target.Footprint);
+        Assert.Equal([new RadarScreenPoint(90, 90)], pointer.Footprint);
+        Assert.False(target.Footprint is RadarScreenPoint[]);
+        Assert.False(pointer.Footprint is RadarScreenPoint[]);
+    }
+
+    [Fact]
     public void Tick_MergesOnlyCrossSensorDetectionsWithinThreshold()
     {
         var engine = CreateEngine(fusionDistancePixels: 80f, confirmFrames: 1);
@@ -394,6 +452,13 @@ public sealed class RadarScreenFusionEngineTests
             MinimumPressMilliseconds = 0
         };
     }
+
+    private static SensorDetection Detection(
+        int id,
+        float pixelX,
+        float pixelY,
+        IReadOnlyList<RadarScreenPoint> footprint) =>
+        new(id, pixelX, pixelY, 1f, footprint);
 
     private static int PointerPositionCount(RadarScreenFusionEngine engine)
     {

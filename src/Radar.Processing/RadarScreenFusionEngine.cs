@@ -2,7 +2,36 @@ using Yuexin.Radar.Contracts;
 
 namespace Yuexin.Radar.Processing;
 
-public readonly record struct SensorDetection(int DetectionId, float PixelX, float PixelY, float Confidence);
+public readonly record struct SensorDetection
+{
+    public SensorDetection(
+        int detectionId,
+        float pixelX,
+        float pixelY,
+        float confidence,
+        IReadOnlyList<RadarScreenPoint>? footprint = null)
+    {
+        DetectionId = detectionId;
+        PixelX = pixelX;
+        PixelY = pixelY;
+        Confidence = confidence;
+        Footprint = RadarScreenFootprintSnapshots.Freeze(footprint);
+    }
+
+    public int DetectionId { get; }
+    public float PixelX { get; }
+    public float PixelY { get; }
+    public float Confidence { get; }
+    public IReadOnlyList<RadarScreenPoint> Footprint { get; }
+}
+
+internal static class RadarScreenFootprintSnapshots
+{
+    internal static IReadOnlyList<RadarScreenPoint> Freeze(IReadOnlyList<RadarScreenPoint>? footprint) =>
+        footprint is null || footprint.Count == 0
+            ? Array.Empty<RadarScreenPoint>()
+            : Array.AsReadOnly(footprint.ToArray());
+}
 
 public sealed class SensorDetectionFrame
 {
@@ -19,13 +48,34 @@ public sealed class SensorDetectionFrame
     public IReadOnlyList<SensorDetection> Detections { get; }
 }
 
-public sealed record FusedScreenTarget(
-    int TrackId,
-    float PixelX,
-    float PixelY,
-    float Confidence,
-    int SourceSensorCount,
-    bool IsConfirmed);
+public sealed record FusedScreenTarget
+{
+    public FusedScreenTarget(
+        int trackId,
+        float pixelX,
+        float pixelY,
+        float confidence,
+        int sourceSensorCount,
+        bool isConfirmed,
+        IReadOnlyList<RadarScreenPoint>? footprint = null)
+    {
+        TrackId = trackId;
+        PixelX = pixelX;
+        PixelY = pixelY;
+        Confidence = confidence;
+        SourceSensorCount = sourceSensorCount;
+        IsConfirmed = isConfirmed;
+        Footprint = RadarScreenFootprintSnapshots.Freeze(footprint);
+    }
+
+    public int TrackId { get; }
+    public float PixelX { get; }
+    public float PixelY { get; }
+    public float Confidence { get; }
+    public int SourceSensorCount { get; }
+    public bool IsConfirmed { get; }
+    public IReadOnlyList<RadarScreenPoint> Footprint { get; }
+}
 
 public sealed class RadarScreenFusionResult
 {
@@ -130,7 +180,8 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
                 track.PixelY,
                 track.Confidence,
                 track.SourceSensorCount,
-                track.ObservedFrames >= _options.ConfirmFrames))
+                track.ObservedFrames >= _options.ConfirmFrames,
+                track.MissingFrames == 0 ? track.Footprint : Array.Empty<RadarScreenPoint>()))
             .ToArray();
 
         var pointerTargets = activeTracks
@@ -148,7 +199,11 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
 
         foreach (var target in targets.Where(target => target.IsConfirmed))
         {
-            _pointerPositions[target.TrackId] = new PointerPosition(target.PixelX, target.PixelY, target.Confidence);
+            _pointerPositions[target.TrackId] = new PointerPosition(
+                target.PixelX,
+                target.PixelY,
+                target.Confidence,
+                target.Footprint);
         }
 
         var pointerEvents = _pointerStateMachine.Update(pointerTargets, timestamp);
@@ -243,7 +298,9 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
                 continue;
             }
 
-            current.AddRange(pair.Value.Detections.Select(detection => new DetectionInput(pair.Key, detection)));
+            current.AddRange(pair.Value.Detections.Select((detection, acquisitionIndex) =>
+                new DetectionInput(pair.Key, detection, acquisitionIndex)));
+            _latestFrames.Remove(pair.Key);
         }
 
         var detections = current
@@ -252,6 +309,7 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
             .ThenBy(detection => detection.Detection.PixelY)
             .ThenBy(detection => detection.Detection.DetectionId)
             .ThenBy(detection => detection.Detection.Confidence)
+            .ThenBy(detection => detection.AcquisitionIndex)
             .ToArray();
         var parent = Enumerable.Range(0, detections.Length).ToArray();
         var candidates = new List<FusionCandidate>();
@@ -296,7 +354,12 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
                     members.Average(member => member.Detection.PixelX),
                     members.Average(member => member.Detection.PixelY),
                     members.Average(member => member.Detection.Confidence),
-                    members.Select(member => member.SensorId).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+                    members.Select(member => member.SensorId).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+                    Array.AsReadOnly(members
+                        .OrderBy(member => member.SensorId, StringComparer.OrdinalIgnoreCase)
+                        .ThenBy(member => member.AcquisitionIndex)
+                        .SelectMany(member => member.Detection.Footprint)
+                        .ToArray()));
             })
             .ToArray();
     }
@@ -335,6 +398,7 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
             track.PixelY = Smooth(track.PixelY, observation.PixelY);
             track.Confidence = Smooth(track.Confidence, observation.Confidence);
             track.SourceSensorCount = observation.SourceSensorCount;
+            track.Footprint = observation.Footprint;
             track.ObservedFrames++;
             track.MissingFrames = 0;
         }
@@ -347,7 +411,13 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
             }
 
             var observation = observations[index];
-            var track = new TrackState(_nextTrackId++, observation.PixelX, observation.PixelY, observation.Confidence, observation.SourceSensorCount);
+            var track = new TrackState(
+                _nextTrackId++,
+                observation.PixelX,
+                observation.PixelY,
+                observation.Confidence,
+                observation.SourceSensorCount,
+                observation.Footprint);
             _tracks.Add(track.TrackId, track);
             matchedTrackIds.Add(track.TrackId);
         }
@@ -379,7 +449,8 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
             position.PixelX,
             position.PixelY,
             position.Confidence,
-            timestamp.ToUnixTimeMilliseconds());
+            timestamp.ToUnixTimeMilliseconds(),
+            position.Footprint);
     }
 
     private float Smooth(float previous, float current) => previous + _options.SmoothingAlpha * (current - previous);
@@ -475,20 +546,36 @@ public sealed class RadarScreenFusionEngine : IRadarScreenFusionEngine
         return value.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '-');
     }
 
-    private sealed class TrackState(int trackId, float pixelX, float pixelY, float confidence, int sourceSensorCount)
+    private sealed class TrackState(
+        int trackId,
+        float pixelX,
+        float pixelY,
+        float confidence,
+        int sourceSensorCount,
+        IReadOnlyList<RadarScreenPoint> footprint)
     {
         public int TrackId { get; } = trackId;
         public float PixelX { get; set; } = pixelX;
         public float PixelY { get; set; } = pixelY;
         public float Confidence { get; set; } = confidence;
         public int SourceSensorCount { get; set; } = sourceSensorCount;
+        public IReadOnlyList<RadarScreenPoint> Footprint { get; set; } = footprint;
         public int ObservedFrames { get; set; } = 1;
         public int MissingFrames { get; set; }
     }
 
-    private readonly record struct DetectionInput(string SensorId, SensorDetection Detection);
+    private readonly record struct DetectionInput(string SensorId, SensorDetection Detection, int AcquisitionIndex);
     private readonly record struct FusionCandidate(int Left, int Right, float Distance);
-    private readonly record struct FusedObservation(float PixelX, float PixelY, float Confidence, int SourceSensorCount);
+    private sealed record FusedObservation(
+        float PixelX,
+        float PixelY,
+        float Confidence,
+        int SourceSensorCount,
+        IReadOnlyList<RadarScreenPoint> Footprint);
     private readonly record struct Association(int TrackId, int ObservationIndex, float Distance);
-    private readonly record struct PointerPosition(float PixelX, float PixelY, float Confidence);
+    private readonly record struct PointerPosition(
+        float PixelX,
+        float PixelY,
+        float Confidence,
+        IReadOnlyList<RadarScreenPoint> Footprint);
 }

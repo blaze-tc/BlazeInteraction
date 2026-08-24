@@ -67,6 +67,64 @@ public sealed class IpcFrameCodecTests
     }
 
     [Fact]
+    public void EncodeAndAppend_RoundTripsPointerFootprintCoordinates()
+    {
+        var batch = new PointerBatchPayload([
+            new RadarScreenPointerFrame(
+                new RadarScreenInfo("front", "Front", 4096, 1536, true, 1),
+                7,
+                1000,
+                [new RadarScreenPointer(
+                    3,
+                    RadarPointerPhase.Move,
+                    0.25f,
+                    0.75f,
+                    1024f,
+                    1152f,
+                    0.9f,
+                    1000,
+                    [new RadarScreenPoint(1000f, 1100f), new RadarScreenPoint(1050f, 1150f)])])
+        ]);
+
+        var bytes = IpcFrameCodec.Encode(IpcEnvelope.Create(IpcMessageType.PointerBatch, 7, batch, 1000));
+        var decoded = Assert.Single(new IpcFrameDecoder().Append(bytes));
+        var pointer = Assert.Single(decoded.DeserializePayload<PointerBatchPayload>().Screens[0].Pointers);
+
+        Assert.Equal(
+            [new RadarScreenPoint(1000f, 1100f), new RadarScreenPoint(1050f, 1150f)],
+            pointer.Footprint);
+    }
+
+    [Fact]
+    public void DecodePayload_LegacyPointerBatchWithoutFootprintUsesEmptyList()
+    {
+        using var payload = JsonDocument.Parse("""
+            {
+              "screens": [
+                {
+                  "screen": { "screenId": "front", "name": "Front", "widthPixels": 4096, "heightPixels": 1536, "isPrimary": true, "order": 1 },
+                  "sequence": 7,
+                  "timestampUnixMilliseconds": 1000,
+                  "pointers": [
+                    { "pointerId": 3, "phase": "Move", "normalizedX": 0.25, "normalizedY": 0.75, "pixelX": 1024, "pixelY": 1152, "confidence": 0.9, "timestampUnixMilliseconds": 1000 }
+                  ]
+                }
+              ]
+            }
+            """);
+        var envelope = new IpcEnvelope(
+            IpcProtocolVersion.Current,
+            IpcMessageType.PointerBatch,
+            7,
+            1000,
+            payload.RootElement.Clone());
+
+        var pointer = Assert.Single(envelope.DeserializePayload<PointerBatchPayload>().Screens[0].Pointers);
+
+        Assert.Empty(pointer.Footprint);
+    }
+
+    [Fact]
     public void ProtocolVersion_RejectsVersionOneWithExplicitMessage()
     {
         var envelope = IpcEnvelope.Create(IpcMessageType.Hello, 1, new { }, protocolVersion: 1);
