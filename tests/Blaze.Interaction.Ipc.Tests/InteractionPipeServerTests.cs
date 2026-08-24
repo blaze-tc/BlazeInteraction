@@ -892,6 +892,31 @@ public sealed class InteractionPipeServerTests
             new JsonException("Injected writer serialization fault."));
     }
 
+    [Fact]
+    public async Task Session_CancellationNormalizesDisposedTransportWriter()
+    {
+        using var cancellation = new CancellationTokenSource();
+        await using var stream = new CancellationDisposesWriteStream();
+        await using var session = new InteractionPipeSession(
+            stream,
+            controlQueueCapacity: 1,
+            InteractionIpcProtocol.DefaultMaximumPayloadLength,
+            cancellation.Token);
+        await session.Outbound.EnqueueControlAsync(
+            InteractionEnvelope.Create(
+                InteractionMessageType.Status,
+                1,
+                new StatusPayload("ready", "Ready", "Ready.", null, 1)));
+        var run = session.RunAsync();
+        await stream.WriteStarted.WaitAsync(TimeSpan.FromSeconds(5));
+
+        cancellation.Cancel();
+
+        Assert.Equal(
+            InteractionPipeSessionOutcome.Cancelled,
+            await run.WaitAsync(TimeSpan.FromSeconds(5)));
+    }
+
     private static HelloAckPayload Ack() => new(
         "1.0.0",
         new ProviderReferencePayload("blaze.radar.f10f20", "radar-main"),
@@ -1170,6 +1195,48 @@ public sealed class InteractionPipeServerTests
             CancellationToken cancellationToken = default)
         {
             await Task.Delay(Timeout.Infinite, cancellationToken);
+        }
+    }
+
+    private sealed class CancellationDisposesWriteStream : Stream
+    {
+        private readonly TaskCompletionSource _writeStarted = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal Task WriteStarted => _writeStarted.Task;
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override Task FlushAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            return 0;
+        }
+
+        public override async ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            _writeStarted.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw new ObjectDisposedException(nameof(CancellationDisposesWriteStream));
+            }
         }
     }
 

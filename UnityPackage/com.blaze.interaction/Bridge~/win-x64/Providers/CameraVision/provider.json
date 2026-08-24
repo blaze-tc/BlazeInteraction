@@ -1,0 +1,13 @@
+{
+  "id": "blaze.camera.vision",
+  "displayName": "CameraVision RGB Camera",
+  "version": "1.0.0",
+  "providerApiVersion": 1,
+  "entryAssembly": "Blaze.Provider.CameraVision.dll",
+  "entryType": "Blaze.Provider.CameraVision.CameraVisionPlugin",
+  "category": "Camera",
+  "capabilities": [
+    "interaction-point",
+    "preview"
+  ]
+}

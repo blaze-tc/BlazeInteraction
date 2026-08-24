@@ -695,6 +695,9 @@ internal sealed class InteractionPipeSession : IAsyncDisposable
             catch (IOException)
             {
             }
+            catch (ObjectDisposedException) when (_cancellation.IsCancellationRequested)
+            {
+            }
 
             return outcome;
         }
@@ -709,12 +712,17 @@ internal sealed class InteractionPipeSession : IAsyncDisposable
         catch (IOException)
         {
         }
+        catch (ObjectDisposedException) when (_cancellation.IsCancellationRequested)
+        {
+        }
         finally
         {
             Deactivate();
         }
 
-        return InteractionPipeSessionOutcome.SendTimeout;
+        return _cancellation.IsCancellationRequested
+            ? InteractionPipeSessionOutcome.Cancelled
+            : InteractionPipeSessionOutcome.SendTimeout;
     }
 
     private static void ObserveFault(Task task)

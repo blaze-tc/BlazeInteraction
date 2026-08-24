@@ -172,6 +172,50 @@ public sealed class InteractionFrameCodecTests
     }
 
     [Fact]
+    public void CameraVisionFrame_UsesTheStandardInteractionFrameMessageWithoutCameraSpecificIpc()
+    {
+        var frame = new InteractionFrame
+        {
+            ProviderId = "blaze.camera.vision",
+            ProviderInstanceId = "camera-vision-main",
+            SurfaceId = "main",
+            Sequence = 7,
+            TimestampUnixMs = 1234,
+            Points =
+            [
+                new InteractionPoint
+                {
+                    Id = 1,
+                    SurfaceId = "main",
+                    ProviderId = "blaze.camera.vision",
+                    ProviderInstanceId = "camera-vision-main",
+                    SourceId = "fake-visual-detector",
+                    Phase = InteractionPhase.Hover,
+                    NormalizedPosition = new Vector2Data(0.25f, 0.75f),
+                    PixelPosition = new Vector2Data(480f, 270f),
+                    Confidence = 1f,
+                    TimestampUnixMs = 1234
+                }
+            ]
+        };
+
+        var encoded = InteractionFrameCodec.Encode(InteractionEnvelope.Create(
+            InteractionMessageType.InteractionFrame,
+            frame.Sequence,
+            frame));
+        var decoded = InteractionFrameCodec.DecodePayload(encoded.AsSpan(4));
+        var payload = decoded.DeserializePayload<InteractionFrame>();
+
+        Assert.Equal(InteractionMessageType.InteractionFrame, decoded.MessageType);
+        Assert.Equal("blaze.camera.vision", payload.ProviderId);
+        Assert.Equal("camera-vision-main", payload.ProviderInstanceId);
+        Assert.Equal(InteractionPhase.Hover, Assert.Single(payload.Points).Phase);
+        Assert.DoesNotContain(
+            Enum.GetNames<InteractionMessageType>(),
+            name => name.Contains("Camera", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void HelloJson_ContainsUnitySdkAndSurfaceTopology()
     {
         var hello = InteractionEnvelope.Create(InteractionMessageType.Hello, 1,

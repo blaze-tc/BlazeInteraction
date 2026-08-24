@@ -477,15 +477,23 @@ foreach ($platform in $platforms) {
     $argumentLine = ($arguments | ForEach-Object {
         '"' + $_.Replace('"', '\"') + '"'
     }) -join ' '
-    $process = Start-Process `
-        -FilePath $editor.Path `
-        -ArgumentList $argumentLine `
-        -WindowStyle Hidden `
-        -Wait `
-        -PassThru
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $editor.Path
+    $startInfo.Arguments = $argumentLine
+    $startInfo.WorkingDirectory = $repositoryRoot
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    $process = [System.Diagnostics.Process]::Start($startInfo)
+    if ($null -eq $process) {
+        throw "Unity $platform process could not be started."
+    }
+    $process.WaitForExit()
+    $exitCode = $process.ExitCode
+    $process.Dispose()
     Assert-UnityTestResults `
         -ResultPath $resultPath `
         -LogPath $logPath `
         -Platform $platform `
-        -ExitCode $process.ExitCode
+        -ExitCode $exitCode
 }

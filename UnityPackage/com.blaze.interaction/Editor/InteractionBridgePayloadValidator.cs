@@ -85,6 +85,47 @@ namespace Blaze.Interaction.Editor
                 return "External Radar Provider entry assembly is missing: " + manifest.entryAssembly;
             }
 
+            var cameraDirectory = Path.Combine(directory, "Providers", "CameraVision");
+            var cameraManifestPath = Path.Combine(cameraDirectory, "provider.json");
+            if (!File.Exists(cameraManifestPath))
+            {
+                return "External CameraVision Provider manifest is missing.";
+            }
+
+            ProviderManifest cameraManifest;
+            try
+            {
+                cameraManifest = JsonUtility.FromJson<ProviderManifest>(File.ReadAllText(cameraManifestPath));
+            }
+            catch (Exception exception)
+            {
+                return "External CameraVision Provider manifest is invalid JSON: " + exception.Message;
+            }
+
+            if (cameraManifest == null ||
+                !string.Equals(cameraManifest.id, "blaze.camera.vision", StringComparison.Ordinal) ||
+                !string.Equals(cameraManifest.version, expectedVersion, StringComparison.Ordinal) ||
+                cameraManifest.providerApiVersion != 1 ||
+                !string.Equals(cameraManifest.entryAssembly, "Blaze.Provider.CameraVision.dll", StringComparison.Ordinal) ||
+                !string.Equals(cameraManifest.entryType, "Blaze.Provider.CameraVision.CameraVisionPlugin", StringComparison.Ordinal))
+            {
+                return "External CameraVision Provider manifest does not match Provider API 1 and version " + expectedVersion + ".";
+            }
+
+            if (!File.Exists(Path.Combine(cameraDirectory, cameraManifest.entryAssembly)))
+            {
+                return "External CameraVision Provider entry assembly is missing: " + cameraManifest.entryAssembly;
+            }
+
+            var nativeLibraries = Directory.GetFiles(
+                cameraDirectory,
+                "OpenCvSharpExtern.dll",
+                SearchOption.AllDirectories);
+            if (nativeLibraries.Length != 1)
+            {
+                return "External CameraVision Provider must contain exactly one OpenCvSharpExtern.dll native runtime.";
+            }
+
             return null;
         }
 

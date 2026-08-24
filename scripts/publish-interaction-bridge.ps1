@@ -34,8 +34,11 @@ else {
 
 $bridgeProject = Join-Path $repositoryRoot 'src\Blaze.Interaction.Bridge.Wpf\Blaze.Interaction.Bridge.Wpf.csproj'
 $radarProject = Join-Path $repositoryRoot 'providers\Radar\Blaze.Provider.Radar\Blaze.Provider.Radar.csproj'
+$cameraVisionProject = Join-Path $repositoryRoot 'providers\CameraVision\Blaze.Provider.CameraVision\Blaze.Provider.CameraVision.csproj'
 $radarDirectory = Join-Path $publishRoot 'Providers\Radar'
+$cameraVisionDirectory = Join-Path $publishRoot 'Providers\CameraVision'
 [System.IO.Directory]::CreateDirectory($radarDirectory) | Out-Null
+[System.IO.Directory]::CreateDirectory($cameraVisionDirectory) | Out-Null
 
 Push-Location $repositoryRoot
 try {
@@ -49,6 +52,12 @@ try {
         -p:PublishSingleFile=false -p:UseAppHost=false --nologo -o $radarDirectory
     if ($LASTEXITCODE -ne 0) {
         throw "Radar Provider publish failed with exit code $LASTEXITCODE."
+    }
+
+    & dotnet publish $cameraVisionProject -c Release -r $Runtime --self-contained false `
+        -p:PublishSingleFile=false -p:UseAppHost=false --nologo -o $cameraVisionDirectory
+    if ($LASTEXITCODE -ne 0) {
+        throw "CameraVision Provider publish failed with exit code $LASTEXITCODE."
     }
 }
 finally {
@@ -83,6 +92,29 @@ if (-not (Test-Path -LiteralPath $entryAssembly -PathType Leaf)) {
     throw 'The external Radar Provider entry assembly is missing.'
 }
 
+$cameraVisionManifestPath = Join-Path $cameraVisionDirectory 'provider.json'
+if (-not (Test-Path -LiteralPath $cameraVisionManifestPath -PathType Leaf)) {
+    throw 'The external CameraVision Provider manifest is missing.'
+}
+
+$cameraVisionManifest = Get-Content -LiteralPath $cameraVisionManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+if ($cameraVisionManifest.id -cne 'blaze.camera.vision' -or
+    $cameraVisionManifest.providerApiVersion -ne 1 -or
+    $cameraVisionManifest.entryAssembly -cne 'Blaze.Provider.CameraVision.dll' -or
+    $cameraVisionManifest.entryType -cne 'Blaze.Provider.CameraVision.CameraVisionPlugin') {
+    throw 'The external CameraVision Provider manifest does not match Provider API 1.'
+}
+
+$cameraVisionEntryAssembly = Join-Path $cameraVisionDirectory $cameraVisionManifest.entryAssembly
+if (-not (Test-Path -LiteralPath $cameraVisionEntryAssembly -PathType Leaf)) {
+    throw 'The external CameraVision Provider entry assembly is missing.'
+}
+$cameraVisionNativeLibrary = @(Get-ChildItem -LiteralPath $cameraVisionDirectory `
+    -Filter 'OpenCvSharpExtern.dll' -File -Recurse)
+if ($cameraVisionNativeLibrary.Count -ne 1) {
+    throw 'CameraVision publish must contain exactly one OpenCvSharpExtern.dll native runtime.'
+}
+
 [System.IO.File]::WriteAllText(
     (Join-Path $publishRoot 'bridge-version.txt'),
     $expectedVersion,
@@ -105,6 +137,7 @@ finally {
 Write-Host "BlazeInteractionBridge published to: $publishRoot"
 Write-Host "BlazeInteractionBridge.exe SHA-256: $hash"
 Write-Host "External Radar Provider: $radarDirectory"
+Write-Host "External CameraVision Provider: $cameraVisionDirectory"
 
 if ($EmbedUnityPackage) {
     $embeddedDirectory = [System.IO.Path]::GetFullPath((

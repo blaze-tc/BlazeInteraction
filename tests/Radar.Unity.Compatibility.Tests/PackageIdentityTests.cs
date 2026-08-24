@@ -63,6 +63,23 @@ public sealed class PackageIdentityTests
     }
 
     [Fact]
+    public void BasicInteractionSample_RendersStandardPointsAsAProviderNeutralCursor()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            PackageRoot(),
+            "Samples~",
+            "BasicInteraction",
+            "BasicInteractionPresenter.cs"));
+
+        Assert.Contains("EnsureCursor", source, StringComparison.Ordinal);
+        Assert.Contains("UpdateCursor", source, StringComparison.Ordinal);
+        Assert.Contains("InteractionManager.Instance.Points", source, StringComparison.Ordinal);
+        Assert.Contains("cursorImage.raycastTarget = false", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("CameraVision", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("NamedPipe", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Runtime_IsProtocolOneProviderNeutralAndHasNoCameraHandArtifacts()
     {
         var runtimeRoot = Path.Combine(PackageRoot(), "Runtime");
@@ -121,6 +138,8 @@ public sealed class PackageIdentityTests
         var runner = File.ReadAllText(Path.Combine(repositoryRoot, "scripts", "test-unity-package.ps1"));
         Assert.Contains("com.blaze.interaction", runner, StringComparison.Ordinal);
         Assert.Contains("\"testables\": [\"com.blaze.interaction\"]", runner, StringComparison.Ordinal);
+        Assert.Contains("[System.Diagnostics.Process]::Start", runner, StringComparison.Ordinal);
+        Assert.DoesNotContain("Start-Process", runner, StringComparison.Ordinal);
         Assert.DoesNotContain("com.blaze.radar\": \"file:", runner, StringComparison.Ordinal);
     }
 
@@ -172,13 +191,28 @@ public sealed class PackageIdentityTests
     }
 
     [Fact]
-    public void EmbeddedPayloadContainsOneHostExecutableAndExternalRadarProvider()
+    public void EmbeddedPayloadContainsOneHostExecutableAndBothExternalProviders()
     {
         var bridge = Path.Combine(PackageRoot(), "Bridge~", "win-x64");
         Assert.Equal(
             "BlazeInteractionBridge.exe",
             Path.GetFileName(Assert.Single(Directory.EnumerateFiles(bridge, "*.exe", SearchOption.AllDirectories))));
         Assert.True(File.Exists(Path.Combine(bridge, "Providers", "Radar", "provider.json")));
+        Assert.True(File.Exists(Path.Combine(bridge, "Providers", "CameraVision", "provider.json")));
+        Assert.True(File.Exists(Path.Combine(
+            bridge,
+            "Providers",
+            "CameraVision",
+            "Blaze.Provider.CameraVision.dll")));
+        Assert.Contains(
+            Directory.EnumerateFiles(
+                Path.Combine(bridge, "Providers", "CameraVision"),
+                "*.dll",
+                SearchOption.AllDirectories),
+            path => string.Equals(
+                Path.GetFileName(path),
+                "OpenCvSharpExtern.dll",
+                StringComparison.OrdinalIgnoreCase));
     }
 
     private static string PackageRoot() =>

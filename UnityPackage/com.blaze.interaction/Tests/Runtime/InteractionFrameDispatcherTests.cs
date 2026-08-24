@@ -100,6 +100,38 @@ namespace Blaze.Interaction.Tests
             }
         }
 
+        [Test]
+        public void CameraVisionFakePoint_UsesTheSameProviderNeutralDispatcherPath()
+        {
+            var dispatcher = new InteractionFrameDispatcher();
+            dispatcher.ApplyHelloAck(new HelloAckPayload
+            {
+                BridgeVersion = "1.0.0",
+                ActiveProvider = Provider("blaze.camera.vision", "camera-vision-main")
+            });
+            var point = Point(1, InteractionPhase.Hover, 960f);
+            point.ProviderId = "blaze.camera.vision";
+            point.ProviderInstanceId = "camera-vision-main";
+            point.SourceId = "fake-visual-detector";
+            point.NormalizedPosition = new Vector2Data { X = .5f, Y = .5f };
+            point.PixelPosition = new Vector2Data { X = 960f, Y = 540f };
+
+            dispatcher.ApplyFrame(new InteractionFrame
+            {
+                ProviderId = "blaze.camera.vision",
+                ProviderInstanceId = "camera-vision-main",
+                SurfaceId = "FRONT",
+                Sequence = 1,
+                TimestampUnixMs = 1000,
+                Points = new List<InteractionPoint> { point }
+            });
+
+            Assert.That(dispatcher.ActiveProvider.Id, Is.EqualTo("blaze.camera.vision"));
+            Assert.That(dispatcher.Points, Has.Count.EqualTo(1));
+            Assert.That(dispatcher.Points[0].Phase, Is.EqualTo(InteractionPhase.Hover));
+            Assert.That(dispatcher.Points[0].NormalizedPosition.X, Is.EqualTo(.5f));
+        }
+
         private static ProviderReferencePayload Provider(string id, string instanceId)
         {
             return new ProviderReferencePayload { Id = id, InstanceId = instanceId };

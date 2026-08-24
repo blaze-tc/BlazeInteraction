@@ -5,7 +5,7 @@ namespace Radar.Unity.Compatibility.Tests;
 public sealed class EmbeddedBridgePayloadTests
 {
     [Fact]
-    public void PackageContainsOneSelfContainedInteractionBridgeAndExternalRadarProvider()
+    public void PackageContainsOneSelfContainedInteractionBridgeAndBothExternalProviders()
     {
         var repositoryRoot = FindRepositoryRoot();
         var packageRoot = Path.Combine(repositoryRoot, "UnityPackage", "com.blaze.interaction");
@@ -20,7 +20,9 @@ public sealed class EmbeddedBridgePayloadTests
                      "hostpolicy.dll",
                      "bridge-version.txt",
                      Path.Combine("Providers", "Radar", "provider.json"),
-                     Path.Combine("Providers", "Radar", "Blaze.Provider.Radar.dll")
+                     Path.Combine("Providers", "Radar", "Blaze.Provider.Radar.dll"),
+                     Path.Combine("Providers", "CameraVision", "provider.json"),
+                     Path.Combine("Providers", "CameraVision", "Blaze.Provider.CameraVision.dll")
                  })
         {
             Assert.True(File.Exists(Path.Combine(publishDirectory, relativePath)), relativePath);
@@ -40,6 +42,17 @@ public sealed class EmbeddedBridgePayloadTests
         Assert.Equal("blaze.radar.f10f20", manifest.RootElement.GetProperty("id").GetString());
         Assert.Equal("1.0.0", manifest.RootElement.GetProperty("version").GetString());
         Assert.Equal(1, manifest.RootElement.GetProperty("providerApiVersion").GetInt32());
+
+        using var cameraManifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(
+            publishDirectory, "Providers", "CameraVision", "provider.json")));
+        Assert.Equal("blaze.camera.vision", cameraManifest.RootElement.GetProperty("id").GetString());
+        Assert.Equal(1, cameraManifest.RootElement.GetProperty("providerApiVersion").GetInt32());
+        Assert.Contains(
+            Directory.EnumerateFiles(
+                Path.Combine(publishDirectory, "Providers", "CameraVision"),
+                "*.dll",
+                SearchOption.AllDirectories),
+            path => string.Equals(Path.GetFileName(path), "OpenCvSharpExtern.dll", StringComparison.OrdinalIgnoreCase));
     }
 
     private static string FindRepositoryRoot()

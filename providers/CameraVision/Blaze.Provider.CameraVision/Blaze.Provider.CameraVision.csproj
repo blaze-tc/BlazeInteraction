@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Blaze.Provider.CameraVision</AssemblyName>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="OpenCvSharp4" Version="4.13.0.20260627">
+      <ExcludeAssets>analyzers</ExcludeAssets>
+    </PackageReference>
+    <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.13.0.20260627" />
+    <ProjectReference Include="..\..\..\src\Blaze.Interaction.Contracts\Blaze.Interaction.Contracts.csproj" />
+    <ProjectReference Include="..\..\..\src\Blaze.Interaction.Provider.Abstractions\Blaze.Interaction.Provider.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Blaze.Provider.CameraVision.Tests" />
+    <None Include="provider.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="profiles\camera-vision-default.json"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

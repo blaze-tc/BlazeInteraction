@@ -9,7 +9,7 @@ namespace Blaze.Interaction.Release.Tests;
 public sealed class InteractionPublishLayoutTests
 {
     [Fact]
-    public async Task PublishScript_ProducesOneBridgeExecutableAndExternalValidatedRadarProvider()
+    public async Task PublishScript_ProducesOneBridgeExecutableAndTwoValidatedProviders()
     {
         using var output = new TemporaryDirectory();
         var repositoryRoot = FindRepositoryRoot();
@@ -67,7 +67,9 @@ public sealed class InteractionPublishLayoutTests
         Assert.True(File.Exists(Path.Combine(output.Path, "hostpolicy.dll")));
         var radarDirectory = Path.Combine(output.Path, "Providers", "Radar");
         Assert.True(File.Exists(Path.Combine(radarDirectory, "Blaze.Provider.Radar.dll")));
-        var radar = Assert.Single(new ProviderCatalog().Discover(Path.Combine(output.Path, "Providers")));
+        var providers = new ProviderCatalog().Discover(Path.Combine(output.Path, "Providers"));
+        Assert.Equal(2, providers.Count);
+        var radar = Assert.Single(providers, entry => entry.Manifest?.Id == "blaze.radar.f10f20");
         Assert.True(radar.IsAvailable, radar.Error);
         Assert.Equal("blaze.radar.f10f20", radar.Manifest!.Id);
         Assert.Equal("1.0.0", radar.Manifest.Version);
@@ -75,14 +77,39 @@ public sealed class InteractionPublishLayoutTests
             await File.ReadAllBytesAsync(Path.Combine(repositoryRoot, "config", "default-profile.json")),
             await File.ReadAllBytesAsync(Path.Combine(radarDirectory, "profiles", "radar-default.json")));
 
-        await SmokePublishedBridgeAsync(output.Path, radarDirectory);
+        var cameraDirectory = Path.Combine(output.Path, "Providers", "CameraVision");
+        Assert.True(File.Exists(Path.Combine(cameraDirectory, "Blaze.Provider.CameraVision.dll")));
+        Assert.True(File.Exists(Path.Combine(cameraDirectory, "provider.json")));
+        Assert.True(File.Exists(Path.Combine(
+            cameraDirectory,
+            "profiles",
+            "camera-vision-default.json")));
+        Assert.Contains(
+            Directory.EnumerateFiles(cameraDirectory, "*.dll", SearchOption.AllDirectories),
+            path => string.Equals(
+                Path.GetFileName(path),
+                "OpenCvSharpExtern.dll",
+                StringComparison.OrdinalIgnoreCase));
+        var camera = Assert.Single(providers, entry => entry.Manifest?.Id == "blaze.camera.vision");
+        Assert.True(camera.IsAvailable, camera.Error);
+        Assert.Equal(1, camera.Manifest!.ProviderApiVersion);
+        Assert.Equal("Blaze.Provider.CameraVision.dll", camera.Manifest.EntryAssembly);
+
+        await ConfigureRadarSimulationAsync(radarDirectory);
+        await SmokePublishedBridgeAsync(
+            output.Path,
+            expectedProviderId: "blaze.radar.f10f20",
+            expectedInstanceId: "radar-main");
+        await SmokePublishedBridgeAsync(
+            output.Path,
+            expectedProviderId: "blaze.camera.vision",
+            expectedInstanceId: "camera-vision-main",
+            selectedProviderId: "blaze.camera.vision");
     }
 
-    private static async Task SmokePublishedBridgeAsync(string publishRoot, string radarDirectory)
-    {
-        var profile = Path.Combine(radarDirectory, "profiles", "radar-default.json");
-        await File.WriteAllTextAsync(
-            profile,
+    private static Task ConfigureRadarSimulationAsync(string radarDirectory) =>
+        File.WriteAllTextAsync(
+            Path.Combine(radarDirectory, "profiles", "radar-default.json"),
             """
             {
               "schemaVersion": 2,
@@ -111,6 +138,13 @@ public sealed class InteractionPublishLayoutTests
               ]
             }
             """);
+
+    private static async Task SmokePublishedBridgeAsync(
+        string publishRoot,
+        string expectedProviderId,
+        string expectedInstanceId,
+        string? selectedProviderId = null)
+    {
         var pipeName = $"Blaze.InteractionBridge.Release.{Guid.NewGuid():N}";
         var startInfo = new ProcessStartInfo(Path.Combine(publishRoot, "BlazeInteractionBridge.exe"))
         {
@@ -125,6 +159,11 @@ public sealed class InteractionPublishLayoutTests
                  })
         {
             startInfo.ArgumentList.Add(argument);
+        }
+        if (selectedProviderId is not null)
+        {
+            startInfo.ArgumentList.Add("--provider");
+            startInfo.ArgumentList.Add(selectedProviderId);
         }
 
         using var process = Process.Start(startInfo)
@@ -162,7 +201,7 @@ public sealed class InteractionPublishLayoutTests
             var acknowledgement = await InteractionIpcStream.ReadAsync(client, timeout.Token);
             Assert.Equal(InteractionMessageType.HelloAck, acknowledgement.MessageType);
             Assert.Equal(
-                "blaze.radar.f10f20",
+                expectedProviderId,
                 acknowledgement.DeserializePayload<HelloAckPayload>().ActiveProvider!.Id);
 
             InteractionEnvelope frame;
@@ -173,8 +212,8 @@ public sealed class InteractionPublishLayoutTests
             while (frame.MessageType != InteractionMessageType.InteractionFrame);
 
             var payload = frame.DeserializePayload<InteractionFrame>();
-            Assert.Equal("blaze.radar.f10f20", payload.ProviderId);
-            Assert.Equal("radar-main", payload.ProviderInstanceId);
+            Assert.Equal(expectedProviderId, payload.ProviderId);
+            Assert.Equal(expectedInstanceId, payload.ProviderInstanceId);
             Assert.Equal("main", payload.SurfaceId);
         }
         finally

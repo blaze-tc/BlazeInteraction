@@ -394,6 +394,28 @@ function Assert-InteractionBridgePayload {
     if (-not (Test-Path -LiteralPath (Join-Path $radarDirectory $manifest.entryAssembly) -PathType Leaf)) {
         throw "The external Radar Provider entry assembly is missing: $($manifest.entryAssembly)"
     }
+
+    $cameraDirectory = Join-Path $Directory 'Providers\CameraVision'
+    $cameraManifestPath = Join-Path $cameraDirectory 'provider.json'
+    if (-not (Test-Path -LiteralPath $cameraManifestPath -PathType Leaf)) {
+        throw 'The external CameraVision Provider manifest is missing.'
+    }
+    try { $cameraManifest = Get-Content -LiteralPath $cameraManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch { throw "The external CameraVision Provider manifest is invalid JSON: $($_.Exception.Message)" }
+    if ($cameraManifest.id -cne 'blaze.camera.vision' -or
+        $cameraManifest.version -cne $ExpectedVersion -or
+        $cameraManifest.providerApiVersion -ne 1 -or
+        $cameraManifest.entryAssembly -cne 'Blaze.Provider.CameraVision.dll' -or
+        $cameraManifest.entryType -cne 'Blaze.Provider.CameraVision.CameraVisionPlugin') {
+        throw "The external CameraVision Provider manifest does not match Provider API 1 and version $ExpectedVersion."
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $cameraDirectory $cameraManifest.entryAssembly) -PathType Leaf)) {
+        throw "The external CameraVision Provider entry assembly is missing: $($cameraManifest.entryAssembly)"
+    }
+    $cameraNativeLibraries = @(Get-ChildItem -LiteralPath $cameraDirectory -Filter 'OpenCvSharpExtern.dll' -File -Recurse)
+    if ($cameraNativeLibraries.Count -ne 1) {
+        throw 'The external CameraVision Provider must contain exactly one OpenCvSharpExtern.dll native runtime.'
+    }
 }
 
 function Copy-ValidatedInteractionBridgePayload {

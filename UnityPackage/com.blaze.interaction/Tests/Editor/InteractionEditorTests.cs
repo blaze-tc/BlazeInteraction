@@ -3,12 +3,34 @@ using System.IO;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.Build;
+using UnityEditor.PackageManager;
 using UnityEngine;
 
 namespace Blaze.Interaction.Editor.Tests
 {
     public sealed class InteractionEditorTests
     {
+        [Test]
+        public void BasicInteractionSample_CreatesAndDrivesAProviderNeutralCursor()
+        {
+            var package = UnityEditor.PackageManager.PackageInfo.FindForAssembly(
+                typeof(InteractionManager).Assembly);
+            Assert.That(package, Is.Not.Null);
+            var presenterPath = Path.Combine(
+                package.resolvedPath,
+                "Samples~",
+                "BasicInteraction",
+                "BasicInteractionPresenter.cs");
+
+            var source = File.ReadAllText(presenterPath);
+
+            StringAssert.Contains("EnsureCursor", source);
+            StringAssert.Contains("UpdateCursor", source);
+            StringAssert.Contains("InteractionManager.Instance.Points", source);
+            StringAssert.DoesNotContain("CameraVision", source);
+            StringAssert.DoesNotContain("NamedPipe", source);
+        }
+
         [Test]
         public void SurfaceEditorOperations_AddDuplicateMoveAndPrimaryPreserveValidOrder()
         {
@@ -119,6 +141,7 @@ namespace Blaze.Interaction.Editor.Tests
                 Assert.That(File.Exists(Path.Combine(destination, "stale.txt")), Is.False);
                 Assert.That(File.ReadAllText(Path.Combine(destination, "bridge-version.txt")).Trim(), Is.EqualTo("1.0.0"));
                 Assert.That(File.Exists(Path.Combine(destination, "Providers", "Radar", "provider.json")), Is.True);
+                Assert.That(File.Exists(Path.Combine(destination, "Providers", "CameraVision", "provider.json")), Is.True);
                 Assert.That(InteractionBuildProcessor.ComputeSha256ForTests(
                     Path.Combine(destination, "BlazeInteractionBridge.exe")), Is.EqualTo(sourceHash));
             }
@@ -164,6 +187,15 @@ namespace Blaze.Interaction.Editor.Tests
             File.WriteAllText(Path.Combine(radar, "provider.json"),
                 "{\"id\":\"blaze.radar.f10f20\",\"version\":\"" + providerVersion +
                 "\",\"providerApiVersion\":1,\"entryAssembly\":\"Blaze.Provider.Radar.dll\",\"entryType\":\"Blaze.Provider.Radar.RadarPlugin\"}");
+            var camera = Path.Combine(root, "Providers", "CameraVision");
+            Directory.CreateDirectory(Path.Combine(camera, "runtimes", "win-x64", "native"));
+            File.WriteAllText(Path.Combine(camera, "Blaze.Provider.CameraVision.dll"), "provider");
+            File.WriteAllText(
+                Path.Combine(camera, "runtimes", "win-x64", "native", "OpenCvSharpExtern.dll"),
+                "native");
+            File.WriteAllText(Path.Combine(camera, "provider.json"),
+                "{\"id\":\"blaze.camera.vision\",\"version\":\"" + providerVersion +
+                "\",\"providerApiVersion\":1,\"entryAssembly\":\"Blaze.Provider.CameraVision.dll\",\"entryType\":\"Blaze.Provider.CameraVision.CameraVisionPlugin\"}");
         }
     }
 }

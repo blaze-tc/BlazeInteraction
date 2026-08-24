@@ -1,0 +1,9 @@
+{
+  "deviceIndex": 0,
+  "width": 1280,
+  "height": 720,
+  "framesPerSecond": 30,
+  "mirrorX": false,
+  "rotation": 0,
+  "reconnectDelay": "00:00:01"
+}

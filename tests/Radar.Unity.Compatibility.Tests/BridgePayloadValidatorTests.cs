@@ -7,7 +7,7 @@ namespace Radar.Unity.Compatibility.Tests;
 public sealed class BridgePayloadValidatorTests
 {
     [Fact]
-    public void ValidSelfContainedPayloadWithExternalRadarProviderPasses()
+    public void ValidSelfContainedPayloadWithRadarAndCameraVisionProvidersPasses()
     {
         using var fixture = PayloadFixture.Create();
 
@@ -142,6 +142,30 @@ public sealed class BridgePayloadValidatorTests
             StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void MissingCameraVisionManifestIsRejected()
+    {
+        using var fixture = PayloadFixture.Create();
+        File.Delete(fixture.CameraManifestPath);
+
+        Assert.Contains(
+            "CameraVision",
+            InteractionBridgePayloadValidator.Validate(fixture.Root, "1.0.0"),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void MissingCameraVisionEntryOrNativeRuntimeIsRejected()
+    {
+        using var missingEntry = PayloadFixture.Create();
+        File.Delete(Path.Combine(missingEntry.CameraRoot, "Blaze.Provider.CameraVision.dll"));
+        Assert.NotNull(InteractionBridgePayloadValidator.Validate(missingEntry.Root, "1.0.0"));
+
+        using var missingNative = PayloadFixture.Create();
+        File.Delete(Path.Combine(missingNative.CameraRoot, "OpenCvSharpExtern.dll"));
+        Assert.NotNull(InteractionBridgePayloadValidator.Validate(missingNative.Root, "1.0.0"));
+    }
+
     [Theory]
     [InlineData("{")]
     [InlineData("null")]
@@ -200,11 +224,15 @@ public sealed class BridgePayloadValidatorTests
             Root = root;
             RadarRoot = Path.Combine(root, "Providers", "Radar");
             ManifestPath = Path.Combine(RadarRoot, "provider.json");
+            CameraRoot = Path.Combine(root, "Providers", "CameraVision");
+            CameraManifestPath = Path.Combine(CameraRoot, "provider.json");
         }
 
         public string Root { get; }
         public string RadarRoot { get; }
         public string ManifestPath { get; }
+        public string CameraRoot { get; }
+        public string CameraManifestPath { get; }
 
         public static PayloadFixture Create()
         {
@@ -238,6 +266,18 @@ public sealed class BridgePayloadValidatorTests
                     entryType = "Blaze.Provider.Radar.RadarPlugin"
                 }));
             fixture.Write("Providers/Radar/Blaze.Provider.Radar.dll", "provider");
+            fixture.Write(
+                "Providers/CameraVision/provider.json",
+                JsonSerializer.Serialize(new
+                {
+                    id = "blaze.camera.vision",
+                    version = "1.0.0",
+                    providerApiVersion = 1,
+                    entryAssembly = "Blaze.Provider.CameraVision.dll",
+                    entryType = "Blaze.Provider.CameraVision.CameraVisionPlugin"
+                }));
+            fixture.Write("Providers/CameraVision/Blaze.Provider.CameraVision.dll", "provider");
+            fixture.Write("Providers/CameraVision/OpenCvSharpExtern.dll", "native");
             return fixture;
         }
 
