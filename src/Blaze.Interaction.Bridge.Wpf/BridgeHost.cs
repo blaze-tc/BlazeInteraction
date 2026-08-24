@@ -21,6 +21,10 @@ public sealed record BridgeStartupDiagnostic(
     string Stage,
     string Message);
 
+internal sealed record BridgeProviderUiRegistration(
+    IProviderSettingsViewFactory? SettingsViewFactory,
+    PrefetchedProviderFactory ProviderFactory);
+
 internal interface IBridgeMessageSink
 {
     bool IsConnected { get; }
@@ -45,6 +49,7 @@ public sealed class BridgeHost : IAsyncDisposable
     private readonly int? _parentProcessId;
     private readonly string? _defaultProviderInstanceId;
     private readonly IReadOnlyDictionary<string, ProviderDescriptor> _descriptors;
+    private readonly IReadOnlyDictionary<string, BridgeProviderUiRegistration> _providerUi;
     private readonly IReadOnlyList<object> _ownedResources;
     private readonly SemaphoreSlim _helloGate = new(1, 1);
     private readonly CancellationTokenSource _outboundCancellation = new();
@@ -64,7 +69,8 @@ public sealed class BridgeHost : IAsyncDisposable
         string? defaultProviderInstanceId,
         IReadOnlyDictionary<string, ProviderDescriptor> descriptors,
         IReadOnlyList<object> ownedResources,
-        IReadOnlyList<BridgeStartupDiagnostic>? startupDiagnostics = null)
+        IReadOnlyList<BridgeStartupDiagnostic>? startupDiagnostics = null,
+        IReadOnlyDictionary<string, BridgeProviderUiRegistration>? providerUi = null)
     {
         _manager = manager ?? throw new ArgumentNullException(nameof(manager));
         _messageSink = messageSink ?? throw new ArgumentNullException(nameof(messageSink));
@@ -73,6 +79,7 @@ public sealed class BridgeHost : IAsyncDisposable
         _parentProcessId = parentProcessId;
         _defaultProviderInstanceId = defaultProviderInstanceId;
         _descriptors = descriptors ?? throw new ArgumentNullException(nameof(descriptors));
+        _providerUi = providerUi ?? new Dictionary<string, BridgeProviderUiRegistration>();
         _ownedResources = ownedResources ?? throw new ArgumentNullException(nameof(ownedResources));
         StartupDiagnostics = Array.AsReadOnly((startupDiagnostics ?? []).ToArray());
 
@@ -82,6 +89,8 @@ public sealed class BridgeHost : IAsyncDisposable
     }
 
     public IReadOnlyList<BridgeStartupDiagnostic> StartupDiagnostics { get; }
+
+    internal event EventHandler? ActiveProviderChanged;
 
     public static BridgeHost Create(BridgeHostOptions options)
     {
@@ -102,6 +111,7 @@ public sealed class BridgeHost : IAsyncDisposable
                 result.Error ?? result.Failure?.ToString() ?? "Provider loading failed."))
             .ToList();
         var prefetched = new List<PrefetchedProviderFactory>();
+        var providerUi = new Dictionary<string, BridgeProviderUiRegistration>(StringComparer.Ordinal);
         InteractionPipeServer? server = null;
         try
         {
@@ -122,6 +132,9 @@ public sealed class BridgeHost : IAsyncDisposable
                 if (factory is not null)
                 {
                     prefetched.Add(factory);
+                    providerUi.Add(
+                        factory.ProviderInstanceId,
+                        new BridgeProviderUiRegistration(loaded.Plugin.SettingsViewFactory, factory));
                     options.ProviderFactoryObserved?.Invoke(
                         factory,
                         new WeakReference(loaded.LoadContext));
@@ -148,7 +161,8 @@ public sealed class BridgeHost : IAsyncDisposable
                 defaultInstanceId,
                 descriptors,
                 [discovery, .. prefetched, server],
-                diagnostics);
+                diagnostics,
+                providerUi);
             return host;
         }
         catch (Exception startupFailure)
@@ -268,6 +282,21 @@ public sealed class BridgeHost : IAsyncDisposable
             ?? throw new InvalidOperationException("A Unity Hello topology is required before a provider can start.");
         await _manager.SwitchAsync(providerInstanceId, context, cancellationToken).ConfigureAwait(false);
         await FlushOutboundAsync().ConfigureAwait(false);
+    }
+
+    internal object? CreateActiveProviderSettingsView(IProviderSettingsContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        var active = _manager.ActiveProvider;
+        if (active is null ||
+            !_providerUi.TryGetValue(active.ProviderInstanceId, out var registration) ||
+            registration.SettingsViewFactory is null ||
+            registration.ProviderFactory.CurrentProvider is not { } provider)
+        {
+            return null;
+        }
+
+        return registration.SettingsViewFactory.CreateView(provider, context);
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
@@ -415,6 +444,15 @@ public sealed class BridgeHost : IAsyncDisposable
 
     private void OnProviderChanged(object? sender, ProviderChangedEventArgs eventArgs)
     {
+        try
+        {
+            ActiveProviderChanged?.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception exception)
+        {
+            Trace.TraceWarning("Provider UI notification failed: {0}", exception);
+        }
+
         if (eventArgs.Previous is null || !_messageSink.IsAcknowledged)
         {
             return;
@@ -628,6 +666,17 @@ internal sealed class PrefetchedProviderFactory : IAsyncDisposable
     internal string ProviderInstanceId { get; }
     internal WeakReference ProviderReference { get; }
 
+    internal IInteractionProvider? CurrentProvider
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _disposed ? null : ProviderReference.Target as IInteractionProvider;
+            }
+        }
+    }
+
     internal bool IsDisposed
     {
         get
@@ -651,7 +700,10 @@ internal sealed class PrefetchedProviderFactory : IAsyncDisposable
                 return prefetched;
             }
 
-            return _plugin!.CreateProvider(_context!);
+            var provider = _plugin!.CreateProvider(_context!)
+                ?? throw new InvalidOperationException("The provider plugin returned null.");
+            ProviderReference.Target = provider;
+            return provider;
         }
     }
 

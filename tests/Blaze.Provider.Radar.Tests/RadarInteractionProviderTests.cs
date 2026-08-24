@@ -36,6 +36,14 @@ public sealed class RadarInteractionProviderTests
     }
 
     [Fact]
+    public void PluginExposesTheRadarSettingsViewFactory()
+    {
+        var plugin = new RadarPlugin();
+
+        Assert.IsType<RadarSettingsViewFactory>(plugin.SettingsViewFactory);
+    }
+
+    [Fact]
     public async Task LifecycleTransitionsInOrderAndStopsTheExistingRadarRuntimeExactlyOnce()
     {
         var runtime = new FakeRadarProviderRuntime();

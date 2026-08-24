@@ -2,7 +2,9 @@ using Blaze.Interaction.Contracts;
 using Blaze.Interaction.Provider.Abstractions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Yuexin.Radar.Bridge.Wpf;
 using Yuexin.Radar.Bridge.Wpf.Services;
+using Yuexin.Radar.Bridge.Wpf.ViewModels;
 using Yuexin.Radar.Configuration;
 using Yuexin.Radar.Contracts;
 
@@ -68,6 +70,14 @@ public sealed class RadarInteractionProvider : IInteractionProvider
     public event EventHandler<InteractionFrameEventArgs>? FrameReceived;
 
     public event EventHandler<ProviderStatusChangedEventArgs>? StatusChanged;
+
+    internal object CreateSettingsView()
+    {
+        ThrowIfDisposed();
+        return _runtime is RadarCoordinatorRuntime runtime
+            ? runtime.CreateSettingsView()
+            : throw new InvalidOperationException("The Radar provider must be initialized before its settings view can be created.");
+    }
 
     public async Task InitializeAsync(
         ProviderInitializationContext context,
@@ -490,11 +500,15 @@ public sealed class RadarInteractionProvider : IInteractionProvider
     private sealed class RadarCoordinatorRuntime : IRadarProviderRuntime
     {
         private readonly RadarBridgeCoordinator _coordinator;
+        private readonly RadarAppConfiguration _configuration;
         private int _disposed;
 
-        private RadarCoordinatorRuntime(RadarBridgeCoordinator coordinator)
+        private RadarCoordinatorRuntime(
+            RadarBridgeCoordinator coordinator,
+            RadarAppConfiguration configuration)
         {
             _coordinator = coordinator;
+            _configuration = configuration;
         }
 
         internal static async Task<IRadarProviderRuntime> CreateAsync(
@@ -532,7 +546,7 @@ public sealed class RadarInteractionProvider : IInteractionProvider
                             surface.IsPrimary,
                             surface.Order)).ToArray()),
                     cancellationToken).ConfigureAwait(false);
-                return new RadarCoordinatorRuntime(coordinator);
+                return new RadarCoordinatorRuntime(coordinator, configuration);
             }
             catch
             {
@@ -601,6 +615,23 @@ public sealed class RadarInteractionProvider : IInteractionProvider
         {
             ThrowIfDisposed();
             return _coordinator.StopReplayAsync(screenId, sensorId);
+        }
+
+        internal object CreateSettingsView()
+        {
+            ThrowIfDisposed();
+            var viewModel = new MainViewModel(_configuration, _coordinator);
+            try
+            {
+                var window = new MainWindow(viewModel, _coordinator);
+                window.Closed += (_, _) => viewModel.Dispose();
+                return window;
+            }
+            catch
+            {
+                viewModel.Dispose();
+                throw;
+            }
         }
 
         public ValueTask DisposeAsync()

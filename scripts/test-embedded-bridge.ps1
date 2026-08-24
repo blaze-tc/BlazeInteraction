@@ -37,6 +37,7 @@ function Invoke-ProviderSmoke {
     param(
         [Parameter(Mandatory)] [string]$ExpectedProviderId,
         [Parameter(Mandatory)] [string]$ExpectedProviderInstanceId,
+        [Parameter(Mandatory)] [string]$ExpectedWindowTitlePrefix,
         [string]$SelectedProviderId = '',
         [Parameter(Mandatory)] [string]$SuccessMessage,
         [switch]$InjectFailure
@@ -94,11 +95,14 @@ function Invoke-ProviderSmoke {
             throw "Embedded smoke client exited before reporting a result with code $($script:parentProcess.ExitCode)."
         }
         if ($windowHandle -ne [IntPtr]::Zero -and
-            -not [string]::IsNullOrWhiteSpace($windowTitle) -and
+            $windowTitle.StartsWith($ExpectedWindowTitlePrefix, [System.StringComparison]::Ordinal) -and
             $clientCompleted) { break }
     }
     if ($script:bridgeProcess.HasExited) { throw "Embedded BlazeInteractionBridge exited during startup with code $($script:bridgeProcess.ExitCode)." }
     if ($windowHandle -eq [IntPtr]::Zero -or [string]::IsNullOrWhiteSpace($windowTitle)) { throw 'Embedded BlazeInteractionBridge did not create a top-level window.' }
+    if (-not $windowTitle.StartsWith($ExpectedWindowTitlePrefix, [System.StringComparison]::Ordinal)) {
+        throw "Embedded BlazeInteractionBridge window title mismatch. Expected prefix '$ExpectedWindowTitlePrefix', got '$windowTitle'."
+    }
     if ($windowTitle -match '失败|错误|failed|error') { throw "Embedded BlazeInteractionBridge displayed an error window: $windowTitle" }
     if (-not $clientCompleted) { throw 'Embedded smoke client did not complete the IPC frame check before timeout.' }
 
@@ -168,12 +172,14 @@ try {
     Invoke-ProviderSmoke `
         -ExpectedProviderId 'blaze.radar.f10f20' `
         -ExpectedProviderInstanceId 'radar-main' `
+        -ExpectedWindowTitlePrefix 'RadarBridge' `
         -SuccessMessage 'Radar standard InteractionFrame passed.' `
         -InjectFailure:$InjectSetupFailure
     Write-Host 'Interaction IPC 1 Hello/HelloAck passed with Bridge version 1.0.0.'
     Invoke-ProviderSmoke `
         -ExpectedProviderId 'blaze.camera.vision' `
         -ExpectedProviderInstanceId 'camera-vision-main' `
+        -ExpectedWindowTitlePrefix 'Blaze Interaction Bridge' `
         -SelectedProviderId 'blaze.camera.vision' `
         -SuccessMessage 'CameraVision fake standard InteractionFrame passed.'
 }

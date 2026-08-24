@@ -11,11 +11,29 @@ public sealed class RadarPlugin : IInteractionProviderPlugin
         "Radar",
         ["interaction-point", "preview", "multi-sensor", "calibration", "multi-surface"]);
 
-    public IProviderSettingsViewFactory? SettingsViewFactory => null;
+    public IProviderSettingsViewFactory? SettingsViewFactory => RadarSettingsViewFactory.Instance;
 
     public IInteractionProvider CreateProvider(ProviderCreateContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
         return new RadarInteractionProvider("radar-main", context);
+    }
+}
+
+public sealed class RadarSettingsViewFactory : IProviderSettingsViewFactory
+{
+    public static RadarSettingsViewFactory Instance { get; } = new();
+
+    private RadarSettingsViewFactory()
+    {
+    }
+
+    public object CreateView(IInteractionProvider provider, IProviderSettingsContext context)
+    {
+        ArgumentNullException.ThrowIfNull(provider);
+        ArgumentNullException.ThrowIfNull(context);
+        return provider is RadarInteractionProvider radarProvider
+            ? radarProvider.CreateSettingsView()
+            : throw new ArgumentException("The Radar settings view requires a RadarInteractionProvider instance.", nameof(provider));
     }
 }

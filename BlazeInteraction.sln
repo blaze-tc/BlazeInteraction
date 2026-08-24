@@ -81,6 +81,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Blaze.Provider.CameraVision
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Blaze.Provider.CameraVision.Tests", "tests\Blaze.Provider.CameraVision.Tests\Blaze.Provider.CameraVision.Tests.csproj", "{11155BD3-8831-499C-910A-E10E39642808}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Blaze.Provider.Radar.Ui.Tests", "tests\Blaze.Provider.Radar.Ui.Tests\Blaze.Provider.Radar.Ui.Tests.csproj", "{1970AA8A-2EF5-4EA6-A322-AF371F0673AE}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -230,6 +232,10 @@ Global
 		{11155BD3-8831-499C-910A-E10E39642808}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{11155BD3-8831-499C-910A-E10E39642808}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{11155BD3-8831-499C-910A-E10E39642808}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1970AA8A-2EF5-4EA6-A322-AF371F0673AE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1970AA8A-2EF5-4EA6-A322-AF371F0673AE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1970AA8A-2EF5-4EA6-A322-AF371F0673AE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1970AA8A-2EF5-4EA6-A322-AF371F0673AE}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{A5ECBC29-7B36-4D85-BDF6-93CDE89C9A09} = {A8EDAA9F-43A8-4442-9A77-6EF20203D19D}
@@ -268,5 +274,6 @@ Global
 		{5BCB2D4D-7081-45F3-BD73-C6B61A0BE7B9} = {2813E862-D703-4F05-AE57-1C5D62B34A69}
 		{31D198C7-FE35-4F1B-BAE7-C9B12F3F674C} = {B067B18F-EB13-4FC8-BAFE-1B864C4E73A8}
 		{11155BD3-8831-499C-910A-E10E39642808} = {2813E862-D703-4F05-AE57-1C5D62B34A69}
+		{1970AA8A-2EF5-4EA6-A322-AF371F0673AE} = {2813E862-D703-4F05-AE57-1C5D62B34A69}
 	EndGlobalSection
 EndGlobal
