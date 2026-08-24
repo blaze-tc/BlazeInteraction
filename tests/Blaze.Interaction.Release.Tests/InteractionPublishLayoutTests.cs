@@ -96,12 +96,15 @@ public sealed class InteractionPublishLayoutTests
         Assert.Equal("Blaze.Provider.CameraVision.dll", camera.Manifest.EntryAssembly);
 
         await ConfigureRadarSimulationAsync(radarDirectory);
+        var dataRoot = output.CreateUniqueChildDirectory("Data");
         await SmokePublishedBridgeAsync(
             output.Path,
+            dataRoot,
             expectedProviderId: "blaze.radar.f10f20",
             expectedInstanceId: "radar-main");
         await SmokePublishedBridgeAsync(
             output.Path,
+            dataRoot,
             expectedProviderId: "blaze.camera.vision",
             expectedInstanceId: "camera-vision-main",
             selectedProviderId: "blaze.camera.vision");
@@ -141,6 +144,7 @@ public sealed class InteractionPublishLayoutTests
 
     private static async Task SmokePublishedBridgeAsync(
         string publishRoot,
+        string dataRoot,
         string expectedProviderId,
         string expectedInstanceId,
         string? selectedProviderId = null)
@@ -149,13 +153,16 @@ public sealed class InteractionPublishLayoutTests
         var startInfo = new ProcessStartInfo(Path.Combine(publishRoot, "BlazeInteractionBridge.exe"))
         {
             WorkingDirectory = publishRoot,
-            UseShellExecute = false
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
         };
         foreach (var argument in new[]
                  {
                      "--parent-pid", Environment.ProcessId.ToString(),
                      "--minimized",
-                     "--pipe-name", pipeName
+                     "--pipe-name", pipeName,
+                     "--data-root", dataRoot
                  })
         {
             startInfo.ArgumentList.Add(argument);
@@ -168,6 +175,9 @@ public sealed class InteractionPublishLayoutTests
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("Could not start the published interaction bridge.");
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        Exception? smokeFailure = null;
         try
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
@@ -216,6 +226,10 @@ public sealed class InteractionPublishLayoutTests
             Assert.Equal(expectedInstanceId, payload.ProviderInstanceId);
             Assert.Equal("main", payload.SurfaceId);
         }
+        catch (Exception exception)
+        {
+            smokeFailure = exception;
+        }
         finally
         {
             if (!process.HasExited)
@@ -233,6 +247,16 @@ public sealed class InteractionPublishLayoutTests
                 }
             }
         }
+
+        if (smokeFailure is not null)
+        {
+            var exitCode = process.HasExited ? process.ExitCode.ToString() : "still running";
+            var arguments = string.Join(" ", startInfo.ArgumentList);
+            throw new InvalidOperationException(
+                $"Published Bridge smoke failed. ExitCode={exitCode}; Arguments={arguments}; " +
+                $"StandardOutput={await stdout}; StandardError={await stderr}",
+                smokeFailure);
+        }
     }
 
     private static string FindRepositoryRoot()
@@ -248,19 +272,35 @@ public sealed class InteractionPublishLayoutTests
 
     private sealed class TemporaryDirectory : IDisposable
     {
+        private static readonly string ApprovedRoot = System.IO.Path.GetFullPath(System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            "BlazeInteractionReleaseTests"));
+
         internal TemporaryDirectory()
         {
             Path = System.IO.Path.Combine(
-                System.IO.Path.GetTempPath(),
-                "BlazeInteractionReleaseTests",
+                ApprovedRoot,
                 Guid.NewGuid().ToString("N"));
+            AssertOwnedRoot(Path);
             Directory.CreateDirectory(Path);
         }
 
         internal string Path { get; }
 
+        internal string CreateUniqueChildDirectory(string prefix)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(prefix);
+            var child = System.IO.Path.GetFullPath(System.IO.Path.Combine(
+                Path,
+                $"{prefix}-{Guid.NewGuid():N}"));
+            AssertOwnedChild(child);
+            Directory.CreateDirectory(child);
+            return child;
+        }
+
         public void Dispose()
         {
+            AssertOwnedRoot(Path);
             const int maximumAttempts = 10;
             for (var attempt = 1; attempt <= maximumAttempts; attempt++)
             {
@@ -275,6 +315,36 @@ public sealed class InteractionPublishLayoutTests
                 {
                     Thread.Sleep(TimeSpan.FromMilliseconds(attempt * 100));
                 }
+            }
+        }
+
+        private static void AssertOwnedRoot(string path)
+        {
+            var actual = System.IO.Path.GetFullPath(path)
+                .TrimEnd(System.IO.Path.DirectorySeparatorChar);
+            var parent = System.IO.Path.GetDirectoryName(actual);
+            var leaf = System.IO.Path.GetFileName(actual);
+            if (!string.Equals(parent, ApprovedRoot, StringComparison.OrdinalIgnoreCase) ||
+                !Guid.TryParseExact(leaf, "N", out _))
+            {
+                throw new InvalidOperationException(
+                    $"Release-test cleanup target is outside the approved root: {actual}");
+            }
+        }
+
+        private void AssertOwnedChild(string path)
+        {
+            var actual = System.IO.Path.GetFullPath(path)
+                .TrimEnd(System.IO.Path.DirectorySeparatorChar);
+            var expectedParent = System.IO.Path.GetFullPath(Path)
+                .TrimEnd(System.IO.Path.DirectorySeparatorChar);
+            if (!string.Equals(
+                    System.IO.Path.GetDirectoryName(actual),
+                    expectedParent,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"Release-test data root is outside the owned temporary directory: {actual}");
             }
         }
     }
