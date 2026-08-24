@@ -73,8 +73,13 @@ public sealed class MainWindowBindingTests
             Assert.Contains(nameof(MainViewModel.UnityConnectionText), bindingPaths);
             Assert.Contains(nameof(MainViewModel.RadarConnectionText), bindingPaths);
             Assert.DoesNotContain(bindings, binding =>
-                string.Equals(binding!.Path?.Path, "UnityStatus.IsConnected", StringComparison.Ordinal) ||
-                !string.IsNullOrEmpty(binding.StringFormat));
+                string.Equals(binding!.Path?.Path, "UnityStatus.IsConnected", StringComparison.Ordinal));
+            var unityBinding = Assert.Single(bindings.Where(binding =>
+                string.Equals(binding!.Path?.Path, nameof(MainViewModel.UnityConnectionText), StringComparison.Ordinal)));
+            var radarBinding = Assert.Single(bindings.Where(binding =>
+                string.Equals(binding!.Path?.Path, nameof(MainViewModel.RadarConnectionText), StringComparison.Ordinal)));
+            Assert.True(string.IsNullOrEmpty(unityBinding.StringFormat));
+            Assert.True(string.IsNullOrEmpty(radarBinding.StringFormat));
 
             window.Close();
         });
@@ -397,6 +402,10 @@ public sealed class MainWindowBindingTests
         public event Action<string>? LogReceived { add { } remove { } }
         public event Action<UnityClientStatus>? UnityStatusChanged { add { } remove { } }
         public UnityClientStatus UnityStatus { get; } = UnityClientStatus.Disconnected;
+        public void SubscribeUnityStatus(Action<UnityClientStatus> handler) => handler(UnityStatus);
+        public void UnsubscribeUnityStatus(Action<UnityClientStatus> handler) { }
+        public void SubscribeSensorStates(Action<RadarSensorRuntimeStateChanged> handler) { }
+        public void UnsubscribeSensorStates(Action<RadarSensorRuntimeStateChanged> handler) { }
         public Task StartInfrastructureAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         public void PublishSensorSnapshot(RadarSensorRuntimeSnapshot snapshot) => SensorSnapshotUpdated?.Invoke(snapshot);

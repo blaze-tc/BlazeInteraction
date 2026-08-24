@@ -43,6 +43,20 @@ public interface IRadarBridgeRuntime : IAsyncDisposable
 
     UnityClientStatus UnityStatus { get; }
 
+    /// <summary>
+    /// Atomically registers a Unity-status observer and delivers the current status before a newer
+    /// status can be delivered to that observer. The callback must not synchronously re-enter this runtime.
+    /// </summary>
+    void SubscribeUnityStatus(Action<UnityClientStatus> handler);
+    void UnsubscribeUnityStatus(Action<UnityClientStatus> handler);
+
+    /// <summary>
+    /// Atomically registers a sensor-state observer and delivers the current state of every known sensor
+    /// before a newer state can be delivered to that observer. The callback must not synchronously re-enter this runtime.
+    /// </summary>
+    void SubscribeSensorStates(Action<RadarSensorRuntimeStateChanged> handler);
+    void UnsubscribeSensorStates(Action<RadarSensorRuntimeStateChanged> handler);
+
     Task StartInfrastructureAsync(CancellationToken cancellationToken = default);
 
     Task ConnectSensorAsync(string screenId, string sensorId, CancellationToken cancellationToken = default) => Task.FromException(new NotSupportedException());

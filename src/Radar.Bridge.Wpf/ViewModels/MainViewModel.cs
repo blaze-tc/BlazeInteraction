@@ -32,7 +32,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _fileDialogs = fileDialogs ?? new WpfFileDialogService();
         _uiContext = SynchronizationContext.Current ?? new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher);
-        _unityStatus = runtime.UnityStatus;
+        _unityStatus = UnityClientStatus.Disconnected;
         Screens = new ObservableCollection<ScreenItemViewModel>(_configuration.Screens.Select(screen => new ScreenItemViewModel(screen)));
         SubscribeToScreens();
         SelectedScreen = Screens.FirstOrDefault();
@@ -70,10 +70,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         _runtime.SensorSnapshotUpdated += OnSensorSnapshotUpdated;
         _runtime.ScreenSnapshotUpdated += OnScreenSnapshotUpdated;
-        _runtime.SensorStateChanged += OnSensorStateChanged;
         _runtime.ConfigurationChanged += OnConfigurationChanged;
         _runtime.LogReceived += OnLogReceived;
-        _runtime.UnityStatusChanged += OnUnityStatusChanged;
+        _runtime.SubscribeUnityStatus(OnUnityStatusChanged);
+        _runtime.SubscribeSensorStates(OnSensorStateChanged);
     }
 
     public ObservableCollection<ScreenItemViewModel> Screens { get; }
@@ -353,6 +353,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(Screens));
         NotifyRadarConnectionStatus();
         NotifyCommandState();
+        _runtime.UnsubscribeSensorStates(OnSensorStateChanged);
+        _runtime.SubscribeSensorStates(OnSensorStateChanged);
     }
 
     private void ReceiveLog(string entry, DateTimeOffset? timestamp = null)
@@ -451,10 +453,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _disposed = true;
         _runtime.SensorSnapshotUpdated -= OnSensorSnapshotUpdated;
         _runtime.ScreenSnapshotUpdated -= OnScreenSnapshotUpdated;
-        _runtime.SensorStateChanged -= OnSensorStateChanged;
         _runtime.ConfigurationChanged -= OnConfigurationChanged;
         _runtime.LogReceived -= OnLogReceived;
-        _runtime.UnityStatusChanged -= OnUnityStatusChanged;
+        _runtime.UnsubscribeUnityStatus(OnUnityStatusChanged);
+        _runtime.UnsubscribeSensorStates(OnSensorStateChanged);
         if (_selectedSensor is not null) _selectedSensor.PropertyChanged -= OnSelectedSensorPropertyChanged;
         UnsubscribeFromScreens();
     }

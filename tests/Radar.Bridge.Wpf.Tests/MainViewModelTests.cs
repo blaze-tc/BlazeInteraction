@@ -353,6 +353,19 @@ public sealed class MainViewModelTests
     }
 
     [Fact]
+    public void Constructor_UsesAtomicUnityStatusSubscription()
+    {
+        var runtime = new TestRuntime();
+        runtime.BeforeUnityStatusSubscription = () => runtime.PublishUnityStatus(
+            new UnityClientStatus(true, 42, "2021.3.45f1", [], null, 0, null));
+
+        using var viewModel = new MainViewModel(ThreeScreenFourSensorConfiguration(), runtime);
+
+        Assert.True(viewModel.UnityStatus.IsConnected);
+        Assert.Equal("Unity：已连接", viewModel.UnityConnectionText);
+    }
+
+    [Fact]
     public async Task ConnectionStatus_RefreshesForSensorEnabledStateAndConfigurationChanges()
     {
         var configuration = new RadarAppConfiguration { Screens = [Screen("front", true, "s1")] };
@@ -390,12 +403,14 @@ public sealed class MainViewModelTests
         var originalScreen = viewModel.SelectedScreen!;
 
         await ExecuteAsync(viewModel.AddSensorCommand);
-        await WaitUntilAsync(() => viewModel.EnabledRadarCount == 1);
-        Assert.Equal("雷达：0/1 未连接", viewModel.RadarConnectionText);
+        var added = viewModel.SelectedScreen!.Sensors.Single(sensor => sensor.SensorId == "sensor-1");
+        added.Enabled = true;
+        await WaitUntilAsync(() => viewModel.EnabledRadarCount == 2);
+        Assert.Equal("雷达：0/2 未连接", viewModel.RadarConnectionText);
 
-        viewModel.SelectedSensor = viewModel.SelectedScreen!.Sensors.Single(sensor => sensor.SensorId == "sensor-1");
+        viewModel.SelectedSensor = added;
         await ExecuteAsync(viewModel.DeleteSensorCommand);
-        await WaitUntilAsync(() => viewModel.SelectedScreen!.Sensors.Count == 1);
+        await WaitUntilAsync(() => viewModel.EnabledRadarCount == 1);
 
         runtime.PublishConfigurationChanged();
         await WaitUntilAsync(() => !ReferenceEquals(originalScreen, viewModel.SelectedScreen));
@@ -628,7 +643,7 @@ public sealed class MainViewModelTests
         public event Action<RadarSensorRuntimeSnapshot>? SensorSnapshotUpdated;
         event Action<RadarScreenRuntimeSnapshot>? IRadarBridgeRuntime.ScreenSnapshotUpdated { add { } remove { } }
         public event Action<string>? LogReceived;
-        public event Action<UnityClientStatus>? UnityStatusChanged { add { } remove { } }
+        public event Action<UnityClientStatus>? UnityStatusChanged;
         public (string ScreenId, string SensorId)? LastConnectedSensor { get; private set; }
         public (string ScreenId, string SensorId)? LastDisconnectedSensor { get; private set; }
         public int DisconnectSensorCallCount { get; private set; }
@@ -640,6 +655,7 @@ public sealed class MainViewModelTests
         public Exception? ConnectSensorException { get; init; }
         public TaskCompletionSource? ConnectGate { get; init; }
         public TaskCompletionSource? DisconnectGate { get; init; }
+        public Action? BeforeUnityStatusSubscription { get; set; }
         public List<string> Operations { get; } = [];
         public UnityClientStatus UnityStatus { get; private set; } = UnityClientStatus.Disconnected;
         public Task StartInfrastructureAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
@@ -680,6 +696,15 @@ public sealed class MainViewModelTests
             UnityStatusChanged?.Invoke(status);
         }
         public void PublishConfigurationChanged() => ConfigurationChanged?.Invoke();
+        public void SubscribeUnityStatus(Action<UnityClientStatus> handler)
+        {
+            UnityStatusChanged += handler;
+            BeforeUnityStatusSubscription?.Invoke();
+            handler(UnityStatus);
+        }
+        public void UnsubscribeUnityStatus(Action<UnityClientStatus> handler) => UnityStatusChanged -= handler;
+        public void SubscribeSensorStates(Action<RadarSensorRuntimeStateChanged> handler) => SensorStateChanged += handler;
+        public void UnsubscribeSensorStates(Action<RadarSensorRuntimeStateChanged> handler) => SensorStateChanged -= handler;
         public event Action<RadarSensorRuntimeStateChanged>? SensorStateChanged;
         public event Action? ConfigurationChanged;
     }

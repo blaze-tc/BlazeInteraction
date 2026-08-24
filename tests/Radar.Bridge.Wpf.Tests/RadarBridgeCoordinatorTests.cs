@@ -45,6 +45,25 @@ public sealed class RadarBridgeCoordinatorTests
     }
 
     [Fact]
+    public async Task MainViewModel_InitializesSensorStateThatWasRunningBeforeWindowCreation()
+    {
+        var configuration = new RadarAppConfiguration
+        {
+            Screens = [ScreenConfiguration("front", "f1", 1920, 1080)]
+        };
+        var factory = new FakePipelineFactory();
+        await using var coordinator = CreateCoordinator(configuration, factory);
+        await coordinator.ApplyUnityTopologyAsync(Hello(Screen("front", "Front", true, 1920, 1080, 0)));
+        await coordinator.ConnectSensorAsync("front", "f1");
+
+        using var viewModel = new MainViewModel(configuration, coordinator);
+
+        Assert.Equal(RadarSensorRuntimeState.Running, viewModel.SelectedScreen!.Sensors.Single().RuntimeState);
+        Assert.Equal(1, viewModel.ConnectedRadarCount);
+        Assert.Equal("雷达：1/1 已连接", viewModel.RadarConnectionText);
+    }
+
+    [Fact]
     public async Task Coordinator_BlockedProviderSendCannotRestoreDisconnectedUnityStatus()
     {
         var sendEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

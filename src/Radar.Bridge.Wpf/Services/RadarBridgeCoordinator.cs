@@ -21,7 +21,9 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private readonly bool _enableLegacyIpc;
     private readonly CancellationTokenSource _lifetime = new();
     private readonly object _unityStatusGate = new();
+    private readonly object _sensorStateGate = new();
     private readonly Queue<UnityStatusPublication> _unityStatusPublications = new();
+    private readonly Dictionary<string, SensorStateSnapshot> _sensorStates = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
     private readonly SemaphoreSlim _topologyLock = new(1, 1);
     private readonly Dictionary<string, ScreenRuntime> _screens = new(StringComparer.OrdinalIgnoreCase);
@@ -70,10 +72,21 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
 
     public event Action<RadarSensorRuntimeSnapshot>? SensorSnapshotUpdated;
     public event Action<RadarScreenRuntimeSnapshot>? ScreenSnapshotUpdated;
-    public event Action<RadarSensorRuntimeStateChanged>? SensorStateChanged;
+    private Action<RadarSensorRuntimeStateChanged>? _sensorStateChanged;
+    private Action<UnityClientStatus>? _unityStatusChanged;
+
+    public event Action<RadarSensorRuntimeStateChanged>? SensorStateChanged
+    {
+        add { lock (_sensorStateGate) _sensorStateChanged += value; }
+        remove { lock (_sensorStateGate) _sensorStateChanged -= value; }
+    }
     public event Action? ConfigurationChanged;
     public event Action<string>? LogReceived;
-    public event Action<UnityClientStatus>? UnityStatusChanged;
+    public event Action<UnityClientStatus>? UnityStatusChanged
+    {
+        add { lock (_unityStatusGate) _unityStatusChanged += value; }
+        remove { lock (_unityStatusGate) _unityStatusChanged -= value; }
+    }
 
     public UnityClientStatus UnityStatus
     {
@@ -84,6 +97,44 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
                 return _unityStatus;
             }
         }
+    }
+
+    public void SubscribeUnityStatus(Action<UnityClientStatus> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        lock (_unityStatusGate)
+        {
+            _unityStatusChanged += handler;
+            InvokeSafely(handler, _unityStatus);
+        }
+    }
+
+    public void UnsubscribeUnityStatus(Action<UnityClientStatus> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        lock (_unityStatusGate) _unityStatusChanged -= handler;
+    }
+
+    public void SubscribeSensorStates(Action<RadarSensorRuntimeStateChanged> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        lock (_sensorStateGate)
+        {
+            _sensorStateChanged += handler;
+            foreach (var state in _sensorStates.Values
+                         .Select(value => value.State)
+                         .OrderBy(value => value.ScreenId, StringComparer.OrdinalIgnoreCase)
+                         .ThenBy(value => value.SensorId, StringComparer.OrdinalIgnoreCase))
+            {
+                InvokeSafely(handler, state);
+            }
+        }
+    }
+
+    public void UnsubscribeSensorStates(Action<RadarSensorRuntimeStateChanged> handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        lock (_sensorStateGate) _sensorStateChanged -= handler;
     }
 
     /// <summary>Applies authenticated Unity status supplied by the unified interaction host in provider mode.</summary>
@@ -226,6 +277,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             }
 
             RefreshAssociatedSnapshot();
+            RefreshSensorStateSnapshot();
         }
         finally
         {
@@ -268,6 +320,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
                 RetireRuntime(runtime, now, remove: false, staged[runtime.Info.ScreenId]);
             }
             RefreshAssociatedSnapshot();
+            RefreshSensorStateSnapshot();
         }
         finally
         {
@@ -361,6 +414,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
                 RetireRuntime(runtime, now, remove: false, staged[runtime.Info.ScreenId]);
             }
             RefreshAssociatedSnapshot();
+            RefreshSensorStateSnapshot();
         }
         finally
         {
@@ -839,7 +893,8 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private void OnPipelineStateChanged(ScreenRuntime runtime, PipelineRuntime binding, RadarSensorRuntimeState state)
     {
         if (state == RadarSensorRuntimeState.Faulted) PublishLog($"[{runtime.Info.ScreenId}/{binding.Configuration.SensorId}] pipeline faulted.");
-        InvokeSafely(SensorStateChanged, new RadarSensorRuntimeStateChanged(runtime.Info.ScreenId, binding.Configuration.SensorId, state, state == RadarSensorRuntimeState.Faulted ? "Pipeline faulted" : null));
+        PublishSensorState(binding, runtime.Info.ScreenId, binding.Configuration.SensorId, state,
+            state == RadarSensorRuntimeState.Faulted ? "Pipeline faulted" : null);
     }
 
     private void PublishScreenSnapshot(ScreenRuntime runtime, RadarScreenFusionResult result, DateTimeOffset timestamp)
@@ -1011,6 +1066,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
                 }
             }
             RefreshAssociatedSnapshot();
+            RefreshSensorStateSnapshot();
         }
         finally { _topologyLock.Release(); }
     }
@@ -1347,7 +1403,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             ArgumentNullException.ThrowIfNull(updated);
             value = updated with { Screens = Array.AsReadOnly(updated.Screens.ToArray()) };
             _unityStatus = value;
-            _unityStatusPublications.Enqueue(new UnityStatusPublication(value, UnityStatusChanged));
+            _unityStatusPublications.Enqueue(new UnityStatusPublication(value, _unityStatusChanged));
             if (!_isDrainingUnityStatus)
             {
                 _isDrainingUnityStatus = true;
@@ -1380,6 +1436,38 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             InvokeSafely(publication.Handlers, publication.Value);
         }
     }
+    private void PublishSensorState(PipelineRuntime binding, string screenId, string sensorId, RadarSensorRuntimeState state, string? error = null)
+    {
+        var change = new RadarSensorRuntimeStateChanged(screenId, sensorId, state, error);
+        Action<RadarSensorRuntimeStateChanged>? handlers;
+        lock (_sensorStateGate)
+        {
+            var key = SensorStateKey(screenId, sensorId);
+            if (!_sensorStates.TryGetValue(key, out var current) || !ReferenceEquals(current.Binding, binding)) return;
+            _sensorStates[key] = new SensorStateSnapshot(binding, change);
+            handlers = _sensorStateChanged;
+        }
+        InvokeSafely(handlers, change);
+    }
+
+    private void RefreshSensorStateSnapshot()
+    {
+        var states = _screens.Values
+            .Select(runtime => runtime.IsRetiring ? runtime.PendingReplacement : runtime)
+            .Where(runtime => runtime is { Associated: true, IsRetiring: false })
+            .OfType<ScreenRuntime>()
+            .Distinct()
+            .SelectMany(runtime => runtime.Pipelines.Values.Select(binding => new SensorStateSnapshot(binding,
+                new RadarSensorRuntimeStateChanged(runtime.Info.ScreenId, binding.Configuration.SensorId, binding.Pipeline.State))))
+            .ToArray();
+        lock (_sensorStateGate)
+        {
+            _sensorStates.Clear();
+            foreach (var state in states) _sensorStates[SensorStateKey(state.State.ScreenId, state.State.SensorId)] = state;
+        }
+    }
+
+    private static string SensorStateKey(string screenId, string sensorId) => string.Concat(screenId, "\u001F", sensorId);
     private void PublishLog(string message) { _logger.LogInformation("{Message}", message); InvokeSafely(LogReceived, message); }
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 
@@ -1433,6 +1521,8 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         public Action<RadarSensorRuntimeState>? StateHandler { get; set; }
         public Action<string>? LogHandler { get; set; }
     }
+
+    private sealed record SensorStateSnapshot(PipelineRuntime Binding, RadarSensorRuntimeStateChanged State);
 
     private sealed class PipelineLease(ScreenRuntime runtime, PipelineRuntime pipeline, CancellationToken cancellationToken) : IDisposable
     {
