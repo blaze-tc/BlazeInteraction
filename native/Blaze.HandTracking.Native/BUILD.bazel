@@ -1,8 +1,18 @@
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+
 package(default_visibility = ["//visibility:public"])
 
-# Task 2 replaces this source-contract filegroup with the Windows shared-library
-# target after the MediaPipe overlay implementation is added.
-filegroup(
-    name = "native_abi",
-    srcs = ["blaze_hand_tracking.h"],
+cc_binary(
+    name = "Blaze.HandTracking.Native.dll",
+    srcs = [
+        "blaze_hand_tracking.cc",
+        "blaze_hand_tracking.h",
+    ],
+    linkshared = True,
+    linkstatic = True,
+    tags = ["manual"],
+    deps = [
+        "//mediapipe/tasks/c/vision/core:image",
+        "//mediapipe/tasks/c/vision/hand_landmarker:hand_landmarker_lib",
+    ],
 )
