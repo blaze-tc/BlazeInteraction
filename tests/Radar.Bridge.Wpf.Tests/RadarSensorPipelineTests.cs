@@ -55,6 +55,33 @@ public sealed class RadarSensorPipelineTests
     }
 
     [Fact]
+    public async Task SimulationFootprints_FormClosedContoursAroundEveryDetection()
+    {
+        await using var pipeline = CreatePipeline("main", "sensor-1", new ConfigurationPixelRect(0, 0, 1920, 1080));
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var received = new TaskCompletionSource<SensorDetectionFrame>(TaskCreationOptions.RunContinuationsAsynchronously);
+        pipeline.DetectionFrameUpdated += frame =>
+        {
+            if (frame.Detections.Count == 2)
+            {
+                received.TrySetResult(frame);
+            }
+        };
+
+        await pipeline.StartAsync(cancellation.Token);
+        var frame = await received.Task.WaitAsync(cancellation.Token);
+
+        Assert.Equal([12, 16], frame.Detections.Select(item => item.Footprint.Count).Order().ToArray());
+        Assert.All(frame.Detections, detection =>
+        {
+            Assert.True(detection.Footprint.Min(point => point.PixelX) < detection.PixelX);
+            Assert.True(detection.Footprint.Max(point => point.PixelX) > detection.PixelX);
+            Assert.True(detection.Footprint.Min(point => point.PixelY) < detection.PixelY);
+            Assert.True(detection.Footprint.Max(point => point.PixelY) > detection.PixelY);
+        });
+    }
+
+    [Fact]
     public async Task ProcessingChannel_DropsOldFramesInsteadOfAccumulatingLatency()
     {
         await using var pipeline = CreatePipeline("main", "sensor-1", new ConfigurationPixelRect(0, 0, 1920, 1080));

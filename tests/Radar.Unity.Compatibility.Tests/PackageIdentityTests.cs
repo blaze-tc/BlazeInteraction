@@ -81,6 +81,25 @@ public sealed class PackageIdentityTests
     }
 
     [Fact]
+    public void BasicInteractionSample_EmitsPooledHalfSecondParticlesForEveryFootprintPoint()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            PackageRoot(),
+            "Samples~",
+            "BasicInteraction",
+            "BasicInteractionPresenter.cs"));
+
+        Assert.Contains("PointUpdated += OnPointUpdated", source, StringComparison.Ordinal);
+        Assert.Contains("EmitFootprintParticles(point)", source, StringComparison.Ordinal);
+        Assert.Contains("footprintLifetimeSeconds = 0.5f", source, StringComparison.Ordinal);
+        Assert.Contains("AcquireFootprintParticle", source, StringComparison.Ordinal);
+        Assert.Contains("ReleaseFootprintParticle", source, StringComparison.Ordinal);
+        Assert.Contains("surface.LogicalWidth", source, StringComparison.Ordinal);
+        Assert.Contains("surface.LogicalHeight", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("Destroy(", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void BasicInteractionScene_WiresItsVisibleInteractionDiagnostics()
     {
         var sampleRoot = Path.Combine(PackageRoot(), "Samples~", "BasicInteraction");

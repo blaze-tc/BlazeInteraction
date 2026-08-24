@@ -27,6 +27,14 @@ namespace Blaze.Interaction.Editor.Tests
             StringAssert.Contains("EnsureCursor", source);
             StringAssert.Contains("UpdateCursor", source);
             StringAssert.Contains("InteractionManager.Instance.Points", source);
+            StringAssert.Contains("PointUpdated += OnPointUpdated", source);
+            StringAssert.Contains("EmitFootprintParticles(point)", source);
+            StringAssert.Contains("footprintLifetimeSeconds = 0.5f", source);
+            StringAssert.Contains("AcquireFootprintParticle", source);
+            StringAssert.Contains("ReleaseFootprintParticle", source);
+            StringAssert.Contains("surface.LogicalWidth", source);
+            StringAssert.Contains("surface.LogicalHeight", source);
+            StringAssert.DoesNotContain("Destroy(", source);
             StringAssert.DoesNotContain("CameraVision", source);
             StringAssert.DoesNotContain("NamedPipe", source);
         }

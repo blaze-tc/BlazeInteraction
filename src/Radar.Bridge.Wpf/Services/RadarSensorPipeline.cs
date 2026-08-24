@@ -450,8 +450,8 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
             sequence++;
             var phase = sequence * 0.045f;
             var points = new List<RadarPoint>();
-            AddSyntheticTarget(points, 1.8f, 60f + MathF.Sin(phase) * 30f, 9);
-            AddSyntheticTarget(points, 2.8f, 170f + MathF.Cos(phase * 0.8f) * 18f, 7);
+            AddSyntheticTarget(points, 1.8f, 60f + MathF.Sin(phase) * 30f, 16);
+            AddSyntheticTarget(points, 2.8f, 170f + MathF.Cos(phase * 0.8f) * 18f, 12);
             points.Sort((left, right) => left.AngleRaw.CompareTo(right.AngleRaw));
             PublishScan(new RadarScanFrame(sequence, DateTimeOffset.UtcNow, points));
         }
@@ -791,17 +791,34 @@ public sealed class RadarSensorPipeline : IRadarSensorPipeline
 
     private static void AddSyntheticTarget(ICollection<RadarPoint> points, float distanceMeters, float centerAngle, int count)
     {
+        var centerRadians = centerAngle * MathF.PI / 180f;
+        var radialX = MathF.Cos(centerRadians);
+        var radialY = MathF.Sin(centerRadians);
+        var tangentX = -radialY;
+        var tangentY = radialX;
+        var centerX = distanceMeters * radialX;
+        var centerY = distanceMeters * radialY;
+        var tangentialRadius = 0.10f + MathF.Min(0.045f, distanceMeters * 0.015f);
+        var radialRadius = 0.035f + MathF.Min(0.012f, distanceMeters * 0.004f);
+
         for (var index = 0; index < count; index++)
         {
-            var angle = centerAngle + (index - (count - 1) / 2f) * 0.75f;
-            var radians = angle * MathF.PI / 180f;
-            var distance = distanceMeters + (index % 2 == 0 ? 0.01f : -0.01f);
+            var contourAngle = index * MathF.Tau / count;
+            var tangentNoise = 1f + MathF.Sin(index * 1.73f + centerAngle * 0.03f) * 0.045f;
+            var radialNoise = 1f + MathF.Cos(index * 2.17f + distanceMeters) * 0.07f;
+            var tangentOffset = MathF.Cos(contourAngle) * tangentialRadius * tangentNoise;
+            var radialOffset = MathF.Sin(contourAngle) * radialRadius * radialNoise;
+            var x = centerX + tangentX * tangentOffset + radialX * radialOffset;
+            var y = centerY + tangentY * tangentOffset + radialY * radialOffset;
+            var distance = MathF.Sqrt(x * x + y * y);
+            var angle = MathF.Atan2(y, x) * 180f / MathF.PI;
+            if (angle < 0f) angle += 360f;
             points.Add(new RadarPoint(
                 (int)MathF.Round(distance * 100f),
                 (int)MathF.Round(angle * 100f),
                 angle,
-                distance * MathF.Cos(radians),
-                distance * MathF.Sin(radians)));
+                x,
+                y));
         }
     }
 
