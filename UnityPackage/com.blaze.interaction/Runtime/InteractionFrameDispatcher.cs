@@ -164,8 +164,22 @@ namespace Blaze.Interaction
                 Confidence = point.Confidence,
                 TimestampUnixMs = point.TimestampUnixMs,
                 Extensions = point.Extensions,
-                Fp = new List<Vector2Data>(point.Fp)
+                Fp = CopyFootprint(point.Fp)
             };
+        }
+
+        private static List<Vector2Data> CopyFootprint(List<Vector2Data> footprint)
+        {
+            var copy = new List<Vector2Data>(footprint.Count);
+            for (var index = 0; index < footprint.Count; index++)
+            {
+                var value = footprint[index];
+                copy.Add(value == null
+                    ? null
+                    : new Vector2Data { X = value.X, Y = value.Y });
+            }
+
+            return copy;
         }
 
         private static void InvokeSafely<T>(Action<T> handlers, T value)
