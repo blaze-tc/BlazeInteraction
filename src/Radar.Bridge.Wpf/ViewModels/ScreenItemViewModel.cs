@@ -83,10 +83,19 @@ public sealed class ScreenItemViewModel : ObservableObject, System.ComponentMode
         LatestSnapshot = snapshot;
         ApplyFusedTargetCount(snapshot.Targets.Count);
     }
-    public void NotifySensorChanges() { OnPropertyChanged(nameof(OnlineSensorCount)); OnPropertyChanged(nameof(HasValidationErrors)); }
+    public void NotifySensorChanges()
+    {
+        OnPropertyChanged(nameof(OnlineSensorCount));
+        OnPropertyChanged(nameof(HasValidationErrors));
+    }
     private void OnSensorPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(SensorItemViewModel.RuntimeState) or nameof(SensorItemViewModel.HasValidationErrors)) NotifySensorChanges();
+        if (e.PropertyName is nameof(SensorItemViewModel.Enabled) or
+            nameof(SensorItemViewModel.RuntimeState) or
+            nameof(SensorItemViewModel.HasValidationErrors))
+        {
+            NotifySensorChanges();
+        }
     }
     private static bool ValidateCopy(RadarScreenConfiguration configuration)
     {

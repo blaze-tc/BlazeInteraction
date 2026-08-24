@@ -52,6 +52,33 @@ public sealed class MainWindowBindingTests
             }
         });
     }
+
+    [Fact]
+    public void Header_BindsDerivedUnityAndRadarConnectionText()
+    {
+        WpfTestHost.Instance.Invoke(() =>
+        {
+            var runtime = new TestRuntime();
+            using var viewModel = new MainViewModel(RadarAppConfiguration.CreateDefault(), runtime);
+            var window = new MainWindow(viewModel, runtime);
+            window.Show();
+            window.UpdateLayout();
+
+            var bindings = FindVisualChildren<TextBlock>(window)
+                .Select(textBlock => BindingOperations.GetBinding(textBlock, TextBlock.TextProperty))
+                .Where(binding => binding is not null)
+                .ToArray();
+            var bindingPaths = bindings.Select(binding => binding!.Path?.Path).ToArray();
+
+            Assert.Contains(nameof(MainViewModel.UnityConnectionText), bindingPaths);
+            Assert.Contains(nameof(MainViewModel.RadarConnectionText), bindingPaths);
+            Assert.DoesNotContain(bindings, binding =>
+                string.Equals(binding!.Path?.Path, "UnityStatus.IsConnected", StringComparison.Ordinal) ||
+                !string.IsNullOrEmpty(binding.StringFormat));
+
+            window.Close();
+        });
+    }
     [Fact]
     public void Show_BindsSelectedSensorAndScreenSnapshotsToTheirSeparateViews()
     {

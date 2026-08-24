@@ -32,7 +32,10 @@
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                     <Border Background="#12283A" CornerRadius="14" Padding="12,5" Margin="0,0,8,0">
-                        <TextBlock Text="{Binding UnityStatus.IsConnected, StringFormat=Unity 连接：{0}}" Foreground="{StaticResource PrimaryBrush}"/>
+                        <TextBlock Text="{Binding UnityConnectionText}" Foreground="{StaticResource PrimaryBrush}"/>
+                    </Border>
+                    <Border Background="#12283A" CornerRadius="14" Padding="12,5" Margin="0,0,8,0">
+                        <TextBlock Text="{Binding RadarConnectionText}" Foreground="{StaticResource PrimaryBrush}"/>
                     </Border>
                     <Button Content="全部连接" Command="{Binding ConnectAllCommand}" Margin="0,0,6,0"/>
                     <Button Content="全部断开" Command="{Binding DisconnectAllCommand}"/>

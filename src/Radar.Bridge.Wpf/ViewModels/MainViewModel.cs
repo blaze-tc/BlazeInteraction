@@ -34,6 +34,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _uiContext = SynchronizationContext.Current ?? new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher);
         _unityStatus = runtime.UnityStatus;
         Screens = new ObservableCollection<ScreenItemViewModel>(_configuration.Screens.Select(screen => new ScreenItemViewModel(screen)));
+        SubscribeToScreens();
         SelectedScreen = Screens.FirstOrDefault();
 
         AddSensorCommand = CreateCommand(AddSensorAsync, () => CanEditSelectedScreen);
@@ -77,7 +78,26 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public ObservableCollection<ScreenItemViewModel> Screens { get; }
     public ObservableCollection<string> VisibleLogEntries { get; } = [];
-    public UnityClientStatus UnityStatus { get => _unityStatus; private set => SetProperty(ref _unityStatus, value); }
+    public UnityClientStatus UnityStatus
+    {
+        get => _unityStatus;
+        private set
+        {
+            if (SetProperty(ref _unityStatus, value)) OnPropertyChanged(nameof(UnityConnectionText));
+        }
+    }
+    public string UnityConnectionText => UnityStatus.IsConnected ? "Unity：已连接" : "Unity：未连接";
+    public int EnabledRadarCount => Screens.Sum(screen =>
+        screen.Sensors.Count(sensor => sensor.Configuration.Enabled));
+    public int ConnectedRadarCount => Screens.Sum(screen =>
+        screen.Sensors.Count(sensor => sensor.Configuration.Enabled && sensor.RuntimeState == RadarSensorRuntimeState.Running));
+    public string RadarConnectionText => EnabledRadarCount switch
+    {
+        0 => "雷达：0/0 未配置",
+        _ when ConnectedRadarCount == 0 => $"雷达：0/{EnabledRadarCount} 未连接",
+        _ when ConnectedRadarCount == EnabledRadarCount => $"雷达：{ConnectedRadarCount}/{EnabledRadarCount} 已连接",
+        _ => $"雷达：{ConnectedRadarCount}/{EnabledRadarCount} 部分连接"
+    };
     public bool CanEditSelectedScreen => SelectedScreen is not null;
     public bool HasSelectedScreen => SelectedScreen is not null;
     public bool HasSelectedSensor => SelectedSensor is not null;
@@ -252,9 +272,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (SelectedScreen is { IsAssociated: false } screen)
         {
             _configuration.Screens.Remove(screen.Configuration);
+            UnsubscribeFromScreen(screen);
             Screens.Remove(screen);
             ClearMoveLogStateForScreen(screen.ScreenId);
             SelectedScreen = Screens.FirstOrDefault();
+            NotifyRadarConnectionStatus();
         }
         return Task.CompletedTask;
     }
@@ -285,13 +307,42 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private void OnUnityStatusChanged(UnityClientStatus status) => Dispatch(() => UnityStatus = status);
     private ScreenItemViewModel? FindScreen(string screenId) => Screens.FirstOrDefault(screen => string.Equals(screen.ScreenId, screenId, StringComparison.OrdinalIgnoreCase));
     private void OnSelectedSensorPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) { OnPropertyChanged(string.Empty); NotifyCommandState(); }
+    private void OnScreenPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(ScreenItemViewModel.OnlineSensorCount)) NotifyRadarConnectionStatus();
+    }
+
+    private void SubscribeToScreens()
+    {
+        foreach (var screen in Screens) screen.PropertyChanged += OnScreenPropertyChanged;
+    }
+
+    private void UnsubscribeFromScreens()
+    {
+        foreach (var screen in Screens) UnsubscribeFromScreen(screen);
+    }
+
+    private void UnsubscribeFromScreen(ScreenItemViewModel screen) => screen.PropertyChanged -= OnScreenPropertyChanged;
+
+    private void NotifyRadarConnectionStatus()
+    {
+        OnPropertyChanged(nameof(EnabledRadarCount));
+        OnPropertyChanged(nameof(ConnectedRadarCount));
+        OnPropertyChanged(nameof(RadarConnectionText));
+    }
 
     private void RefreshScreensFromConfiguration()
     {
         var selectedScreenId = SelectedScreen?.ScreenId;
         var selectedSensorId = SelectedSensor?.SensorId;
+        UnsubscribeFromScreens();
         Screens.Clear();
-        foreach (var screen in _configuration.Screens) Screens.Add(new ScreenItemViewModel(screen));
+        foreach (var screen in _configuration.Screens)
+        {
+            var item = new ScreenItemViewModel(screen);
+            item.PropertyChanged += OnScreenPropertyChanged;
+            Screens.Add(item);
+        }
         _lastMoveLogAt.Clear();
         SelectedScreen = selectedScreenId is null ? Screens.FirstOrDefault() : FindScreen(selectedScreenId) ?? Screens.FirstOrDefault();
         if (selectedSensorId is not null && SelectedScreen is not null)
@@ -300,6 +351,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 ?? SelectedScreen.Sensors.FirstOrDefault();
         }
         OnPropertyChanged(nameof(Screens));
+        NotifyRadarConnectionStatus();
         NotifyCommandState();
     }
 
@@ -404,5 +456,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _runtime.LogReceived -= OnLogReceived;
         _runtime.UnityStatusChanged -= OnUnityStatusChanged;
         if (_selectedSensor is not null) _selectedSensor.PropertyChanged -= OnSelectedSensorPropertyChanged;
+        UnsubscribeFromScreens();
     }
 }

@@ -298,6 +298,139 @@ public sealed class MainViewModelTests
         Assert.Empty(viewModel.VisibleLogEntries);
     }
 
+    [Theory]
+    [InlineData(0, 0, "雷达：0/0 未配置")]
+    [InlineData(0, 2, "雷达：0/2 未连接")]
+    [InlineData(1, 2, "雷达：1/2 部分连接")]
+    [InlineData(2, 2, "雷达：2/2 已连接")]
+    public async Task RadarConnectionText_ReflectsEnabledRunningSensors(
+        int running,
+        int enabled,
+        string expected)
+    {
+        var configuration = new RadarAppConfiguration
+        {
+            Screens =
+            [
+                Screen("front", true, Enumerable.Range(1, enabled).Select(index => $"s{index}").ToArray())
+            ]
+        };
+        foreach (var sensor in configuration.Screens[0].Sensors) sensor.Enabled = true;
+        var runtime = new TestRuntime();
+        using var viewModel = new MainViewModel(configuration, runtime);
+
+        foreach (var sensor in configuration.Screens[0].Sensors.Take(running))
+        {
+            runtime.PublishSensorState(new RadarSensorRuntimeStateChanged(
+                "front", sensor.SensorId, RadarSensorRuntimeState.Running));
+        }
+
+        await WaitUntilAsync(() => viewModel.ConnectedRadarCount == running);
+
+        Assert.Equal(enabled, viewModel.EnabledRadarCount);
+        Assert.Equal(expected, viewModel.RadarConnectionText);
+    }
+
+    [Fact]
+    public async Task UnityConnectionText_UsesChineseConnectedState()
+    {
+        var runtime = new TestRuntime();
+        using var viewModel = new MainViewModel(ThreeScreenFourSensorConfiguration(), runtime);
+        var notifications = new HashSet<string>();
+        viewModel.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName is not null) notifications.Add(args.PropertyName);
+        };
+
+        runtime.PublishUnityStatus(new UnityClientStatus(true, 42, "2021.3.45f1", [], null, 0, null));
+        await WaitUntilAsync(() => viewModel.UnityStatus.IsConnected);
+
+        Assert.Equal("Unity：已连接", viewModel.UnityConnectionText);
+        Assert.Contains(nameof(MainViewModel.UnityConnectionText), notifications);
+        runtime.PublishUnityStatus(UnityClientStatus.Disconnected);
+        await WaitUntilAsync(() => !viewModel.UnityStatus.IsConnected);
+        Assert.Equal("Unity：未连接", viewModel.UnityConnectionText);
+    }
+
+    [Fact]
+    public async Task ConnectionStatus_RefreshesForSensorEnabledStateAndConfigurationChanges()
+    {
+        var configuration = new RadarAppConfiguration { Screens = [Screen("front", true, "s1")] };
+        configuration.Screens[0].Sensors[0].Enabled = false;
+        var runtime = new TestRuntime();
+        using var viewModel = new MainViewModel(configuration, runtime);
+        var notifications = new HashSet<string>();
+        viewModel.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName is not null) notifications.Add(args.PropertyName);
+        };
+
+        viewModel.SelectedSensor!.Enabled = true;
+        await WaitUntilAsync(() => viewModel.EnabledRadarCount == 1);
+        runtime.PublishSensorState(new RadarSensorRuntimeStateChanged("front", "s1", RadarSensorRuntimeState.Running));
+        await WaitUntilAsync(() => viewModel.ConnectedRadarCount == 1);
+
+        configuration.Screens[0].Sensors[0].Enabled = false;
+        runtime.PublishConfigurationChanged();
+        await WaitUntilAsync(() => viewModel.EnabledRadarCount == 0);
+
+        Assert.Contains(nameof(MainViewModel.EnabledRadarCount), notifications);
+        Assert.Contains(nameof(MainViewModel.ConnectedRadarCount), notifications);
+        Assert.Contains(nameof(MainViewModel.RadarConnectionText), notifications);
+        Assert.Equal("雷达：0/0 未配置", viewModel.RadarConnectionText);
+    }
+
+    [Fact]
+    public async Task ConnectionStatus_RefreshesWhenSensorsAreAddedDeletedAndScreensAreRebuilt()
+    {
+        var configuration = new RadarAppConfiguration { Screens = [Screen("front", true, "s1")] };
+        configuration.Screens[0].Sensors[0].Enabled = true;
+        var runtime = new TestRuntime();
+        using var viewModel = new MainViewModel(configuration, runtime);
+        var originalScreen = viewModel.SelectedScreen!;
+
+        await ExecuteAsync(viewModel.AddSensorCommand);
+        await WaitUntilAsync(() => viewModel.EnabledRadarCount == 1);
+        Assert.Equal("雷达：0/1 未连接", viewModel.RadarConnectionText);
+
+        viewModel.SelectedSensor = viewModel.SelectedScreen!.Sensors.Single(sensor => sensor.SensorId == "sensor-1");
+        await ExecuteAsync(viewModel.DeleteSensorCommand);
+        await WaitUntilAsync(() => viewModel.SelectedScreen!.Sensors.Count == 1);
+
+        runtime.PublishConfigurationChanged();
+        await WaitUntilAsync(() => !ReferenceEquals(originalScreen, viewModel.SelectedScreen));
+        var notificationsAfterRefresh = 0;
+        viewModel.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(MainViewModel.RadarConnectionText)) notificationsAfterRefresh++;
+        };
+        originalScreen.Sensors[0].Enabled = false;
+        await Task.Delay(25);
+
+        Assert.Equal(0, notificationsAfterRefresh);
+        Assert.Equal(1, viewModel.EnabledRadarCount);
+    }
+
+    [Fact]
+    public async Task Dispose_PreventsConnectionStatusUpdates()
+    {
+        var runtime = new TestRuntime();
+        var viewModel = new MainViewModel(ThreeScreenFourSensorConfiguration(), runtime);
+        var notifications = 0;
+        viewModel.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName is nameof(MainViewModel.UnityConnectionText) or nameof(MainViewModel.RadarConnectionText)) notifications++;
+        };
+
+        viewModel.Dispose();
+        runtime.PublishUnityStatus(new UnityClientStatus(true, 42, "2021.3.45f1", [], null, 0, null));
+        runtime.PublishSensorState(new RadarSensorRuntimeStateChanged("front", "f1", RadarSensorRuntimeState.Running));
+        await Task.Delay(25);
+
+        Assert.Equal(0, notifications);
+        Assert.Equal("Unity：未连接", viewModel.UnityConnectionText);
+    }
+
     [Fact]
     public void CalibrationAndMaskUseMatchedPhysicalClusters_AndMissingDataDoesNotWrite()
     {
@@ -508,7 +641,7 @@ public sealed class MainViewModelTests
         public TaskCompletionSource? ConnectGate { get; init; }
         public TaskCompletionSource? DisconnectGate { get; init; }
         public List<string> Operations { get; } = [];
-        public UnityClientStatus UnityStatus => UnityClientStatus.Disconnected;
+        public UnityClientStatus UnityStatus { get; private set; } = UnityClientStatus.Disconnected;
         public Task StartInfrastructureAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task ConnectSensorAsync(string screenId, string sensorId, CancellationToken cancellationToken = default)
         {
@@ -541,7 +674,14 @@ public sealed class MainViewModelTests
         public void PublishLog(string entry) => LogReceived?.Invoke(entry);
         public void PublishSensorSnapshot(RadarSensorRuntimeSnapshot snapshot) => SensorSnapshotUpdated?.Invoke(snapshot);
         public void PublishSensorState(RadarSensorRuntimeStateChanged state) => SensorStateChanged?.Invoke(state);
+        public void PublishUnityStatus(UnityClientStatus status)
+        {
+            UnityStatus = status;
+            UnityStatusChanged?.Invoke(status);
+        }
+        public void PublishConfigurationChanged() => ConfigurationChanged?.Invoke();
         public event Action<RadarSensorRuntimeStateChanged>? SensorStateChanged;
+        public event Action? ConfigurationChanged;
     }
 
     private sealed class FakeDialogs : IFileDialogService
