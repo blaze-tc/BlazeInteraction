@@ -20,6 +20,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     private readonly int? _expectedUnityProcessId;
     private readonly bool _enableLegacyIpc;
     private readonly CancellationTokenSource _lifetime = new();
+    private readonly object _unityStatusGate = new();
     private readonly SemaphoreSlim _lifecycleLock = new(1, 1);
     private readonly SemaphoreSlim _topologyLock = new(1, 1);
     private readonly Dictionary<string, ScreenRuntime> _screens = new(StringComparer.OrdinalIgnoreCase);
@@ -72,15 +73,23 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
     public event Action<string>? LogReceived;
     public event Action<UnityClientStatus>? UnityStatusChanged;
 
-    public UnityClientStatus UnityStatus => Volatile.Read(ref _unityStatus);
+    public UnityClientStatus UnityStatus
+    {
+        get
+        {
+            lock (_unityStatusGate)
+            {
+                return _unityStatus;
+            }
+        }
+    }
 
     /// <summary>Applies authenticated Unity status supplied by the unified interaction host in provider mode.</summary>
     public void ApplyUnityConnectionStatus(UnityClientStatus status)
     {
         ArgumentNullException.ThrowIfNull(status);
         ThrowIfDisposed();
-        var current = UnityStatus;
-        SetUnityStatus(status with
+        UpdateUnityStatus(current => status with
         {
             Screens = Array.AsReadOnly(status.Screens.ToArray()),
             LastBatchSentAt = current.LastBatchSentAt,
@@ -440,6 +449,13 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         return prepared.Payload;
     }
 
+    internal Task SendProviderBatchForTestAsync(long sequence, DateTimeOffset timestamp) =>
+        SendBatchAsync(new PreparedBatch(
+            sequence,
+            timestamp,
+            new PointerBatchPayload([]),
+            null), CancellationToken.None);
+
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
@@ -584,7 +600,7 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
             {
                 await ReleaseTransitionAsync(batch, cancellationToken).ConfigureAwait(false);
                 var error = $"Interaction output failed: {exception.Message}";
-                SetUnityStatus(UnityStatus with { LastError = error });
+                UpdateUnityStatus(current => current with { LastError = error });
                 PublishLog($"[GLOBAL/PROVIDER] {error}");
                 return;
             }
@@ -594,6 +610,12 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
                 return;
             }
 
+            UpdateUnityStatus(current => current with
+            {
+                LastBatchSentAt = batch.Timestamp,
+                LastBatchSequence = batch.Sequence,
+                LastError = null
+            });
             var seamCleanup = await ConfirmTransitionAsync(batch, cancellationToken).ConfigureAwait(false);
             if (seamCleanup is not null) TrackRetirement(seamCleanup);
             return;
@@ -619,16 +641,21 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
         catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             await ReleaseTransitionAsync(batch, cancellationToken).ConfigureAwait(false);
-            SetUnityStatus(UnityStatus with { LastError = $"IPC pointer batch send failed: {exception.Message}" });
+            UpdateUnityStatus(current => current with { LastError = $"IPC pointer batch send failed: {exception.Message}" });
             return;
         }
         if (!sent)
         {
             await ReleaseTransitionAsync(batch, cancellationToken).ConfigureAwait(false);
-            SetUnityStatus(UnityStatus with { LastError = "IPC pointer batch send timed out or disconnected." });
+            UpdateUnityStatus(current => current with { LastError = "IPC pointer batch send timed out or disconnected." });
             return;
         }
-        SetUnityStatus(UnityStatus with { LastBatchSentAt = batch.Timestamp, LastBatchSequence = batch.Sequence, LastError = null });
+        UpdateUnityStatus(current => current with
+        {
+            LastBatchSentAt = batch.Timestamp,
+            LastBatchSequence = batch.Sequence,
+            LastError = null
+        });
         if (ShouldPublishRuntimeMetricLog("ipc", batch.Timestamp))
         {
             var latencyMilliseconds = Math.Max(0d, (DateTimeOffset.UtcNow - batch.Timestamp).TotalMilliseconds);
@@ -1300,14 +1327,27 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
 
     private void OnUnityConnected(HelloPayload hello)
     {
-        SetUnityStatus(new UnityClientStatus(true, hello.UnityProcessId, hello.UnityVersion,
-            AssociatedRuntimes().Select(runtime => runtime.Info).ToArray(), UnityStatus.LastBatchSentAt, UnityStatus.LastBatchSequence, null));
+        UpdateUnityStatus(current => new UnityClientStatus(true, hello.UnityProcessId, hello.UnityVersion,
+            AssociatedRuntimes().Select(runtime => runtime.Info).ToArray(), current.LastBatchSentAt, current.LastBatchSequence, null));
         StartEnabledPipelinesInBackground();
     }
-    private void OnUnityDisconnected() => SetUnityStatus(UnityClientStatus.Disconnected with { LastBatchSequence = UnityStatus.LastBatchSequence, LastBatchSentAt = UnityStatus.LastBatchSentAt });
-    private void OnPipeError(Exception exception) => SetUnityStatus(UnityStatus with { LastError = exception.Message });
+    private void OnUnityDisconnected() => UpdateUnityStatus(current => UnityClientStatus.Disconnected with { LastBatchSequence = current.LastBatchSequence, LastBatchSentAt = current.LastBatchSentAt });
+    private void OnPipeError(Exception exception) => UpdateUnityStatus(current => current with { LastError = exception.Message });
     private void OnPipeMessage(IpcEnvelope envelope) { if (envelope.MessageType == IpcMessageType.Shutdown) PublishLog("[GLOBAL/IPC] Unity requested shutdown."); }
-    private void SetUnityStatus(UnityClientStatus value) { Volatile.Write(ref _unityStatus, value); InvokeSafely(UnityStatusChanged, value); }
+    private void UpdateUnityStatus(Func<UnityClientStatus, UnityClientStatus> update)
+    {
+        ArgumentNullException.ThrowIfNull(update);
+        UnityClientStatus value;
+        lock (_unityStatusGate)
+        {
+            var updated = update(_unityStatus);
+            ArgumentNullException.ThrowIfNull(updated);
+            value = updated with { Screens = Array.AsReadOnly(updated.Screens.ToArray()) };
+            _unityStatus = value;
+        }
+
+        InvokeSafely(UnityStatusChanged, value);
+    }
     private void PublishLog(string message) { _logger.LogInformation("{Message}", message); InvokeSafely(LogReceived, message); }
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
 

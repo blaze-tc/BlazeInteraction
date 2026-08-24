@@ -357,7 +357,7 @@ public sealed class BridgeHost : IAsyncDisposable
         }
 
         Exception? failure = null;
-        _hostStatus?.ApplyDisconnected();
+        _hostStatus?.Terminate();
         if (_interactionServer is not null)
         {
             _interactionServer.ClientConnected -= OnClientConnected;

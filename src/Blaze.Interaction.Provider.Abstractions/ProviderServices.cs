@@ -17,6 +17,9 @@ public sealed record InteractionHostStatus(
     string ClientVersion,
     IReadOnlyList<InteractionSurface> Surfaces)
 {
+    /// <summary>Monotonically increases for each host status transition.</summary>
+    public long Version { get; init; }
+
     public static InteractionHostStatus Disconnected { get; } =
         new(false, 0, string.Empty, Array.Empty<InteractionSurface>());
 }
@@ -26,4 +29,11 @@ public interface IInteractionHostStatus
 {
     InteractionHostStatus Current { get; }
     event Action<InteractionHostStatus>? Changed;
+    IInteractionHostStatusSubscription Subscribe(Action<InteractionHostStatus> changed);
+}
+
+/// <summary>An atomic host-status subscription paired with the status snapshot at subscription time.</summary>
+public interface IInteractionHostStatusSubscription : IDisposable
+{
+    InteractionHostStatus Current { get; }
 }

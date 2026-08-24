@@ -452,16 +452,18 @@ public sealed class InteractionPipeServer : IAsyncDisposable
         }
         finally
         {
+            var clearedCurrentSession = false;
             lock (_sessionLock)
             {
                 if (ReferenceEquals(_session, session))
                 {
                     _session = null;
+                    clearedCurrentSession = true;
                 }
             }
 
             session.Deactivate();
-            if (acknowledged)
+            if (ShouldPublishDisconnected(acknowledged, clearedCurrentSession))
             {
                 InvokeDisconnected();
             }
@@ -500,6 +502,9 @@ public sealed class InteractionPipeServer : IAsyncDisposable
             }
         }
     }
+
+    internal static bool ShouldPublishDisconnected(bool acknowledged, bool clearedCurrentSession) =>
+        acknowledged && clearedCurrentSession;
 
     private void InvokeDisconnected()
     {

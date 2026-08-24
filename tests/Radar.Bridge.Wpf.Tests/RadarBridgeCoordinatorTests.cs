@@ -45,6 +45,34 @@ public sealed class RadarBridgeCoordinatorTests
     }
 
     [Fact]
+    public async Task Coordinator_BlockedProviderSendCannotRestoreDisconnectedUnityStatus()
+    {
+        var sendEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseSend = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var coordinator = new RadarBridgeCoordinator(
+            new RadarAppConfiguration(),
+            NullLogger<RadarBridgeCoordinator>.Instance,
+            new FakePipelineFactory(),
+            sendPointerBatchAsync: async (_, _) =>
+            {
+                sendEntered.TrySetResult();
+                return await releaseSend.Task;
+            },
+            enableLegacyIpc: false);
+        coordinator.ApplyUnityConnectionStatus(new UnityClientStatus(
+            true, 42, "2021.3.45f1", [], null, 0, null));
+
+        var send = coordinator.SendProviderBatchForTestAsync(9, DateTimeOffset.UnixEpoch);
+        await sendEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        coordinator.ApplyUnityConnectionStatus(UnityClientStatus.Disconnected);
+        releaseSend.TrySetResult(true);
+        await send.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(coordinator.UnityStatus.IsConnected);
+        Assert.Equal(9, coordinator.UnityStatus.LastBatchSequence);
+    }
+
+    [Fact]
     public void RuntimeContract_DoesNotExposePrimarySensorFacade()
     {
         var forbidden = new[] { "SnapshotUpdated", "ConnectionStateChanged", "ConnectionState" };

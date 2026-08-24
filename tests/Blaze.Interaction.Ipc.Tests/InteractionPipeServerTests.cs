@@ -76,6 +76,17 @@ public sealed class InteractionPipeServerTests
     }
 
     [Fact]
+    public void StaleAcknowledgedSession_DoesNotPublishDisconnectForReplacement()
+    {
+        Assert.False(InteractionPipeServer.ShouldPublishDisconnected(
+            acknowledged: true,
+            clearedCurrentSession: false));
+        Assert.True(InteractionPipeServer.ShouldPublishDisconnected(
+            acknowledged: true,
+            clearedCurrentSession: true));
+    }
+
+    [Fact]
     public async Task Server_WritesHelloAckBeforeConnectedPublication()
     {
         await using var fixture = await ServerFixture.StartAsync();

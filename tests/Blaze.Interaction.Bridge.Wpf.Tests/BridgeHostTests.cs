@@ -48,6 +48,35 @@ public sealed class BridgeHostTests
     }
 
     [Fact]
+    public async Task HostStatus_TerminalDisconnectCannotBeReversedByCapturedConnectedPublication()
+    {
+        var connectedPublicationEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseConnectedPublication = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var terminalRequested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var status = new BridgeInteractionHostStatus(
+            beforePublish: value =>
+            {
+                if (!value.IsConnected) return;
+                connectedPublicationEntered.TrySetResult();
+                releaseConnectedPublication.Task.GetAwaiter().GetResult();
+            },
+            beforeTerminate: () => terminalRequested.TrySetResult());
+        var published = new List<bool>();
+        status.Changed += value => published.Add(value.IsConnected);
+
+        var connected = Task.Run(() => status.ApplyConnected(Hello()));
+        await connectedPublicationEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var terminal = Task.Run(status.Terminate);
+        await terminalRequested.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        releaseConnectedPublication.TrySetResult();
+        await Task.WhenAll(connected, terminal).WaitAsync(TimeSpan.FromSeconds(5));
+
+        status.ApplyConnected(Hello());
+        Assert.Equal([true, false], published);
+        Assert.False(status.Current.IsConnected);
+    }
+
+    [Fact]
     public async Task Host_MapsOnlyAcknowledgedPipeLifecycleIntoProviderStatus()
     {
         var provider = new RecordingProvider("radar-main");

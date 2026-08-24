@@ -7,7 +7,21 @@ namespace Blaze.Interaction.Bridge.Wpf;
 internal sealed class BridgeInteractionHostStatus : IInteractionHostStatus
 {
     private readonly object _gate = new();
+    private readonly object _publicationGate = new();
+    private readonly Action<InteractionHostStatus>? _beforePublish;
+    private readonly Action? _beforeTerminate;
     private InteractionHostStatus _current = InteractionHostStatus.Disconnected;
+    private Action<InteractionHostStatus>? _changed;
+    private long _version;
+    private int _terminated;
+
+    internal BridgeInteractionHostStatus(
+        Action<InteractionHostStatus>? beforePublish = null,
+        Action? beforeTerminate = null)
+    {
+        _beforePublish = beforePublish;
+        _beforeTerminate = beforeTerminate;
+    }
 
     public InteractionHostStatus Current
     {
@@ -20,7 +34,36 @@ internal sealed class BridgeInteractionHostStatus : IInteractionHostStatus
         }
     }
 
-    public event Action<InteractionHostStatus>? Changed;
+    public event Action<InteractionHostStatus>? Changed
+    {
+        add
+        {
+            lock (_publicationGate)
+            {
+                _changed += value;
+            }
+        }
+        remove
+        {
+            lock (_publicationGate)
+            {
+                _changed -= value;
+            }
+        }
+    }
+
+    public IInteractionHostStatusSubscription Subscribe(Action<InteractionHostStatus> changed)
+    {
+        ArgumentNullException.ThrowIfNull(changed);
+        lock (_publicationGate)
+        {
+            lock (_gate)
+            {
+                _changed += changed;
+                return new Subscription(this, changed, _current);
+            }
+        }
+    }
 
     internal void ApplyConnected(HelloPayload hello)
     {
@@ -34,20 +77,60 @@ internal sealed class BridgeInteractionHostStatus : IInteractionHostStatus
 
     internal void ApplyDisconnected() => Apply(InteractionHostStatus.Disconnected);
 
-    private void Apply(InteractionHostStatus value)
+    internal void Terminate()
     {
-        Action<InteractionHostStatus>? handlers;
-        lock (_gate)
+        _beforeTerminate?.Invoke();
+        lock (_publicationGate)
         {
-            if (StatusEquals(_current, value))
+            InteractionHostStatus? value = null;
+            Action<InteractionHostStatus>? handlers = null;
+            lock (_gate)
             {
-                return;
+                if (Interlocked.Exchange(ref _terminated, 1) != 0)
+                {
+                    return;
+                }
+
+                if (_current.IsConnected)
+                {
+                    value = InteractionHostStatus.Disconnected with { Version = ++_version };
+                    _current = value;
+                    handlers = _changed;
+                }
             }
 
-            _current = value;
-            handlers = Changed;
+            if (value is not null)
+            {
+                Publish(value, handlers);
+            }
         }
+    }
 
+    private void Apply(InteractionHostStatus value)
+    {
+        lock (_publicationGate)
+        {
+            Action<InteractionHostStatus>? handlers;
+            InteractionHostStatus published;
+            lock (_gate)
+            {
+                if (Volatile.Read(ref _terminated) != 0 || StatusEquals(_current, value))
+                {
+                    return;
+                }
+
+                published = value with { Version = ++_version };
+                _current = published;
+                handlers = _changed;
+            }
+
+            Publish(published, handlers);
+        }
+    }
+
+    private void Publish(InteractionHostStatus value, Action<InteractionHostStatus>? handlers)
+    {
+        _beforePublish?.Invoke(value);
         if (handlers is null)
         {
             return;
@@ -66,6 +149,14 @@ internal sealed class BridgeInteractionHostStatus : IInteractionHostStatus
         }
     }
 
+    private void Unsubscribe(Action<InteractionHostStatus> changed)
+    {
+        lock (_publicationGate)
+        {
+            _changed -= changed;
+        }
+    }
+
     private static IReadOnlyList<InteractionSurface> FreezeSurfaces(IReadOnlyList<InteractionSurface> surfaces)
     {
         ArgumentNullException.ThrowIfNull(surfaces);
@@ -77,6 +168,23 @@ internal sealed class BridgeInteractionHostStatus : IInteractionHostStatus
         left.ProcessId == right.ProcessId &&
         string.Equals(left.ClientVersion, right.ClientVersion, StringComparison.Ordinal) &&
         left.Surfaces.SequenceEqual(right.Surfaces);
+
+    private sealed class Subscription(
+        BridgeInteractionHostStatus owner,
+        Action<InteractionHostStatus> changed,
+        InteractionHostStatus current) : IInteractionHostStatusSubscription
+    {
+        private int _disposed;
+        public InteractionHostStatus Current { get; } = current;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            {
+                owner.Unsubscribe(changed);
+            }
+        }
+    }
 }
 
 internal sealed class BridgeProviderStorageContext : IProviderStorageContext

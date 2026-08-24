@@ -501,7 +501,8 @@ public sealed class RadarInteractionProvider : IInteractionProvider
     {
         private readonly RadarBridgeCoordinator _coordinator;
         private readonly RadarAppConfiguration _configuration;
-        private readonly IInteractionHostStatus? _hostStatus;
+        private IInteractionHostStatusSubscription? _hostStatusSubscription;
+        private long _lastHostStatusVersion = -1;
         private int _disposed;
 
         private RadarCoordinatorRuntime(
@@ -511,11 +512,20 @@ public sealed class RadarInteractionProvider : IInteractionProvider
         {
             _coordinator = coordinator;
             _configuration = configuration;
-            _hostStatus = hostStatus;
-            if (_hostStatus is not null)
+            if (hostStatus is not null)
             {
-                _hostStatus.Changed += OnHostStatusChanged;
-                ApplyHostStatus(_hostStatus.Current);
+                var subscription = hostStatus.Subscribe(OnHostStatusChanged);
+                _hostStatusSubscription = subscription;
+                try
+                {
+                    ApplyHostStatus(subscription.Current);
+                }
+                catch
+                {
+                    _hostStatusSubscription = null;
+                    subscription.Dispose();
+                    throw;
+                }
             }
         }
 
@@ -677,6 +687,20 @@ public sealed class RadarInteractionProvider : IInteractionProvider
         private void ApplyHostStatus(InteractionHostStatus status)
         {
             ArgumentNullException.ThrowIfNull(status);
+            while (true)
+            {
+                var observed = Volatile.Read(ref _lastHostStatusVersion);
+                if (status.Version <= observed)
+                {
+                    return;
+                }
+
+                if (Interlocked.CompareExchange(ref _lastHostStatusVersion, status.Version, observed) == observed)
+                {
+                    break;
+                }
+            }
+
             _coordinator.ApplyUnityConnectionStatus(new UnityClientStatus(
                 status.IsConnected,
                 status.ProcessId,
@@ -695,10 +719,7 @@ public sealed class RadarInteractionProvider : IInteractionProvider
 
         private void UnsubscribeHostStatus()
         {
-            if (_hostStatus is not null)
-            {
-                _hostStatus.Changed -= OnHostStatusChanged;
-            }
+            Interlocked.Exchange(ref _hostStatusSubscription, null)?.Dispose();
         }
 
         private static async Task<RadarAppConfiguration> LoadBundledDefaultAsync(
