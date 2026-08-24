@@ -93,8 +93,9 @@ internal sealed class BridgeInteractionHostStatus : IInteractionHostStatus
             {
                 var nextVersion = NextVersionLocked();
                 var value = InteractionHostStatus.Disconnected with { Version = nextVersion };
-                _current = value;
                 shouldDrain = EnqueueLocked(value);
+                _version = nextVersion;
+                _current = value;
             }
 
             Volatile.Write(ref _terminated, 1);
@@ -116,9 +117,11 @@ internal sealed class BridgeInteractionHostStatus : IInteractionHostStatus
                 return;
             }
 
-            var published = value with { Version = NextVersionLocked() };
-            _current = published;
+            var nextVersion = NextVersionLocked();
+            var published = value with { Version = nextVersion };
             shouldDrain = EnqueueLocked(published);
+            _version = nextVersion;
+            _current = published;
         }
 
         if (shouldDrain)
@@ -203,7 +206,7 @@ internal sealed class BridgeInteractionHostStatus : IInteractionHostStatus
         string.Equals(left.ClientVersion, right.ClientVersion, StringComparison.Ordinal) &&
         left.Surfaces.SequenceEqual(right.Surfaces);
 
-    private long NextVersionLocked() => _version = checked(_version + 1);
+    private long NextVersionLocked() => checked(_version + 1);
 
     private sealed record Publication(
         InteractionHostStatus Value,
