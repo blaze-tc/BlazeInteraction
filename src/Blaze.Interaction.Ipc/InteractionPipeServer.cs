@@ -88,6 +88,8 @@ public sealed class InteractionPipeServer : IAsyncDisposable
 
     public event EventHandler<InteractionClientConnectedEventArgs>? ClientConnected;
 
+    public event EventHandler? ClientDisconnected;
+
     public bool IsClientConnected
     {
         get
@@ -402,6 +404,7 @@ public sealed class InteractionPipeServer : IAsyncDisposable
             _session = session;
         }
 
+        var acknowledged = false;
         try
         {
             HelloAckPayload acknowledgement;
@@ -443,6 +446,7 @@ public sealed class InteractionPipeServer : IAsyncDisposable
                 return;
             }
 
+            acknowledged = true;
             InvokeConnected(hello);
             await session.RunAsync().ConfigureAwait(false);
         }
@@ -457,6 +461,10 @@ public sealed class InteractionPipeServer : IAsyncDisposable
             }
 
             session.Deactivate();
+            if (acknowledged)
+            {
+                InvokeDisconnected();
+            }
         }
     }
 
@@ -485,6 +493,27 @@ public sealed class InteractionPipeServer : IAsyncDisposable
             try
             {
                 handler(this, args);
+            }
+            catch
+            {
+                // A diagnostic subscriber cannot tear down the authenticated IPC session.
+            }
+        }
+    }
+
+    private void InvokeDisconnected()
+    {
+        var handlers = ClientDisconnected;
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (EventHandler handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(this, EventArgs.Empty);
             }
             catch
             {

@@ -10,6 +10,38 @@ namespace Blaze.Provider.Radar.Tests;
 public sealed class RadarInteractionProviderTests
 {
     [Fact]
+    public async Task ProductionProvider_MapsHostConnectionStatusIntoProviderModeCoordinator()
+    {
+        using var providerDirectory = new TemporaryDirectory();
+        using var data = new TemporaryDirectory();
+        await WriteBundledDefaultAsync(providerDirectory.Path);
+        var hostStatus = new TestInteractionHostStatus();
+        var services = new DictionaryServiceProvider(new Dictionary<Type, object>
+        {
+            [typeof(IProviderStorageContext)] = new FakeProviderStorageContext(data.Path, null),
+            [typeof(IInteractionHostStatus)] = hostStatus,
+            [typeof(IRadarSensorPipelineFactory)] = new RadarSensorPipelineFactory(NullLoggerFactory.Instance)
+        });
+        var runtime = (RadarInteractionProvider.RadarCoordinatorRuntime)await RadarInteractionProvider.RadarCoordinatorRuntime.CreateAsync(
+            new ProviderCreateContext(providerDirectory.Path, services),
+            [Surface("front", true, 0, 1920, 1080)],
+            (_, _) => Task.FromResult(true),
+            CancellationToken.None);
+
+        hostStatus.Publish(new InteractionHostStatus(true, 42, "2021.3.45f1",
+            [Surface("front", true, 0, 1920, 1080)]));
+
+        try
+        {
+            Assert.True(runtime.Coordinator.UnityStatus.IsConnected);
+            Assert.Equal(42, runtime.Coordinator.UnityStatus.ProcessId);
+        }
+        finally
+        {
+            await runtime.DisposeAsync();
+        }
+    }
+    [Fact]
     public async Task FirstLoad_CopiesBundledDefaultThenSaveSurvivesReload()
     {
         using var provider = new TemporaryDirectory();
@@ -806,5 +838,17 @@ public sealed class RadarInteractionProviderTests
     {
         public string GetProviderDataDirectory(string providerId) =>
             Path.Combine(DataRoot, "Providers", providerId);
+    }
+
+    private sealed class TestInteractionHostStatus : IInteractionHostStatus
+    {
+        public InteractionHostStatus Current { get; private set; } = InteractionHostStatus.Disconnected;
+        public event Action<InteractionHostStatus>? Changed;
+
+        public void Publish(InteractionHostStatus status)
+        {
+            Current = status;
+            Changed?.Invoke(status);
+        }
     }
 }

@@ -1,5 +1,6 @@
 using System.IO.Pipes;
 using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using Blaze.Interaction.Contracts;
@@ -9,6 +10,71 @@ namespace Blaze.Interaction.Ipc.Tests;
 
 public sealed class InteractionPipeServerTests
 {
+    [Fact]
+    public async Task AcknowledgedSession_RaisesConnectedThenDisconnectedExactlyOnce()
+    {
+        await using var fixture = await ServerFixture.StartAsync();
+        var states = new ConcurrentQueue<string>();
+        fixture.Server.ClientConnected += (_, _) => states.Enqueue("connected");
+        fixture.Server.ClientDisconnected += (_, _) => states.Enqueue("disconnected");
+
+        await using (var client = await fixture.ConnectAndSendHelloAsync())
+        {
+            Assert.Equal(
+                InteractionMessageType.HelloAck,
+                (await InteractionIpcStream.ReadAsync(client, fixture.Token)).MessageType);
+            await WaitUntilAsync(() => states.Contains("connected"), fixture.Token);
+        }
+
+        await WaitUntilAsync(() => states.Contains("disconnected"), fixture.Token);
+        Assert.Equal(["connected", "disconnected"], states);
+    }
+
+    [Fact]
+    public async Task RejectedHello_DoesNotRaiseConnectionLifecycleEvents()
+    {
+        await using var fixture = await ServerFixture.StartAsync((_, _) =>
+            ValueTask.FromException<HelloAckPayload>(new InvalidOperationException("rejected")));
+        var states = new ConcurrentQueue<string>();
+        fixture.Server.ClientConnected += (_, _) => states.Enqueue("connected");
+        fixture.Server.ClientDisconnected += (_, _) => states.Enqueue("disconnected");
+        await using var client = await fixture.ConnectAndSendHelloAsync();
+
+        var error = await InteractionIpcStream.ReadAsync(client, fixture.Token);
+
+        Assert.Equal("hello_rejected", error.DeserializePayload<ErrorPayload>().Code);
+        await Task.Delay(50, fixture.Token);
+        Assert.Empty(states);
+    }
+
+    [Fact]
+    public async Task FailedHelloAckWrite_DoesNotRaiseConnectionLifecycleEvents()
+    {
+        var pipeName = NewPipeName();
+        await using var server = new InteractionPipeServer(new InteractionPipeServerOptions
+        {
+            PipeName = pipeName,
+            CreateHelloAckAsync = (_, _) => ValueTask.FromResult(Ack()),
+            WriteHelloAckAsync = (_, _, _) => ValueTask.FromException(new IOException("ack write failed"))
+        });
+        var states = new ConcurrentQueue<string>();
+        server.ClientConnected += (_, _) => states.Enqueue("connected");
+        server.ClientDisconnected += (_, _) => states.Enqueue("disconnected");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var stop = new CancellationTokenSource();
+        var run = server.RunAsync(stop.Token);
+        await using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        await client.ConnectAsync(timeout.Token);
+        await InteractionIpcStream.WriteAsync(client,
+            InteractionEnvelope.Create(InteractionMessageType.Hello, 1, Hello()), timeout.Token);
+
+        await WaitUntilAsync(() => !server.IsClientConnected, timeout.Token);
+        Assert.Empty(states);
+
+        stop.Cancel();
+        await run.WaitAsync(timeout.Token);
+    }
+
     [Fact]
     public async Task Server_WritesHelloAckBeforeConnectedPublication()
     {

@@ -54,6 +54,8 @@ public sealed class BridgeHost : IAsyncDisposable
     private readonly IReadOnlyDictionary<string, BridgeProviderUiRegistration> _providerUi;
     private readonly IReadOnlyList<object> _ownedResources;
     private readonly IServiceProvider _services;
+    private readonly BridgeInteractionHostStatus? _hostStatus;
+    private readonly InteractionPipeServer? _interactionServer;
     private readonly SemaphoreSlim _helloGate = new(1, 1);
     private readonly CancellationTokenSource _outboundCancellation = new();
     private readonly object _outboundGate = new();
@@ -86,11 +88,18 @@ public sealed class BridgeHost : IAsyncDisposable
         _providerUi = providerUi ?? new Dictionary<string, BridgeProviderUiRegistration>();
         _ownedResources = ownedResources ?? throw new ArgumentNullException(nameof(ownedResources));
         _services = services ?? EmptyServiceProvider.Instance;
+        _hostStatus = _services.GetService(typeof(IInteractionHostStatus)) as BridgeInteractionHostStatus;
+        _interactionServer = _ownedResources.OfType<InteractionPipeServer>().SingleOrDefault();
         StartupDiagnostics = Array.AsReadOnly((startupDiagnostics ?? []).ToArray());
 
         _manager.FrameReceived += OnFrameReceived;
         _manager.ProviderChanged += OnProviderChanged;
         _manager.StatusChanged += OnStatusChanged;
+        if (_hostStatus is not null && _interactionServer is not null)
+        {
+            _interactionServer.ClientConnected += OnClientConnected;
+            _interactionServer.ClientDisconnected += OnClientDisconnected;
+        }
     }
 
     public IReadOnlyList<BridgeStartupDiagnostic> StartupDiagnostics { get; }
@@ -112,7 +121,8 @@ public sealed class BridgeHost : IAsyncDisposable
         var discovery = BridgeProviderDiscovery.Discover(options.ProvidersRoot);
         var manager = new ProviderManager();
         var storage = new BridgeProviderStorageContext(options.DataRoot, options.ProfilePath);
-        var services = new BridgeServiceProvider([storage]);
+        var hostStatus = new BridgeInteractionHostStatus();
+        var services = new BridgeServiceProvider([storage, hostStatus]);
         var descriptors = new Dictionary<string, ProviderDescriptor>(StringComparer.Ordinal);
         var diagnostics = discovery.LoadResults
             .Where(result => !result.IsSuccess)
@@ -347,6 +357,12 @@ public sealed class BridgeHost : IAsyncDisposable
         }
 
         Exception? failure = null;
+        _hostStatus?.ApplyDisconnected();
+        if (_interactionServer is not null)
+        {
+            _interactionServer.ClientConnected -= OnClientConnected;
+            _interactionServer.ClientDisconnected -= OnClientDisconnected;
+        }
         try
         {
             await _manager.DisposeAsync().ConfigureAwait(false);
@@ -453,6 +469,12 @@ public sealed class BridgeHost : IAsyncDisposable
             Trace.TraceWarning("Latest-value Interaction frame publication failed: {0}", exception);
         }
     }
+
+    private void OnClientConnected(object? sender, InteractionClientConnectedEventArgs eventArgs) =>
+        _hostStatus?.ApplyConnected(eventArgs.Hello);
+
+    private void OnClientDisconnected(object? sender, EventArgs eventArgs) =>
+        _hostStatus?.ApplyDisconnected();
 
     private void OnProviderChanged(object? sender, ProviderChangedEventArgs eventArgs)
     {

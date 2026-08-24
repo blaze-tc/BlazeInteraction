@@ -1,7 +1,83 @@
 using System.Text.RegularExpressions;
+using Blaze.Interaction.Contracts;
 using Blaze.Interaction.Provider.Abstractions;
 
 namespace Blaze.Interaction.Bridge.Wpf;
+
+internal sealed class BridgeInteractionHostStatus : IInteractionHostStatus
+{
+    private readonly object _gate = new();
+    private InteractionHostStatus _current = InteractionHostStatus.Disconnected;
+
+    public InteractionHostStatus Current
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _current;
+            }
+        }
+    }
+
+    public event Action<InteractionHostStatus>? Changed;
+
+    internal void ApplyConnected(HelloPayload hello)
+    {
+        ArgumentNullException.ThrowIfNull(hello);
+        Apply(new InteractionHostStatus(
+            true,
+            hello.UnityPid,
+            hello.UnityVersion,
+            FreezeSurfaces(hello.Surfaces)));
+    }
+
+    internal void ApplyDisconnected() => Apply(InteractionHostStatus.Disconnected);
+
+    private void Apply(InteractionHostStatus value)
+    {
+        Action<InteractionHostStatus>? handlers;
+        lock (_gate)
+        {
+            if (StatusEquals(_current, value))
+            {
+                return;
+            }
+
+            _current = value;
+            handlers = Changed;
+        }
+
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (Action<InteractionHostStatus> handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(value);
+            }
+            catch
+            {
+                // A provider status subscriber cannot disrupt the Bridge IPC lifecycle.
+            }
+        }
+    }
+
+    private static IReadOnlyList<InteractionSurface> FreezeSurfaces(IReadOnlyList<InteractionSurface> surfaces)
+    {
+        ArgumentNullException.ThrowIfNull(surfaces);
+        return Array.AsReadOnly(surfaces.ToArray());
+    }
+
+    private static bool StatusEquals(InteractionHostStatus left, InteractionHostStatus right) =>
+        left.IsConnected == right.IsConnected &&
+        left.ProcessId == right.ProcessId &&
+        string.Equals(left.ClientVersion, right.ClientVersion, StringComparison.Ordinal) &&
+        left.Surfaces.SequenceEqual(right.Surfaces);
+}
 
 internal sealed class BridgeProviderStorageContext : IProviderStorageContext
 {

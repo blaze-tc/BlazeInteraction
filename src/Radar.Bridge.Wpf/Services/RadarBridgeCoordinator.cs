@@ -74,6 +74,20 @@ public sealed class RadarBridgeCoordinator : IRadarBridgeRuntime
 
     public UnityClientStatus UnityStatus => Volatile.Read(ref _unityStatus);
 
+    /// <summary>Applies authenticated Unity status supplied by the unified interaction host in provider mode.</summary>
+    public void ApplyUnityConnectionStatus(UnityClientStatus status)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+        ThrowIfDisposed();
+        var current = UnityStatus;
+        SetUnityStatus(status with
+        {
+            Screens = Array.AsReadOnly(status.Screens.ToArray()),
+            LastBatchSentAt = current.LastBatchSentAt,
+            LastBatchSequence = current.LastBatchSequence
+        });
+    }
+
     public async Task StartInfrastructureAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();

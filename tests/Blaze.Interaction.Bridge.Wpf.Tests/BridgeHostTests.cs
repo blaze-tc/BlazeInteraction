@@ -28,6 +28,77 @@ public sealed class BridgeHostTests
     };
 
     [Fact]
+    public void HostStatus_FreezesSurfaceSnapshotsAndPublishesOnlyRealChanges()
+    {
+        var status = new BridgeInteractionHostStatus();
+        var published = new List<InteractionHostStatus>();
+        status.Changed += published.Add;
+        var surfaces = new[] { Front };
+
+        status.ApplyConnected(Hello() with { Surfaces = surfaces });
+        surfaces[0] = Back;
+        status.ApplyConnected(Hello());
+
+        Assert.Equal("FRONT", Assert.Single(status.Current.Surfaces).SurfaceId);
+        Assert.Single(published);
+
+        status.ApplyDisconnected();
+        Assert.Equal(2, published.Count);
+        Assert.False(status.Current.IsConnected);
+    }
+
+    [Fact]
+    public async Task Host_MapsOnlyAcknowledgedPipeLifecycleIntoProviderStatus()
+    {
+        var provider = new RecordingProvider("radar-main");
+        var manager = new ProviderManager();
+        manager.Register(Descriptor(), provider.ProviderInstanceId, () => provider);
+        var status = new BridgeInteractionHostStatus();
+        var pipeName = $"Blaze.InteractionBridge.HostStatus.{Guid.NewGuid():N}";
+        BridgeHost? host = null;
+        var server = new InteractionPipeServer(new InteractionPipeServerOptions
+        {
+            PipeName = pipeName,
+            CreateHelloAckAsync = (hello, cancellationToken) => host!.HandleHelloAsync(hello, cancellationToken)
+        });
+        host = new BridgeHost(
+            manager,
+            new ServerMessageSink(server),
+            server.RunAsync,
+            new RecordingParentProcessMonitor(),
+            null,
+            provider.ProviderInstanceId,
+            new Dictionary<string, ProviderDescriptor> { [provider.ProviderInstanceId] = Descriptor() },
+            [server],
+            services: new BridgeServiceProvider([status]));
+        await using var ownedHost = host;
+        using var stop = new CancellationTokenSource();
+        var running = host.RunAsync(stop.Token);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        await using (var client = new NamedPipeClientStream(
+                         ".",
+                         pipeName,
+                         PipeDirection.InOut,
+                         PipeOptions.Asynchronous))
+        {
+            await client.ConnectAsync(timeout.Token);
+            await InteractionIpcStream.WriteAsync(
+                client,
+                InteractionEnvelope.Create(InteractionMessageType.Hello, 1, Hello()),
+                timeout.Token);
+            Assert.Equal(InteractionMessageType.HelloAck,
+                (await InteractionIpcStream.ReadAsync(client, timeout.Token)).MessageType);
+            await WaitUntilAsync(() => status.Current.IsConnected, timeout.Token);
+            Assert.Equal(Environment.ProcessId, status.Current.ProcessId);
+        }
+
+        await WaitUntilAsync(() => !status.Current.IsConnected, timeout.Token);
+        stop.Cancel();
+        await running.WaitAsync(timeout.Token);
+    }
+
+    [Fact]
     public void ProviderDiscovery_IsolatesInvalidManifestAndLoadsValidSibling()
     {
         using var providers = new ProviderTestDirectory();

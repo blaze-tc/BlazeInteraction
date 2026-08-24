@@ -13,6 +13,38 @@ namespace Yuexin.Radar.Bridge.Wpf.Tests;
 public sealed class RadarBridgeCoordinatorTests
 {
     [Fact]
+    public async Task Coordinator_ProviderModeAppliesAuthenticatedUnityConnectionStatusWithoutLegacyIpc()
+    {
+        var configuration = new RadarAppConfiguration
+        {
+            Screens = [ScreenConfiguration("front", "f1", 1920, 1080)]
+        };
+        var factory = new FakePipelineFactory();
+        await using var coordinator = new RadarBridgeCoordinator(
+            configuration,
+            NullLogger<RadarBridgeCoordinator>.Instance,
+            factory,
+            sendPointerBatchAsync: (_, _) => Task.FromResult(true),
+            enableLegacyIpc: false);
+
+        coordinator.ApplyUnityConnectionStatus(new UnityClientStatus(
+            true,
+            42,
+            "2021.3.45f1",
+            [new RadarScreenInfo("front", "Front", 1920, 1080, true, 0)],
+            null,
+            0,
+            null));
+
+        Assert.True(coordinator.UnityStatus.IsConnected);
+        Assert.Equal(42, coordinator.UnityStatus.ProcessId);
+        Assert.Equal("front", Assert.Single(coordinator.UnityStatus.Screens).ScreenId);
+
+        coordinator.ApplyUnityConnectionStatus(UnityClientStatus.Disconnected);
+        Assert.False(coordinator.UnityStatus.IsConnected);
+    }
+
+    [Fact]
     public void RuntimeContract_DoesNotExposePrimarySensorFacade()
     {
         var forbidden = new[] { "SnapshotUpdated", "ConnectionStateChanged", "ConnectionState" };

@@ -497,19 +497,29 @@ public sealed class RadarInteractionProvider : IInteractionProvider
         public void Deactivate() => Volatile.Write(ref _active, 0);
     }
 
-    private sealed class RadarCoordinatorRuntime : IRadarProviderRuntime
+    internal sealed class RadarCoordinatorRuntime : IRadarProviderRuntime
     {
         private readonly RadarBridgeCoordinator _coordinator;
         private readonly RadarAppConfiguration _configuration;
+        private readonly IInteractionHostStatus? _hostStatus;
         private int _disposed;
 
         private RadarCoordinatorRuntime(
             RadarBridgeCoordinator coordinator,
-            RadarAppConfiguration configuration)
+            RadarAppConfiguration configuration,
+            IInteractionHostStatus? hostStatus)
         {
             _coordinator = coordinator;
             _configuration = configuration;
+            _hostStatus = hostStatus;
+            if (_hostStatus is not null)
+            {
+                _hostStatus.Changed += OnHostStatusChanged;
+                ApplyHostStatus(_hostStatus.Current);
+            }
         }
+
+        internal RadarBridgeCoordinator Coordinator => _coordinator;
 
         internal static async Task<IRadarProviderRuntime> CreateAsync(
             ProviderCreateContext createContext,
@@ -519,6 +529,7 @@ public sealed class RadarInteractionProvider : IInteractionProvider
         {
             var services = createContext.Services;
             var storedConfiguration = services.GetService(typeof(IProviderStorageContext)) as IProviderStorageContext;
+            var hostStatus = services.GetService(typeof(IInteractionHostStatus)) as IInteractionHostStatus;
             var loadedConfiguration = storedConfiguration is null
                 ? null
                 : await RadarProviderConfiguration.LoadAsync(
@@ -555,7 +566,7 @@ public sealed class RadarInteractionProvider : IInteractionProvider
                             surface.IsPrimary,
                             surface.Order)).ToArray()),
                     cancellationToken).ConfigureAwait(false);
-                return new RadarCoordinatorRuntime(coordinator, configuration);
+                return new RadarCoordinatorRuntime(coordinator, configuration, hostStatus);
             }
             catch
             {
@@ -580,6 +591,7 @@ public sealed class RadarInteractionProvider : IInteractionProvider
             }
             finally
             {
+                UnsubscribeHostStatus();
                 await _coordinator.DisposeAsync().ConfigureAwait(false);
             }
         }
@@ -646,7 +658,47 @@ public sealed class RadarInteractionProvider : IInteractionProvider
         public ValueTask DisposeAsync()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0) return ValueTask.CompletedTask;
+            UnsubscribeHostStatus();
             return _coordinator.DisposeAsync();
+        }
+
+        private void OnHostStatusChanged(InteractionHostStatus status)
+        {
+            try
+            {
+                ApplyHostStatus(status);
+            }
+            catch (ObjectDisposedException)
+            {
+                // A captured status callback may race provider shutdown.
+            }
+        }
+
+        private void ApplyHostStatus(InteractionHostStatus status)
+        {
+            ArgumentNullException.ThrowIfNull(status);
+            _coordinator.ApplyUnityConnectionStatus(new UnityClientStatus(
+                status.IsConnected,
+                status.ProcessId,
+                status.ClientVersion,
+                status.Surfaces.Select(surface => new RadarScreenInfo(
+                    surface.SurfaceId,
+                    surface.Name,
+                    surface.LogicalWidth,
+                    surface.LogicalHeight,
+                    surface.IsPrimary,
+                    surface.Order)).ToArray(),
+                null,
+                0,
+                null));
+        }
+
+        private void UnsubscribeHostStatus()
+        {
+            if (_hostStatus is not null)
+            {
+                _hostStatus.Changed -= OnHostStatusChanged;
+            }
         }
 
         private static async Task<RadarAppConfiguration> LoadBundledDefaultAsync(
