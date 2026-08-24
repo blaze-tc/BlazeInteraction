@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Blaze.Interaction.Internal;
@@ -62,13 +63,9 @@ namespace Blaze.Interaction
                 AutoStart = settings.AutoStart;
                 ExitBridgeWithUnity = settings.ExitBridgeWithUnity;
                 cancellation = new CancellationTokenSource();
+                EnsureProjectScopeAndSharedManagerConfigured();
                 await EnsureBridgeRunningAsync(cancellation.Token);
                 cancellation.Token.ThrowIfCancellationRequested();
-                interactionManager = InteractionManager.ConfigureShared(
-                    projectScope.PipeName,
-                    settings.ConnectTimeoutMilliseconds,
-                    settings.ReconnectDelayMilliseconds,
-                    settings.ServerResponseTimeoutMilliseconds);
                 interactionManager.Connect(CreateHelloPayload());
                 managerStarted = true;
             }
@@ -89,7 +86,7 @@ namespace Blaze.Interaction
                 settings = InteractionRuntimeSettings.LoadOrCreateRuntimeDefaults();
             }
 
-            projectScope = ResolveProjectScope();
+            EnsureProjectScopeAndSharedManagerConfigured();
             ReusedExistingBridge = false;
             if (await probe.CanConnectAsync(
                     projectScope.PipeName,
@@ -201,6 +198,8 @@ namespace Blaze.Interaction
             probe = testProbe ?? throw new ArgumentNullException(nameof(testProbe));
             processStarter = testProcessStarter ?? throw new ArgumentNullException(nameof(testProcessStarter));
             executableOverride = testExecutable;
+            projectScope = null;
+            interactionManager = null;
             AutoStart = settings.AutoStart;
             ExitBridgeWithUnity = settings.ExitBridgeWithUnity;
         }
@@ -215,9 +214,57 @@ namespace Blaze.Interaction
                 settings.ProfilePath);
         }
 
+        private void EnsureProjectScopeAndSharedManagerConfigured()
+        {
+            if (projectScope == null)
+            {
+                projectScope = ResolveProjectScope();
+            }
+
+            if (interactionManager == null)
+            {
+                interactionManager = InteractionManager.ConfigureShared(
+                    projectScope.PipeName,
+                    settings.ConnectTimeoutMilliseconds,
+                    settings.ReconnectDelayMilliseconds,
+                    settings.ServerResponseTimeoutMilliseconds);
+            }
+        }
+
         private static string QuoteArgument(string value)
         {
-            return "\"" + (value ?? string.Empty).Replace("\"", "\\\"") + "\"";
+            var quoted = new StringBuilder();
+            var backslashCount = 0;
+            quoted.Append('"');
+            foreach (var character in value ?? string.Empty)
+            {
+                if (character == '\\')
+                {
+                    backslashCount++;
+                    continue;
+                }
+
+                if (character == '"')
+                {
+                    quoted.Append('\\', backslashCount * 2 + 1);
+                    quoted.Append(character);
+                    backslashCount = 0;
+                    continue;
+                }
+
+                quoted.Append('\\', backslashCount);
+                quoted.Append(character);
+                backslashCount = 0;
+            }
+
+            quoted.Append('\\', backslashCount * 2);
+            quoted.Append('"');
+            return quoted.ToString();
+        }
+
+        internal static string QuoteArgumentForTests(string value)
+        {
+            return QuoteArgument(value);
         }
 
         private string ResolveBridgeExecutable()

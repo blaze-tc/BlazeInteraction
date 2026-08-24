@@ -81,6 +81,22 @@ namespace Blaze.Interaction.Tests
             Assert.That(absolute.ProfilePath, Is.EqualTo(Path.GetFullPath(@"D:\Profiles\radar.json")));
         }
 
+        [Test]
+        public void EquivalentAssetsPaths_ResolveTheSameProjectScopeIdentity()
+        {
+            var canonical = ResolveEditor(@"E:\ProjectA\Assets");
+            var trailingSeparator = ResolveEditor(@"E:\ProjectA\Assets\");
+            var dotSegment = ResolveEditor(@"E:\ProjectA\Assets\.\");
+            var caseVariant = ResolveEditor(@"e:\projecta\assets");
+
+            Assert.That(trailingSeparator.DataRoot, Is.EqualTo(canonical.DataRoot));
+            Assert.That(dotSegment.DataRoot, Is.EqualTo(canonical.DataRoot));
+            Assert.That(caseVariant.DataRoot, Is.EqualTo(canonical.DataRoot).IgnoreCase);
+            Assert.That(trailingSeparator.PipeName, Is.EqualTo(canonical.PipeName));
+            Assert.That(dotSegment.PipeName, Is.EqualTo(canonical.PipeName));
+            Assert.That(caseVariant.PipeName, Is.EqualTo(canonical.PipeName));
+        }
+
         private static InteractionProjectScope ResolveEditor(string assetsPath)
         {
             return InteractionProjectScopeResolver.Resolve(

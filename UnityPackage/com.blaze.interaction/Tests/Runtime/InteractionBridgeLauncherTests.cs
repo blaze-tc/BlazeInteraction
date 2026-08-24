@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Blaze.Interaction.Internal;
@@ -35,6 +36,36 @@ namespace Blaze.Interaction.Tests
         public IEnumerator MissingBridge_StartsOnlyBlazeInteractionBridgeWithUnityParentPid()
         {
             var task = VerifyMissingBridgeStartsExpectedProcessAsync();
+            while (!task.IsCompleted)
+            {
+                yield return null;
+            }
+
+            if (task.IsFaulted)
+            {
+                throw task.Exception.InnerException;
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator ScopedBridgeArguments_CannotInjectAdditionalOptions()
+        {
+            var task = VerifyScopedBridgeArgumentsCannotInjectAdditionalOptionsAsync();
+            while (!task.IsCompleted)
+            {
+                yield return null;
+            }
+
+            if (task.IsFaulted)
+            {
+                throw task.Exception.InnerException;
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator EnsureBridgeRunning_ConfiguresScopedManagerBeforeProbeCompletes()
+        {
+            var task = VerifyScopedManagerIsConfiguredBeforeProbeCompletesAsync();
             while (!task.IsCompleted)
             {
                 yield return null;
@@ -94,6 +125,16 @@ namespace Blaze.Interaction.Tests
         }
 
         [Test]
+        public void QuoteArgument_RoundTripsWindowsArgumentsWithQuotesAndBackslashes()
+        {
+            AssertArgumentRoundTrips(@"C:\folder with spaces\");
+            AssertArgumentRoundTrips("alpha\"beta");
+            AssertArgumentRoundTrips("alpha\\\"beta");
+            AssertArgumentRoundTrips("alpha\\\\\\\"beta");
+            AssertArgumentRoundTrips(@"C:\folder with spaces\\");
+        }
+
+        [Test]
         public void ConfigureShared_ReplacesOnlyAnUnconnectedManager()
         {
             var first = InteractionManager.ConfigureShared("Blaze.InteractionBridge.First", 50, 25, 250);
@@ -116,6 +157,31 @@ namespace Blaze.Interaction.Tests
             finally
             {
                 dispatcher.SetConnectionState(false);
+                InteractionManager.ConfigureShared("Blaze.InteractionBridge.Cleanup", 50, 25, 250);
+            }
+        }
+
+        [Test]
+        public void ConfigureShared_RejectsAcknowledgedClientBeforeDispatcherTick()
+        {
+            var manager = InteractionManager.ConfigureShared("Blaze.InteractionBridge.BeforeTick", 50, 25, 250);
+            var dispatcher = GetPrivateField<InteractionFrameDispatcher>(manager, "_dispatcher");
+            var client = GetPrivateField<InteractionPipeClient>(manager, "_client");
+            var connectedField = typeof(InteractionPipeClient).GetField(
+                "_connected",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            try
+            {
+                Assert.That(dispatcher.IsConnected, Is.False);
+                connectedField.SetValue(client, 1);
+
+                Assert.That(
+                    () => InteractionManager.ConfigureShared("Blaze.InteractionBridge.AfterAck", 50, 25, 250),
+                    Throws.InvalidOperationException);
+            }
+            finally
+            {
+                connectedField.SetValue(client, 0);
                 InteractionManager.ConfigureShared("Blaze.InteractionBridge.Cleanup", 50, 25, 250);
             }
         }
@@ -184,6 +250,76 @@ namespace Blaze.Interaction.Tests
             }
         }
 
+        private static async Task VerifyScopedBridgeArgumentsCannotInjectAdditionalOptionsAsync()
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "BlazeInteractionLauncherTests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            var executable = Path.Combine(directory, "BlazeInteractionBridge.exe");
+            File.WriteAllBytes(executable, new byte[] { 1 });
+            var settings = Settings();
+            SetField(settings, "pipeName", "Blaze\" --profile \"C:\\Injected\" --data-root \"C:\\Injected");
+            SetField(settings, "profilePath", "");
+            var gameObject = new GameObject("InteractionBridgeLauncherInjectionTests");
+            gameObject.SetActive(false);
+            var launcher = gameObject.AddComponent<InteractionBridgeLauncher>();
+            var starter = new RecordingProcessStarter();
+            var probe = new ConstantProbe(false);
+            try
+            {
+                launcher.ConfigureForTests(settings, probe, starter, executable);
+
+                await launcher.EnsureBridgeRunningAsync(CancellationToken.None);
+
+                var scope = CurrentScope(settings);
+                var arguments = ParseWindowsArguments(starter.Arguments);
+                Assert.That(arguments, Has.Length.EqualTo(8));
+                Assert.That(arguments[4], Is.EqualTo("--pipe-name"));
+                Assert.That(arguments[5], Is.EqualTo(scope.PipeName));
+                Assert.That(arguments[6], Is.EqualTo("--data-root"));
+                Assert.That(arguments[7], Is.EqualTo(scope.DataRoot));
+                Assert.That(arguments, Does.Not.Contain("--profile"));
+            }
+            finally
+            {
+                Object.DestroyImmediate(gameObject);
+                Object.DestroyImmediate(settings);
+                Directory.Delete(directory, true);
+            }
+        }
+
+        private static async Task VerifyScopedManagerIsConfiguredBeforeProbeCompletesAsync()
+        {
+            var previous = InteractionManager.ConfigureShared("Blaze.InteractionBridge.Previous", 50, 25, 250);
+            var settings = Settings();
+            SetField(settings, "autoStart", false);
+            var gameObject = new GameObject("InteractionBridgeLauncherManagerIdentityTests");
+            gameObject.SetActive(false);
+            var launcher = gameObject.AddComponent<InteractionBridgeLauncher>();
+            var probe = new DelayedProbe();
+            try
+            {
+                launcher.ConfigureForTests(settings, probe, new RecordingProcessStarter(), "missing.exe");
+
+                var task = launcher.EnsureBridgeRunningAsync(CancellationToken.None);
+                var scopedManager = InteractionManager.Instance;
+
+                Assert.That(task.IsCompleted, Is.False);
+                Assert.That(scopedManager, Is.Not.SameAs(previous));
+                Assert.That(GetSharedPipeName(scopedManager), Is.EqualTo(CurrentScope(settings).PipeName));
+
+                probe.Complete(false);
+                await task;
+
+                Assert.That(InteractionManager.Instance, Is.SameAs(scopedManager));
+            }
+            finally
+            {
+                Object.DestroyImmediate(gameObject);
+                Object.DestroyImmediate(settings);
+                InteractionManager.ConfigureShared("Blaze.InteractionBridge.Cleanup", 50, 25, 250);
+            }
+        }
+
         private static InteractionRuntimeSettings Settings()
         {
             var settings = ScriptableObject.CreateInstance<InteractionRuntimeSettings>();
@@ -201,6 +337,49 @@ namespace Blaze.Interaction.Tests
                 Application.persistentDataPath,
                 settings.PipeName,
                 settings.ProfilePath);
+        }
+
+        private static void AssertArgumentRoundTrips(string value)
+        {
+            var arguments = ParseWindowsArguments(InteractionBridgeLauncher.QuoteArgumentForTests(value));
+            Assert.That(arguments, Has.Length.EqualTo(2));
+            Assert.That(arguments[1], Is.EqualTo(value));
+        }
+
+        private static string[] ParseWindowsArguments(string arguments)
+        {
+            int count;
+            var values = CommandLineToArgvW("BlazeInteractionBridge.exe " + arguments, out count);
+            try
+            {
+                var parsed = new string[count];
+                for (var index = 0; index < count; index++)
+                {
+                    var value = Marshal.ReadIntPtr(values, index * IntPtr.Size);
+                    parsed[index] = Marshal.PtrToStringUni(value);
+                }
+
+                return parsed;
+            }
+            finally
+            {
+                LocalFree(values);
+            }
+        }
+
+        private static T GetPrivateField<T>(object target, string name)
+        {
+            var field = target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(field, Is.Not.Null, name);
+            return (T)field.GetValue(target);
+        }
+
+        private static string GetSharedPipeName(InteractionManager manager)
+        {
+            var client = GetPrivateField<InteractionPipeClient>(manager, "_client");
+            var pipeName = client.GetType().GetField("_pipeName", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(pipeName, Is.Not.Null);
+            return pipeName.GetValue(client).ToString();
         }
 
         private static void SetField(object target, string name, object value)
@@ -231,6 +410,24 @@ namespace Blaze.Interaction.Tests
             }
         }
 
+        private sealed class DelayedProbe : IInteractionBridgeProbe
+        {
+            private readonly TaskCompletionSource<bool> result = new TaskCompletionSource<bool>();
+
+            public Task<bool> CanConnectAsync(
+                string pipeName,
+                int timeoutMilliseconds,
+                CancellationToken cancellationToken)
+            {
+                return result.Task;
+            }
+
+            public void Complete(bool canConnect)
+            {
+                result.SetResult(canConnect);
+            }
+        }
+
         private sealed class RecordingProcessStarter : IInteractionProcessStarter
         {
             public int StartCount { get; private set; }
@@ -252,5 +449,11 @@ namespace Blaze.Interaction.Tests
             public bool CloseMainWindow() { return true; }
             public void Dispose() { }
         }
+
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        private static extern IntPtr CommandLineToArgvW(string commandLine, out int argumentCount);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr LocalFree(IntPtr memory);
     }
 }

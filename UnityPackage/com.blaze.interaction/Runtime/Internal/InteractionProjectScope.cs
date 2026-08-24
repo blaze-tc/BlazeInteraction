@@ -52,7 +52,7 @@ namespace Blaze.Interaction.Internal
                     isEditor ? nameof(applicationDataPath) : nameof(persistentDataPath));
             }
 
-            var fullPath = Path.GetFullPath(sourcePath);
+            var fullPath = NormalizeDirectoryPath(sourcePath);
             if (!isEditor)
             {
                 return fullPath;
@@ -64,7 +64,16 @@ namespace Blaze.Interaction.Internal
                 throw new ArgumentException("The Unity Assets path must have a project root.", nameof(applicationDataPath));
             }
 
-            return projectRoot.FullName;
+            return NormalizeDirectoryPath(projectRoot.FullName);
+        }
+
+        private static string NormalizeDirectoryPath(string path)
+        {
+            var fullPath = Path.GetFullPath(path);
+            var root = Path.GetPathRoot(fullPath);
+            return fullPath.Length > root.Length
+                ? fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                : fullPath;
         }
 
         private static string ResolveProfilePath(string environmentRoot, string profilePath)

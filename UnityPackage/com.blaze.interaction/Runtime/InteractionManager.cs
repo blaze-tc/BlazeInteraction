@@ -56,7 +56,7 @@ namespace Blaze.Interaction
         {
             lock (SharedInstanceGate)
             {
-                if (sharedInstance.IsConnected)
+                if (sharedInstance.IsConnected || sharedInstance._client.IsConnected)
                 {
                     throw new InvalidOperationException(
                         "The shared InteractionManager cannot be replaced after it is connected.");
