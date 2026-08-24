@@ -28,7 +28,7 @@
           "sourceMode": "real",
           "device": { "deviceModel": "F10", "radarIp": "192.168.0.100", "port": 8487, "localIp": "", "autoReconnect": true },
           "transform": { "rotationDegrees": 0, "flipX": false, "flipY": false, "offsetXMeters": 0, "offsetYMeters": 0 },
-          "range": { "minimumDistanceMeters": 0.1, "maximumDistanceMeters": 5, "visualizationRangeMeters": 4, "minimumAngleDegrees": 0, "maximumAngleDegrees": 360, "activePolygon": [], "maskedPolygons": [], "edgeDeadZones": { "leftMeters": 0, "rightMeters": 0, "topMeters": 0, "bottomMeters": 0 } },
+          "range": { "minimumDistanceMeters": 0.1, "maximumDistanceMeters": 5, "visualizationRangeMeters": 4, "minimumAngleDegrees": 0, "maximumAngleDegrees": 360, "activePolygon": [{ "x": -2.5, "y": 2.5 }, { "x": 2.5, "y": 2.5 }, { "x": 2.5, "y": -2.5 }, { "x": -2.5, "y": -2.5 }], "maskedPolygons": [], "edgeDeadZones": { "leftMeters": 0, "rightMeters": 0, "topMeters": 0, "bottomMeters": 0 } },
           "clustering": { "baseGapMeters": 0.08, "distanceScale": 0.015, "minimumClusterPointCount": 2, "maximumClusterWidthMeters": 0.8 },
           "calibration": { "isValid": false, "deviceModel": "F10", "physicalCorners": [], "homographyMatrix": [], "createdAt": null, "transformSnapshot": { "rotationDegrees": 0, "flipX": false, "flipY": false, "offsetXMeters": 0, "offsetYMeters": 0 }, "maximumCornerError": 0 },
           "outputRectPixels": { "x": 0, "y": 0, "width": 1920, "height": 1080 },

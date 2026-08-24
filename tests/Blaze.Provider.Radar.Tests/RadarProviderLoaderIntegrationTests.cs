@@ -127,6 +127,41 @@ public sealed class RadarProviderLoaderIntegrationTests
     }
 
     [Fact]
+    public async Task ShippedDefaultRadarProfileInitializesTheProvider()
+    {
+        using var fixture = new PublishedProviderFixture();
+        var entry = Assert.Single(new ProviderCatalog().Discover(fixture.Root));
+        using var loaded = new ProviderLoader().Load(entry);
+        var provider = loaded.Plugin.CreateProvider(
+            new ProviderCreateContext(entry.ProviderDirectory, EmptyServiceProvider.Instance));
+
+        try
+        {
+            await provider.InitializeAsync(
+                new ProviderInitializationContext(
+                [
+                    new InteractionSurface
+                    {
+                        SurfaceId = "main",
+                        Name = "Main",
+                        LogicalWidth = 1920,
+                        LogicalHeight = 1080,
+                        IsPrimary = true,
+                        Order = 0
+                    }
+                ],
+                EmptyServiceProvider.Instance),
+                CancellationToken.None);
+
+            Assert.Equal(ProviderRuntimeStatus.Ready, provider.Status);
+        }
+        finally
+        {
+            await provider.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public void InitializedAndStoppedRadarProviderReleasesItsProviderPluginAndLoadContext()
     {
         using var fixture = new PublishedProviderFixture(useEmptyRadarProfile: true);
