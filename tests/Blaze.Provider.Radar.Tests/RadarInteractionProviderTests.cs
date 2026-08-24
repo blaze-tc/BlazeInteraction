@@ -115,15 +115,30 @@ public sealed class RadarInteractionProviderTests
     }
 
     [Fact]
-    public async Task FirstLoad_ConcurrentBootstrapLeavesNoTemporaryFiles()
+    public async Task FirstLoad_ConcurrentBootstrapHandlesTheDeterministicPublicationLoser()
     {
         using var provider = new TemporaryDirectory();
         using var data = new TemporaryDirectory();
         await WriteBundledDefaultAsync(provider.Path);
         var storage = new FakeProviderStorageContext(data.Path, null);
+        var bothPublishersEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var publisherCount = 0;
 
-        var loads = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ =>
-            RadarProviderConfiguration.LoadAsync(provider.Path, storage, CancellationToken.None)));
+        Task WaitForBothPublishersAsync(CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref publisherCount) == 2)
+            {
+                bothPublishersEntered.TrySetResult();
+            }
+
+            return bothPublishersEntered.Task.WaitAsync(cancellationToken);
+        }
+
+        var first = RadarProviderConfiguration.LoadAsync(
+            provider.Path, storage, CancellationToken.None, WaitForBothPublishersAsync);
+        var second = RadarProviderConfiguration.LoadAsync(
+            provider.Path, storage, CancellationToken.None, WaitForBothPublishersAsync);
+        var loads = await Task.WhenAll(first, second);
 
         var path = Assert.Single(loads.Select(result => result.ConfigurationPath).Distinct(StringComparer.OrdinalIgnoreCase));
         Assert.True(File.Exists(path));

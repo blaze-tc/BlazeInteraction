@@ -5,7 +5,10 @@ namespace Blaze.Interaction.Bridge.Wpf;
 
 internal sealed class BridgeProviderStorageContext : IProviderStorageContext
 {
-    private static readonly Regex ProviderIdPattern = new("^[A-Za-z0-9._-]+$", RegexOptions.CultureInvariant);
+    private static readonly Regex ProviderIdPattern = new("^[a-z0-9_-]+(?:\\.[a-z0-9_-]+)*$", RegexOptions.CultureInvariant);
+    private static readonly Regex ReservedDeviceNamePattern = new(
+        "^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\\.|$)",
+        RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     internal BridgeProviderStorageContext(string dataRoot, string? profilePath)
     {
@@ -20,10 +23,10 @@ internal sealed class BridgeProviderStorageContext : IProviderStorageContext
     public string GetProviderDataDirectory(string providerId)
     {
         if (string.IsNullOrWhiteSpace(providerId) ||
-            providerId is "." or ".." ||
-            !ProviderIdPattern.IsMatch(providerId))
+            !ProviderIdPattern.IsMatch(providerId) ||
+            ReservedDeviceNamePattern.IsMatch(providerId))
         {
-            throw new ArgumentException("Provider IDs may contain only letters, digits, '.', '_' and '-'.", nameof(providerId));
+            throw new ArgumentException("Provider IDs must be lowercase safe path names and cannot be Windows device names.", nameof(providerId));
         }
 
         var providersRoot = Path.GetFullPath(Path.Combine(DataRoot, "Providers"));
@@ -34,6 +37,16 @@ internal sealed class BridgeProviderStorageContext : IProviderStorageContext
         }
 
         return candidate;
+    }
+
+    private static bool IsStrictChildDirectory(string parent, string candidate)
+    {
+        var relative = Path.GetRelativePath(parent, candidate);
+        return !string.Equals(relative, ".", StringComparison.Ordinal) &&
+               !Path.IsPathRooted(relative) &&
+               !string.Equals(relative, "..", StringComparison.Ordinal) &&
+               !relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
+               !relative.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal);
     }
 }
 
@@ -74,13 +87,4 @@ internal sealed class BridgeServiceProvider : IServiceProvider
         services[type] = service;
     }
 
-    private static bool IsStrictChildDirectory(string parent, string candidate)
-    {
-        var relative = Path.GetRelativePath(parent, candidate);
-        return !string.Equals(relative, ".", StringComparison.Ordinal) &&
-               !Path.IsPathRooted(relative) &&
-               !string.Equals(relative, "..", StringComparison.Ordinal) &&
-               !relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
-               !relative.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal);
-    }
 }

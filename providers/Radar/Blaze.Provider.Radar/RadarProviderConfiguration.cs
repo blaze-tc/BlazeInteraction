@@ -12,7 +12,8 @@ internal static class RadarProviderConfiguration
     internal static async Task<RadarProviderConfigurationResult> LoadAsync(
         string providerDirectory,
         IProviderStorageContext storage,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeFirstPublishAsync = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(providerDirectory);
         ArgumentNullException.ThrowIfNull(storage);
@@ -34,7 +35,11 @@ internal static class RadarProviderConfiguration
                 normalizedProviderDirectory,
                 "profiles",
                 "radar-default.json");
-            CopyBundledDefaultIfMissing(bundledDefaultPath, configurationPath);
+            await CopyBundledDefaultIfMissingAsync(
+                bundledDefaultPath,
+                configurationPath,
+                beforeFirstPublishAsync,
+                cancellationToken).ConfigureAwait(false);
         }
 
         var configuration = await RadarConfigurationStore.LoadAsync(configurationPath, cancellationToken)
@@ -42,11 +47,20 @@ internal static class RadarProviderConfiguration
         return new RadarProviderConfigurationResult(configuration, configurationPath);
     }
 
-    private static void CopyBundledDefaultIfMissing(string bundledDefaultPath, string configurationPath)
+    private static async Task CopyBundledDefaultIfMissingAsync(
+        string bundledDefaultPath,
+        string configurationPath,
+        Func<CancellationToken, Task>? beforeFirstPublishAsync,
+        CancellationToken cancellationToken)
     {
         if (File.Exists(configurationPath))
         {
             return;
+        }
+
+        if (beforeFirstPublishAsync is not null)
+        {
+            await beforeFirstPublishAsync(cancellationToken).ConfigureAwait(false);
         }
 
         var destinationDirectory = Path.GetDirectoryName(configurationPath)

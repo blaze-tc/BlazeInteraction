@@ -862,6 +862,11 @@ public sealed class BridgeHostTests
     [Theory]
     [InlineData(".")]
     [InlineData("..")]
+    [InlineData("...")]
+    [InlineData("radar.")]
+    [InlineData("CON")]
+    [InlineData("con")]
+    [InlineData("nul.txt")]
     public void ProviderStorageContext_RejectsProviderPathAliases(string providerId)
     {
         var storage = new BridgeProviderStorageContext(Path.GetTempPath(), null);
