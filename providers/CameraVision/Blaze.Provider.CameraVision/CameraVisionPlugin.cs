@@ -14,7 +14,7 @@ public sealed class CameraVisionPlugin : IInteractionProviderPlugin
         "Camera",
         ["interaction-point", "preview", "hand-landmarks"]);
 
-    public IProviderSettingsViewFactory? SettingsViewFactory => null;
+    public IProviderSettingsViewFactory? SettingsViewFactory => CameraVisionSettingsViewFactory.Instance;
 
     public IInteractionProvider CreateProvider(ProviderCreateContext context)
     {

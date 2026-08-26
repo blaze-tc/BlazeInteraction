@@ -64,6 +64,7 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
     public CameraFrameStatistics? FrameStatistics =>
         Volatile.Read(ref _captureService)?.Statistics;
     internal int CompletedRunCount => Volatile.Read(ref _completedRunCount);
+    internal string? ActiveSurfaceId => Volatile.Read(ref _surface)?.SurfaceId;
     CameraVisionConfiguration? ICameraVisionControl.CurrentConfiguration =>
         Volatile.Read(ref _configuration);
     CameraVisionStatusSnapshot ICameraVisionControl.CurrentStatus =>

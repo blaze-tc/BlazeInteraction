@@ -1,0 +1,77 @@
+<Window x:Class="Blaze.Provider.CameraVision.CameraVisionSettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="CameraVision · 多人手部感应" Width="1280" Height="800"
+        MinWidth="980" MinHeight="640" Background="#F5F7FA">
+    <Grid Margin="16">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="2*" />
+            <ColumnDefinition Width="16" />
+            <ColumnDefinition Width="420" />
+        </Grid.ColumnDefinitions>
+        <Border Grid.Column="0" Background="#101828" CornerRadius="10" ClipToBounds="True">
+            <Grid x:Name="PreviewHost" MouseLeftButtonDown="PreviewHost_MouseLeftButtonDown">
+                <Image x:Name="PreviewImage" Stretch="Fill" />
+                <Canvas x:Name="OverlayCanvas" IsHitTestVisible="False" />
+                <TextBlock Margin="14" Padding="8,4" HorizontalAlignment="Left" VerticalAlignment="Top"
+                           Foreground="White" Background="#99000000" Text="点击预览设置当前标定点" />
+            </Grid>
+        </Border>
+        <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <TextBlock FontSize="24" FontWeight="SemiBold" Text="CameraVision 手部感应" />
+                <GroupBox Header="相机" Margin="0,14,0,0" Padding="10">
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="130"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock VerticalAlignment="Center" Text="设备"/><ComboBox x:Name="DeviceCombo" Grid.Column="1" ItemsSource="{Binding Devices}" DisplayMemberPath="DisplayName" SelectedValuePath="Index" SelectedValue="{Binding DeviceIndex}"/>
+                        <TextBlock Grid.Row="1" VerticalAlignment="Center" Text="分辨率"/><StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal"><TextBox x:Name="WidthBox" Width="72" Text="{Binding Width}"/><TextBlock Margin="6,0" VerticalAlignment="Center" Text="×"/><TextBox x:Name="HeightBox" Width="72" Text="{Binding Height}"/></StackPanel>
+                        <TextBlock Grid.Row="2" VerticalAlignment="Center" Text="FPS"/><TextBox x:Name="FpsBox" Grid.Row="2" Grid.Column="1" Text="{Binding FramesPerSecond}"/>
+                        <TextBlock Grid.Row="3" VerticalAlignment="Center" Text="镜像"/><CheckBox x:Name="MirrorCheck" Grid.Row="3" Grid.Column="1" IsChecked="{Binding MirrorX}"/>
+                        <TextBlock Grid.Row="4" VerticalAlignment="Center" Text="旋转"/><ComboBox x:Name="RotationCombo" Grid.Row="4" Grid.Column="1" SelectedItem="{Binding Rotation}"/>
+                    </Grid>
+                </GroupBox>
+                <GroupBox Header="手部识别" Margin="0,10,0,0" Padding="10">
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+                        <TextBlock Text="最大手数量"/><TextBox x:Name="MaxHandsBox" Grid.Column="1" Text="{Binding MaxHands}"/>
+                        <TextBlock Grid.Row="1" Text="跟踪点"/><ComboBox x:Name="TrackingCombo" Grid.Row="1" Grid.Column="1" SelectedItem="{Binding TrackingPoint}"/>
+                        <TextBlock Grid.Row="2" Text="检测置信度"/><TextBox x:Name="DetectionConfidenceBox" Grid.Row="2" Grid.Column="1" Text="{Binding MinDetectionConfidence}"/>
+                        <TextBlock Grid.Row="3" Text="跟踪置信度"/><TextBox x:Name="TrackingConfidenceBox" Grid.Row="3" Grid.Column="1" Text="{Binding MinTrackingConfidence}"/>
+                        <TextBlock Grid.Row="4" Text="EMA 平滑"/><TextBox x:Name="SmoothingBox" Grid.Row="4" Grid.Column="1" Text="{Binding SmoothingFactor}"/>
+                    </Grid>
+                </GroupBox>
+                <GroupBox Header="四点标定" Margin="0,10,0,0" Padding="10">
+                    <WrapPanel>
+                        <Button x:Name="CalibrationP1" Margin="0,0,6,6" Padding="10,5" Content="P1" Click="CalibrationPoint_Click" Tag="0"/>
+                        <Button x:Name="CalibrationP2" Margin="0,0,6,6" Padding="10,5" Content="P2" Click="CalibrationPoint_Click" Tag="1"/>
+                        <Button x:Name="CalibrationP3" Margin="0,0,6,6" Padding="10,5" Content="P3" Click="CalibrationPoint_Click" Tag="2"/>
+                        <Button x:Name="CalibrationP4" Margin="0,0,6,6" Padding="10,5" Content="P4" Click="CalibrationPoint_Click" Tag="3"/>
+                        <Button x:Name="ResetCalibrationButton" Padding="10,5" Content="重置标定" Command="{Binding ResetCalibrationCommand}"/>
+                    </WrapPanel>
+                </GroupBox>
+                <GroupBox Header="状态" Margin="0,10,0,0" Padding="10">
+                    <UniformGrid Columns="2">
+                        <TextBlock Text="Unity"/><TextBlock x:Name="UnityStatusText" Text="{Binding UnityConnected}"/>
+                        <TextBlock Text="相机"/><TextBlock x:Name="CameraStatusText" Text="{Binding CameraStatus}"/>
+                        <TextBlock Text="Camera FPS"/><TextBlock x:Name="CameraFpsText" Text="{Binding CameraFramesPerSecond, StringFormat=F1}"/>
+                        <TextBlock Text="Inference FPS"/><TextBlock x:Name="InferenceFpsText" Text="{Binding InferenceFramesPerSecond, StringFormat=F1}"/>
+                        <TextBlock Text="Output FPS"/><TextBlock x:Name="OutputFpsText" Text="{Binding OutputFramesPerSecond, StringFormat=F1}"/>
+                        <TextBlock Text="Latency ms"/><TextBlock x:Name="LatencyText" Text="{Binding InferenceLatencyMilliseconds, StringFormat=F1}"/>
+                        <TextBlock Text="检测手数量"/><TextBlock x:Name="DetectedHandsText" Text="{Binding DetectedHandCount}"/>
+                        <TextBlock Text="丢帧"/><TextBlock x:Name="DroppedFramesText" Text="{Binding DroppedFrames}"/>
+                    </UniformGrid>
+                </GroupBox>
+                <TextBlock Margin="0,8" Foreground="#B42318" TextWrapping="Wrap" Text="{Binding ErrorMessage}"/>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button x:Name="ReconnectButton" Margin="0,0,8,0" Padding="14,7" Content="重新连接" Command="{Binding ReconnectCommand}"/>
+                    <Button x:Name="ApplyButton" Padding="18,7" Content="应用" Command="{Binding ApplyCommand}"/>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</Window>

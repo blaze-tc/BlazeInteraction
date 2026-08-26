@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
+using System.Windows.Threading;
 using Blaze.Interaction.Contracts;
 using Blaze.Interaction.Provider.Abstractions;
 
@@ -9,6 +10,17 @@ namespace Blaze.Provider.CameraVision;
 internal interface ICameraUiDispatcher
 {
     Task InvokeAsync(Action action);
+}
+
+internal sealed class WpfCameraUiDispatcher(Dispatcher dispatcher) : ICameraUiDispatcher
+{
+    private readonly Dispatcher _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
+    public Task InvokeAsync(Action action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        if (_dispatcher.CheckAccess()) { action(); return Task.CompletedTask; }
+        return _dispatcher.InvokeAsync(action).Task;
+    }
 }
 
 internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, IDisposable
@@ -98,6 +110,8 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
     public long DroppedFrames { get; private set; }
     public bool UnityConnected { get; private set; }
     public CameraPreviewSnapshot? Preview { get; private set; }
+    internal CameraVisionStatusSnapshot CurrentStatus { get; private set; } = null!;
+    internal bool IsDisposed => Volatile.Read(ref _disposed) != 0;
     public ICommand ApplyCommand => _applyCommand;
     public ICommand ReconnectCommand => _reconnectCommand;
     public ICommand RefreshDevicesCommand => _refreshDevicesCommand;
@@ -225,6 +239,7 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
 
     private void ApplyStatus(CameraVisionStatusSnapshot status)
     {
+        CurrentStatus = status;
         ProviderStatus = status.ProviderStatus;
         CameraStatus = status.CameraStatus;
         CameraFramesPerSecond = status.CameraFramesPerSecond;
