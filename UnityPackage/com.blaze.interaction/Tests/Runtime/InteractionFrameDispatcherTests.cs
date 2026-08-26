@@ -93,6 +93,42 @@ namespace Blaze.Interaction.Tests
         }
 
         [Test]
+        public void UpdateAndDisconnectCancellation_PreserveHandLandmarks()
+        {
+            var dispatcher = new InteractionFrameDispatcher();
+            dispatcher.SetConnectionState(true);
+            var initial = HandInteractionExtensionTests.PointWithHandExtension(
+                HandInteractionExtensionTests.CreateHandExtension());
+            initial.Phase = InteractionPhase.Down;
+            dispatcher.ApplyFrame(Frame(1, initial));
+
+            var update = HandInteractionExtensionTests.PointWithHandExtension(
+                HandInteractionExtensionTests.CreateHandExtension());
+            update.Phase = InteractionPhase.Move;
+            InteractionPoint updated = null;
+            InteractionPoint removed = null;
+            dispatcher.PointUpdated += point => updated = point;
+            dispatcher.PointRemoved += point => removed = point;
+
+            dispatcher.ApplyFrame(Frame(2, update));
+            dispatcher.SetConnectionState(false);
+
+            HandInteractionExtension updatedHand;
+            HandInteractionExtension removedHand;
+            Dictionary<string, object> initialRaw;
+            Dictionary<string, object> removedRaw;
+            Assert.That(updated.TryGetHandExtension(out updatedHand), Is.True);
+            Assert.That(removed.TryGetHandExtension(out removedHand), Is.True);
+            Assert.That(updatedHand.Landmarks, Has.Count.EqualTo(21));
+            Assert.That(removedHand.Landmarks, Has.Count.EqualTo(21));
+            Assert.That(removed.Phase, Is.EqualTo(InteractionPhase.Cancel));
+            Assert.That(initial.TryGetExtension("hand", out initialRaw), Is.True);
+            Assert.That(removed.TryGetExtension("hand", out removedRaw), Is.True);
+            Assert.That(initialRaw, Is.Not.Null);
+            Assert.That(removedRaw, Is.Not.Null);
+        }
+
+        [Test]
         public void ApplyFrame_RejectsExplicitlyNullFootprint()
         {
             var dispatcher = new InteractionFrameDispatcher();

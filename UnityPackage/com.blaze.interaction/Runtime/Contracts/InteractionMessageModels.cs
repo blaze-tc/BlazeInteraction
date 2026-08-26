@@ -159,6 +159,17 @@ namespace Blaze.Interaction
                 return false;
             }
         }
+
+        public bool TryGetHandExtension(out HandInteractionExtension extension)
+        {
+            if (!TryGetExtension("hand", out extension) || !extension.IsValid())
+            {
+                extension = null;
+                return false;
+            }
+
+            return true;
+        }
     }
 
     [Serializable]
