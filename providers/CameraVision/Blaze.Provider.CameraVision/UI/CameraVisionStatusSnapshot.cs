@@ -17,6 +17,7 @@ internal sealed record CameraVisionStatusSnapshot
         long droppedFrames,
         bool unityConnected,
         CameraPreviewSnapshot? preview,
+        IEnumerable<CameraHandSnapshot>? hands,
         string? error)
     {
         ArgumentNullException.ThrowIfNull(trackingCoordinates);
@@ -33,6 +34,7 @@ internal sealed record CameraVisionStatusSnapshot
         DroppedFrames = droppedFrames;
         UnityConnected = unityConnected;
         Preview = preview;
+        Hands = Array.AsReadOnly((hands ?? Enumerable.Empty<CameraHandSnapshot>()).ToArray());
         Error = error;
     }
 
@@ -47,6 +49,7 @@ internal sealed record CameraVisionStatusSnapshot
     public long DroppedFrames { get; }
     public bool UnityConnected { get; }
     public CameraPreviewSnapshot? Preview { get; }
+    public IReadOnlyList<CameraHandSnapshot> Hands { get; }
     public string? Error { get; }
 
     private static double RequireRate(double value, string parameterName) =>

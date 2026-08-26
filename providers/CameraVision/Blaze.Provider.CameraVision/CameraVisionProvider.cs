@@ -838,6 +838,7 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
             latest?.DroppedFrameCount ?? statistics?.DroppedFrames ?? 0,
             Volatile.Read(ref _unityStatus).IsConnected,
             latest?.Preview,
+            latest?.ActiveHands,
             error ?? Volatile.Read(ref _controlError));
     }
 
