@@ -188,6 +188,7 @@ try {
         -ExpectedProviderId 'blaze.radar.f10f20' `
         -ExpectedProviderInstanceId 'radar-main' `
         -ExpectedWindowTitlePrefix 'RadarBridge' `
+        -SelectedProviderId 'blaze.radar.f10f20' `
         -SuccessMessage 'Radar standard InteractionFrame passed.' `
         -InjectFailure:$InjectSetupFailure
     Write-Host 'Interaction IPC 1 Hello/HelloAck passed with Bridge version 1.0.0.'

@@ -159,10 +159,14 @@ internal sealed class CameraHandProcessingService : IAsyncDisposable
                     continue;
                 }
 
+                CameraHandFrame output;
                 using (frame)
                 {
-                    await ProcessFrameAsync(frame, cancellationToken).ConfigureAwait(false);
+                    output = await ProcessFrameAsync(frame, cancellationToken).ConfigureAwait(false);
                 }
+
+                Volatile.Write(ref _latestFrame, output);
+                InvokeFrameProcessed(output);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -170,7 +174,7 @@ internal sealed class CameraHandProcessingService : IAsyncDisposable
         }
     }
 
-    private async Task ProcessFrameAsync(
+    private async Task<CameraHandFrame> ProcessFrameAsync(
         CameraFrame frame,
         CancellationToken cancellationToken)
     {
@@ -265,8 +269,7 @@ internal sealed class CameraHandProcessingService : IAsyncDisposable
             _latestFrames.DroppedCount,
             result.Hands.Count,
             rejectedHandCount);
-        Volatile.Write(ref _latestFrame, output);
-        InvokeFrameProcessed(output);
+        return output;
     }
 
     private long NextBackendTimestamp(long sourceTimestampUnixMs)

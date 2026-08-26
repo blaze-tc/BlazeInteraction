@@ -24,11 +24,14 @@ public sealed class CameraVisionControlTests
     [Fact]
     public async Task Apply_HandSettingsSavesThenRestartsOnlyProcessing()
     {
-        using var services = new ControlServices();
+        using var services = new ControlServices(
+            cameraBackendFactory: static () => new SteadyCameraBackend());
         await services.SaveAsync(Configuration(maxHands: 8));
         var provider = await CreateInitializedAsync(services);
         var control = (ICameraVisionControl)provider;
         await provider.StartAsync(CancellationToken.None);
+        await WaitUntilAsync(() =>
+            control.CurrentStatus.CameraStatus == CameraCaptureStatus.Connected);
         Assert.Equal(0, provider.CompletedRunCount);
         var cameraCreates = services.CameraBackendCreates;
         var handCreates = services.HandBackendCreates;
@@ -130,6 +133,8 @@ public sealed class CameraVisionControlTests
         var provider = await CreateInitializedAsync(services);
         var control = (ICameraVisionControl)provider;
         await provider.StartAsync(CancellationToken.None);
+        await WaitUntilAsync(() =>
+            control.CurrentStatus.CameraStatus == CameraCaptureStatus.Disconnected);
         var published = new TaskCompletionSource<CameraVisionStatusSnapshot>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         control.StatusChanged += snapshot =>
@@ -154,6 +159,15 @@ public sealed class CameraVisionControlTests
         Assert.Equal(3, status.DroppedFrames);
         Assert.NotNull(status.Preview);
         await provider.DisposeAsync();
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> predicate)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!predicate())
+        {
+            await Task.Delay(5, timeout.Token);
+        }
     }
 
     private static async Task<CameraVisionProvider> CreateInitializedAsync(ControlServices services)
@@ -240,10 +254,15 @@ public sealed class CameraVisionControlTests
     {
         private readonly TemporaryDirectory _data = new();
         private readonly TestHostStatus _hostStatus;
+        private readonly Func<ICameraCaptureBackend> _cameraBackendFactory;
 
-        internal ControlServices(bool unityConnected = false)
+        internal ControlServices(
+            bool unityConnected = false,
+            Func<ICameraCaptureBackend>? cameraBackendFactory = null)
         {
             _hostStatus = new TestHostStatus(unityConnected);
+            _cameraBackendFactory = cameraBackendFactory
+                ?? (static () => new UnavailableCameraBackend());
             Store = new CameraVisionConfigurationStore(this);
         }
 
@@ -274,7 +293,7 @@ public sealed class CameraVisionControlTests
         public ICameraCaptureBackend Create()
         {
             CameraBackendCreates++;
-            return new UnavailableCameraBackend();
+            return _cameraBackendFactory();
         }
 
         public string GetProviderDataDirectory(string providerId) =>
@@ -313,6 +332,46 @@ public sealed class CameraVisionControlTests
         public bool TryRead(out CameraFrame? frame) { frame = null; return false; }
         public void Close() { }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class SteadyCameraBackend : ICameraCaptureBackend
+    {
+        private long _sequence;
+        public bool IsOpen { get; private set; }
+
+        public bool TryOpen(CameraCaptureOptions options)
+        {
+            IsOpen = true;
+            return true;
+        }
+
+        public bool TryRead(out CameraFrame? frame)
+        {
+            if (!IsOpen)
+            {
+                frame = null;
+                return false;
+            }
+
+            Thread.Sleep(2);
+            frame = new CameraFrame(
+                Interlocked.Increment(ref _sequence),
+                DateTimeOffset.UtcNow,
+                new OpenCvSharp.Mat(
+                    100,
+                    100,
+                    OpenCvSharp.MatType.CV_8UC3,
+                    OpenCvSharp.Scalar.All(0)));
+            return true;
+        }
+
+        public void Close() => IsOpen = false;
+
+        public ValueTask DisposeAsync()
+        {
+            Close();
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class ReadyHandBackend : IHandDetectionBackend

@@ -111,7 +111,8 @@ public sealed class InteractionPublishLayoutTests
             output.Path,
             dataRoot,
             expectedProviderId: "blaze.radar.f10f20",
-            expectedInstanceId: "radar-main");
+            expectedInstanceId: "radar-main",
+            selectedProviderId: "blaze.radar.f10f20");
         await SmokePublishedBridgeAsync(
             output.Path,
             dataRoot,
