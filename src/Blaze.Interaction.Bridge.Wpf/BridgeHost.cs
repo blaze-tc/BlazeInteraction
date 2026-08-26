@@ -54,7 +54,7 @@ internal interface IParentProcessMonitor
     Task WaitForExitAsync(int processId, CancellationToken cancellationToken);
 }
 
-public sealed class BridgeHost : IAsyncDisposable
+public sealed class BridgeHost : IAsyncDisposable, IBridgeProviderSelection
 {
     private readonly ProviderManager _manager;
     private readonly IBridgeMessageSink _messageSink;
@@ -151,6 +151,14 @@ public sealed class BridgeHost : IAsyncDisposable
 
     internal event EventHandler? ActiveProviderChanged;
     internal event Action<BridgeHostSnapshot>? SnapshotChanged;
+
+    IReadOnlyList<BridgeAvailableProvider> IBridgeProviderSelection.AvailableProviders =>
+        AvailableProviders;
+
+    Task IBridgeProviderSelection.SelectProviderAsync(
+        string providerId,
+        CancellationToken cancellationToken) =>
+        SelectProviderAsync(providerId, cancellationToken);
 
     public static BridgeHost Create(BridgeHostOptions options)
     {
