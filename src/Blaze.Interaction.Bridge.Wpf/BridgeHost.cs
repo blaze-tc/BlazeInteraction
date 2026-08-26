@@ -14,6 +14,7 @@ public sealed class BridgeHostOptions
     public string? ProfilePath { get; init; }
     public int? ParentProcessId { get; init; }
     public string? PreferredProviderId { get; init; }
+    public bool UseFallbackProviderWhenNoPreference { get; init; } = true;
     public string PipeName { get; init; } = InteractionIpcProtocol.PipeName;
     internal Action<PrefetchedProviderFactory, WeakReference>? ProviderFactoryObserved { get; init; }
 }
@@ -54,7 +55,7 @@ internal interface IParentProcessMonitor
     Task WaitForExitAsync(int processId, CancellationToken cancellationToken);
 }
 
-public sealed class BridgeHost : IAsyncDisposable, IBridgeProviderSelection
+public sealed class BridgeHost : IAsyncDisposable, IBridgeWindowHost
 {
     private readonly ProviderManager _manager;
     private readonly IBridgeMessageSink _messageSink;
@@ -160,6 +161,23 @@ public sealed class BridgeHost : IAsyncDisposable, IBridgeProviderSelection
         CancellationToken cancellationToken) =>
         SelectProviderAsync(providerId, cancellationToken);
 
+    BridgeHostSnapshot IBridgeWindowHost.CurrentSnapshot => CurrentSnapshot;
+
+    event EventHandler? IBridgeWindowHost.ActiveProviderChanged
+    {
+        add => ActiveProviderChanged += value;
+        remove => ActiveProviderChanged -= value;
+    }
+
+    event Action<BridgeHostSnapshot>? IBridgeWindowHost.SnapshotChanged
+    {
+        add => SnapshotChanged += value;
+        remove => SnapshotChanged -= value;
+    }
+
+    object? IBridgeWindowHost.CreateActiveProviderSettingsView(IProviderSettingsContext context) =>
+        CreateActiveProviderSettingsView(context);
+
     public static BridgeHost Create(BridgeHostOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -218,7 +236,8 @@ public sealed class BridgeHost : IAsyncDisposable, IBridgeProviderSelection
 
             var defaultInstanceId = SelectDefaultProviderInstance(
                 descriptors,
-                options.PreferredProviderId);
+                options.PreferredProviderId,
+                options.UseFallbackProviderWhenNoPreference);
             BridgeHost? host = null;
             server = new InteractionPipeServer(new InteractionPipeServerOptions
             {
@@ -547,13 +566,19 @@ public sealed class BridgeHost : IAsyncDisposable, IBridgeProviderSelection
 
     private static string? SelectDefaultProviderInstance(
         IReadOnlyDictionary<string, ProviderDescriptor> descriptors,
-        string? preferredProviderId)
+        string? preferredProviderId,
+        bool useFallback)
     {
         if (!string.IsNullOrWhiteSpace(preferredProviderId))
         {
             return descriptors.FirstOrDefault(pair =>
                     string.Equals(pair.Value.Id, preferredProviderId, StringComparison.Ordinal))
                 .Key;
+        }
+
+        if (!useFallback)
+        {
+            return null;
         }
 
         return descriptors.FirstOrDefault(pair =>
@@ -626,15 +651,18 @@ public sealed class BridgeHost : IAsyncDisposable, IBridgeProviderSelection
             Trace.TraceWarning("Provider UI notification failed: {0}", exception);
         }
 
-        if (eventArgs.Previous is null || !_messageSink.IsAcknowledged)
+        if (!_messageSink.IsAcknowledged ||
+            (eventArgs.Previous is null && _initializationContext is null))
         {
             return;
         }
 
         var payload = new ProviderChangedPayload(
-            new ProviderReferencePayload(
-                eventArgs.Previous.ProviderId,
-                eventArgs.Previous.ProviderInstanceId),
+            eventArgs.Previous is null
+                ? null
+                : new ProviderReferencePayload(
+                    eventArgs.Previous.ProviderId,
+                    eventArgs.Previous.ProviderInstanceId),
             eventArgs.Current is null
                 ? null
                 : new ProviderReferencePayload(

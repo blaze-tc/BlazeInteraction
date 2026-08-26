@@ -497,6 +497,55 @@ public sealed class BridgeHostTests
     }
 
     [Fact]
+    public async Task NoPreferenceWithFallbackDisabled_AcknowledgesHelloWithoutStartingAProvider()
+    {
+        using var providers = new ProviderTestDirectory();
+        providers.AddBuiltValidProvider("Good");
+        await using var host = BridgeHost.Create(new BridgeHostOptions
+        {
+            ProvidersRoot = providers.Root,
+            DataRoot = providers.Root,
+            PipeName = $"Blaze.InteractionBridge.NoFallback.{Guid.NewGuid():N}",
+            UseFallbackProviderWhenNoPreference = false
+        });
+
+        var acknowledgement = await host.HandleHelloAsync(Hello(), CancellationToken.None);
+
+        Assert.Null(acknowledgement.ActiveProvider);
+    }
+
+    [Fact]
+    public async Task FirstSelectionAfterHello_PublishesNullToActiveProviderChanged()
+    {
+        using var root = new TemporaryDirectory();
+        var provider = new RecordingProvider("radar-main");
+        var descriptor = Descriptor("blaze.radar.f10f20");
+        var manager = new ProviderManager();
+        manager.Register(descriptor, provider.ProviderInstanceId, () => provider);
+        var sink = new RecordingMessageSink();
+        await using var host = new BridgeHost(
+            manager,
+            sink,
+            _ => Task.CompletedTask,
+            new RecordingParentProcessMonitor(),
+            null,
+            defaultProviderInstanceId: null,
+            new Dictionary<string, ProviderDescriptor> { [provider.ProviderInstanceId] = descriptor },
+            [],
+            settingsStore: new BridgeSettingsStore(root.Path));
+        var acknowledgement = await host.HandleHelloAsync(Hello(), CancellationToken.None);
+        Assert.Null(acknowledgement.ActiveProvider);
+
+        await host.SelectProviderAsync("blaze.radar.f10f20", CancellationToken.None);
+        var changedEnvelope = await sink.NextAsync();
+        var changed = changedEnvelope.Message.DeserializePayload<ProviderChangedPayload>();
+
+        Assert.Null(changed.PreviousProvider);
+        Assert.Equal("blaze.radar.f10f20", changed.ActiveProvider!.Id);
+        Assert.Equal(InteractionMessageType.ProviderChanged, changedEnvelope.Message.MessageType);
+    }
+
+    [Fact]
     public async Task SelectProviderAfterHello_PerformsOneSafeSwitchAndUpdatesSnapshot()
     {
         using var root = new TemporaryDirectory();

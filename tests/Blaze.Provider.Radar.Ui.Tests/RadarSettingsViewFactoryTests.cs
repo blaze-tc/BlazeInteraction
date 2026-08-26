@@ -49,6 +49,8 @@ public sealed class RadarSettingsViewFactoryTests
                 var window = Assert.IsType<Yuexin.Radar.Bridge.Wpf.MainWindow>(view);
                 Assert.Equal("RadarBridge · 多屏雷达控制台", window.Title);
                 Assert.IsType<MainViewModel>(window.DataContext);
+                var originalContent = Assert.IsAssignableFrom<FrameworkElement>(window.Content);
+                Assert.Same(originalContent, window.Content);
                 window.Close();
                 application.Shutdown();
             }

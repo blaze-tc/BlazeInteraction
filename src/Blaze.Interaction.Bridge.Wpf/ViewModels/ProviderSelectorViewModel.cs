@@ -75,6 +75,10 @@ internal sealed class ProviderSelectorViewModel : INotifyPropertyChanged
                     $"The saved sensing provider '{savedProviderId}' is not available. Select a provider to continue.";
             }
         }
+        else if (Choices.Count == 0)
+        {
+            _errorMessage = "No sensing providers were loaded. Check the Providers directory and provider diagnostics.";
+        }
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
@@ -175,6 +179,14 @@ internal sealed class ProviderSelectorViewModel : INotifyPropertyChanged
         if (CanCancel && !IsBusy)
         {
             Cancelled?.Invoke();
+        }
+    }
+
+    internal void SetError(string error)
+    {
+        if (!string.IsNullOrWhiteSpace(error))
+        {
+            ErrorMessage = error;
         }
     }
 

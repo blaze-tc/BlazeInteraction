@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.IO;
 using System.Windows;
-using System.Windows.Controls;
 using Blaze.Interaction.Provider.Abstractions;
 
 namespace Blaze.Interaction.Bridge.Wpf;
@@ -9,12 +8,9 @@ namespace Blaze.Interaction.Bridge.Wpf;
 public partial class App : Application
 {
     private BridgeHost? _host;
+    private BridgeWindowCoordinator? _windowCoordinator;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly BridgeProviderSettingsContext _settingsContext = new();
-    private Window? _statusWindow;
-    private bool _replacingStatusWindow;
-    private bool _providerWindowShown;
-    private bool _launchMinimized;
 
     protected override async void OnStartup(StartupEventArgs eventArgs)
     {
@@ -22,54 +18,65 @@ public partial class App : Application
         try
         {
             var launch = BridgeCommandLine.Parse(eventArgs.Args);
+            var settingsStore = new BridgeSettingsStore(launch.DataRoot);
+            BridgeSettings settings;
+            string? settingsError = null;
+            try
+            {
+                settings = await settingsStore.LoadAsync(_shutdown.Token);
+            }
+            catch (BridgeSettingsException exception)
+            {
+                settings = BridgeSettings.CreateDefault();
+                settingsError = exception.Message;
+            }
+
+            if (!string.IsNullOrWhiteSpace(launch.ProviderId))
+            {
+                settings = new BridgeSettings(
+                    BridgeSettings.CurrentSchemaVersion,
+                    launch.ProviderId);
+            }
+
             _host = BridgeHost.Create(new BridgeHostOptions
             {
                 ProvidersRoot = launch.ProvidersRoot ?? Path.Combine(AppContext.BaseDirectory, "Providers"),
                 DataRoot = launch.DataRoot,
                 ProfilePath = launch.ProfilePath,
                 ParentProcessId = launch.ParentProcessId,
-                PreferredProviderId = launch.ProviderId,
+                PreferredProviderId = settings.SelectedProviderId,
+                UseFallbackProviderWhenNoPreference = settings.SelectedProviderId is not null,
                 PipeName = launch.PipeName
             });
-            _launchMinimized = launch.Minimized;
-            var window = new Window
-            {
-                Title = "Blaze Interaction Bridge",
-                Width = 460,
-                Height = 180,
-                Content = new TextBlock
-                {
-                    Text = "Blaze Interaction Bridge is running.\nSensor Providers connect through Interaction IPC.",
-                    Margin = new Thickness(24),
-                    TextWrapping = TextWrapping.Wrap,
-                    VerticalAlignment = VerticalAlignment.Center
-                }
-            };
-            _statusWindow = window;
-            window.Closed += (_, _) =>
-            {
-                if (!_replacingStatusWindow)
-                {
-                    _shutdown.Cancel();
-                }
-            };
-            MainWindow = window;
-            window.Show();
-            if (launch.Minimized)
-            {
-                window.WindowState = WindowState.Minimized;
-            }
-
-            _host.ActiveProviderChanged += OnActiveProviderChanged;
+            var diagnosticError = string.Join(
+                Environment.NewLine,
+                _host.StartupDiagnostics.Select(item =>
+                    $"{item.ProviderId} [{item.Stage}]: {item.Message}"));
+            var startupError = string.Join(
+                Environment.NewLine,
+                new[] { settingsError, diagnosticError }
+                    .Where(value => !string.IsNullOrWhiteSpace(value)));
+            _windowCoordinator = new BridgeWindowCoordinator(
+                _host,
+                _settingsContext,
+                new WpfBridgeWindowFactory(),
+                new WpfBridgeUiDispatcher(Dispatcher),
+                launch.Minimized,
+                () => _shutdown.Cancel(),
+                startupError);
+            _windowCoordinator.Start(settings);
 
             await _host.RunAsync(_shutdown.Token);
-            _host.ActiveProviderChanged -= OnActiveProviderChanged;
+            _windowCoordinator.Dispose();
+            _windowCoordinator = null;
             await _host.DisposeAsync();
             _host = null;
             Shutdown(0);
         }
         catch (Exception exception)
         {
+            _windowCoordinator?.Dispose();
+            _windowCoordinator = null;
             if (_host is not null)
             {
                 try
@@ -100,60 +107,6 @@ public partial class App : Application
         base.OnExit(eventArgs);
     }
 
-    private void OnActiveProviderChanged(object? sender, EventArgs eventArgs)
-    {
-        _ = Dispatcher.BeginInvoke(PresentActiveProviderSettings);
-    }
-
-    private void PresentActiveProviderSettings()
-    {
-        if (_providerWindowShown || _host is null)
-        {
-            return;
-        }
-
-        object? settingsView;
-        try
-        {
-            settingsView = _host.CreateActiveProviderSettingsView(_settingsContext);
-        }
-        catch (Exception exception)
-        {
-            if (_statusWindow?.Content is TextBlock text)
-            {
-                text.Text = $"Provider settings failed to load.\n{exception.Message}";
-            }
-            return;
-        }
-
-        if (settingsView is Window providerWindow)
-        {
-            _providerWindowShown = true;
-            providerWindow.Closed += (_, _) => _shutdown.Cancel();
-            MainWindow = providerWindow;
-            providerWindow.Show();
-            if (_launchMinimized)
-            {
-                providerWindow.WindowState = WindowState.Minimized;
-            }
-
-            if (_statusWindow is not null)
-            {
-                _replacingStatusWindow = true;
-                _statusWindow.Close();
-                _replacingStatusWindow = false;
-                _statusWindow = null;
-            }
-            return;
-        }
-
-        if (settingsView is FrameworkElement element && _statusWindow is not null)
-        {
-            _statusWindow.Content = element;
-            _statusWindow.Width = Math.Max(_statusWindow.Width, 960);
-            _statusWindow.Height = Math.Max(_statusWindow.Height, 680);
-        }
-    }
 }
 
 internal sealed class BridgeProviderSettingsContext : IProviderSettingsContext

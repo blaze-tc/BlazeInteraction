@@ -1,0 +1,22 @@
+<UserControl x:Class="Blaze.Interaction.Bridge.Wpf.ProviderHeaderView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Border Background="#0B1F33" Padding="14,10">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="18" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="18" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Foreground="#5FE7E7" VerticalAlignment="Center" Text="{Binding UnityStatus}" />
+            <TextBlock Grid.Column="2" Foreground="White" VerticalAlignment="Center" Text="{Binding ProviderName}" />
+            <TextBlock Grid.Column="4" Foreground="#B8C7D9" VerticalAlignment="Center" Text="{Binding ProviderStatus}" />
+            <Button Grid.Column="6" Padding="12,6" Command="{Binding ReturnToSelectionCommand}"
+                    Content="返回选择感应设备" />
+        </Grid>
+    </Border>
+</UserControl>
