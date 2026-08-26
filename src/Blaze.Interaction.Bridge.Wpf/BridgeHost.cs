@@ -23,6 +23,18 @@ public sealed record BridgeStartupDiagnostic(
     string Stage,
     string Message);
 
+internal sealed record BridgeAvailableProvider(
+    string ProviderId,
+    string ProviderInstanceId,
+    string DisplayName,
+    string Category,
+    bool IsAvailable);
+
+internal sealed record BridgeHostSnapshot(
+    InteractionHostStatus Unity,
+    BridgeAvailableProvider? ActiveProvider,
+    ProviderRuntimeStatus? ProviderStatus);
+
 internal sealed record BridgeProviderUiRegistration(
     IProviderSettingsViewFactory? SettingsViewFactory,
     PrefetchedProviderFactory ProviderFactory);
@@ -49,19 +61,22 @@ public sealed class BridgeHost : IAsyncDisposable
     private readonly Func<CancellationToken, Task> _runServerAsync;
     private readonly IParentProcessMonitor _parentMonitor;
     private readonly int? _parentProcessId;
-    private readonly string? _defaultProviderInstanceId;
+    private string? _preferredProviderInstanceId;
     private readonly IReadOnlyDictionary<string, ProviderDescriptor> _descriptors;
     private readonly IReadOnlyDictionary<string, BridgeProviderUiRegistration> _providerUi;
     private readonly IReadOnlyList<object> _ownedResources;
     private readonly IServiceProvider _services;
+    private readonly BridgeSettingsStore? _settingsStore;
     private readonly BridgeInteractionHostStatus? _hostStatus;
     private readonly InteractionPipeServer? _interactionServer;
+    private readonly object _snapshotGate = new();
     private readonly SemaphoreSlim _helloGate = new(1, 1);
     private readonly CancellationTokenSource _outboundCancellation = new();
     private readonly object _outboundGate = new();
     private Task _outboundTail = Task.CompletedTask;
     private ProviderInitializationContext? _initializationContext;
     private IReadOnlyList<InteractionSurface>? _activeTopology;
+    private BridgeHostSnapshot _currentSnapshot;
     private long _controlSequence;
     private int _disposed;
 
@@ -76,25 +91,42 @@ public sealed class BridgeHost : IAsyncDisposable
         IReadOnlyList<object> ownedResources,
         IReadOnlyList<BridgeStartupDiagnostic>? startupDiagnostics = null,
         IReadOnlyDictionary<string, BridgeProviderUiRegistration>? providerUi = null,
-        IServiceProvider? services = null)
+        IServiceProvider? services = null,
+        BridgeSettingsStore? settingsStore = null)
     {
         _manager = manager ?? throw new ArgumentNullException(nameof(manager));
         _messageSink = messageSink ?? throw new ArgumentNullException(nameof(messageSink));
         _runServerAsync = runServerAsync ?? throw new ArgumentNullException(nameof(runServerAsync));
         _parentMonitor = parentMonitor ?? throw new ArgumentNullException(nameof(parentMonitor));
         _parentProcessId = parentProcessId;
-        _defaultProviderInstanceId = defaultProviderInstanceId;
+        _preferredProviderInstanceId = defaultProviderInstanceId;
         _descriptors = descriptors ?? throw new ArgumentNullException(nameof(descriptors));
         _providerUi = providerUi ?? new Dictionary<string, BridgeProviderUiRegistration>();
         _ownedResources = ownedResources ?? throw new ArgumentNullException(nameof(ownedResources));
         _services = services ?? EmptyServiceProvider.Instance;
+        _settingsStore = settingsStore;
         _hostStatus = _services.GetService(typeof(IInteractionHostStatus)) as BridgeInteractionHostStatus;
         _interactionServer = _ownedResources.OfType<InteractionPipeServer>().SingleOrDefault();
+        AvailableProviders = Array.AsReadOnly(_descriptors.Select(pair =>
+            new BridgeAvailableProvider(
+                pair.Value.Id,
+                pair.Key,
+                pair.Value.DisplayName,
+                pair.Value.Category,
+                IsAvailable: true)).ToArray());
+        _currentSnapshot = new BridgeHostSnapshot(
+            _hostStatus?.Current ?? InteractionHostStatus.Disconnected,
+            ActiveProvider: null,
+            ProviderStatus: null);
         StartupDiagnostics = Array.AsReadOnly((startupDiagnostics ?? []).ToArray());
 
         _manager.FrameReceived += OnFrameReceived;
         _manager.ProviderChanged += OnProviderChanged;
         _manager.StatusChanged += OnStatusChanged;
+        if (_hostStatus is not null)
+        {
+            _hostStatus.Changed += OnUnityStatusChanged;
+        }
         if (_hostStatus is not null && _interactionServer is not null)
         {
             _interactionServer.ClientConnected += OnClientConnected;
@@ -104,7 +136,21 @@ public sealed class BridgeHost : IAsyncDisposable
 
     public IReadOnlyList<BridgeStartupDiagnostic> StartupDiagnostics { get; }
 
+    internal IReadOnlyList<BridgeAvailableProvider> AvailableProviders { get; }
+
+    internal BridgeHostSnapshot CurrentSnapshot
+    {
+        get
+        {
+            lock (_snapshotGate)
+            {
+                return _currentSnapshot;
+            }
+        }
+    }
+
     internal event EventHandler? ActiveProviderChanged;
+    internal event Action<BridgeHostSnapshot>? SnapshotChanged;
 
     public static BridgeHost Create(BridgeHostOptions options)
     {
@@ -184,7 +230,8 @@ public sealed class BridgeHost : IAsyncDisposable
                 [discovery, .. prefetched, server],
                 diagnostics,
                 providerUi,
-                services);
+                services,
+                new BridgeSettingsStore(options.DataRoot));
             return host;
         }
         catch (Exception startupFailure)
@@ -255,7 +302,7 @@ public sealed class BridgeHost : IAsyncDisposable
                 requestedTopology,
                 _services);
             var active = _manager.ActiveProvider;
-            var targetInstanceId = active?.ProviderInstanceId ?? _defaultProviderInstanceId;
+            var targetInstanceId = active?.ProviderInstanceId ?? _preferredProviderInstanceId;
             if (active is not null && !TopologyEquals(_activeTopology, requestedTopology))
             {
                 await _manager.StopAsync(cancellationToken).ConfigureAwait(false);
@@ -300,10 +347,72 @@ public sealed class BridgeHost : IAsyncDisposable
         string providerInstanceId,
         CancellationToken cancellationToken)
     {
-        var context = _initializationContext
-            ?? throw new InvalidOperationException("A Unity Hello topology is required before a provider can start.");
-        await _manager.SwitchAsync(providerInstanceId, context, cancellationToken).ConfigureAwait(false);
-        await FlushOutboundAsync().ConfigureAwait(false);
+        await _helloGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var context = _initializationContext
+                ?? throw new InvalidOperationException("A Unity Hello topology is required before a provider can start.");
+            await _manager.SwitchAsync(providerInstanceId, context, cancellationToken).ConfigureAwait(false);
+            await FlushOutboundAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _helloGate.Release();
+        }
+    }
+
+    internal async Task SelectProviderAsync(
+        string providerId,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(providerId))
+        {
+            throw new ArgumentException("A provider ID is required.", nameof(providerId));
+        }
+
+        var matches = AvailableProviders
+            .Where(provider => string.Equals(provider.ProviderId, providerId, StringComparison.Ordinal))
+            .ToArray();
+        if (matches.Length == 0)
+        {
+            throw new KeyNotFoundException($"Provider '{providerId}' is not available.");
+        }
+
+        var target = matches.FirstOrDefault(provider => provider.IsAvailable)
+            ?? throw new InvalidOperationException($"Provider '{providerId}' is unavailable.");
+
+        await _helloGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_settingsStore is not null)
+            {
+                await _settingsStore.SaveAsync(
+                        new BridgeSettings(BridgeSettings.CurrentSchemaVersion, target.ProviderId),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            _preferredProviderInstanceId = target.ProviderInstanceId;
+            var context = _initializationContext;
+            if (context is null || string.Equals(
+                    _manager.ActiveProvider?.ProviderInstanceId,
+                    target.ProviderInstanceId,
+                    StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            await _manager.SwitchAsync(
+                    target.ProviderInstanceId,
+                    context,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            await FlushOutboundAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _helloGate.Release();
+        }
     }
 
     internal object? CreateActiveProviderSettingsView(IProviderSettingsContext context)
@@ -364,6 +473,10 @@ public sealed class BridgeHost : IAsyncDisposable
         catch (Exception exception)
         {
             failure = AddFailure(failure, exception);
+        }
+        if (_hostStatus is not null)
+        {
+            _hostStatus.Changed -= OnUnityStatusChanged;
         }
         if (_interactionServer is not null)
         {
@@ -484,6 +597,18 @@ public sealed class BridgeHost : IAsyncDisposable
 
     private void OnProviderChanged(object? sender, ProviderChangedEventArgs eventArgs)
     {
+        var activeProvider = eventArgs.Current is null
+            ? null
+            : AvailableProviders.FirstOrDefault(provider => string.Equals(
+                provider.ProviderInstanceId,
+                eventArgs.Current.ProviderInstanceId,
+                StringComparison.Ordinal));
+        UpdateSnapshot(snapshot => snapshot with
+        {
+            ActiveProvider = activeProvider,
+            ProviderStatus = activeProvider is null ? null : ProviderRuntimeStatus.Running
+        });
+
         try
         {
             ActiveProviderChanged?.Invoke(this, EventArgs.Empty);
@@ -519,6 +644,14 @@ public sealed class BridgeHost : IAsyncDisposable
 
     private void OnStatusChanged(object? sender, ProviderManagerStatusChangedEventArgs eventArgs)
     {
+        UpdateSnapshot(snapshot =>
+            string.Equals(
+                snapshot.ActiveProvider?.ProviderInstanceId,
+                eventArgs.Provider.ProviderInstanceId,
+                StringComparison.Ordinal)
+                ? snapshot with { ProviderStatus = eventArgs.Status }
+                : snapshot);
+
         if (!_messageSink.IsAcknowledged)
         {
             return;
@@ -539,6 +672,43 @@ public sealed class BridgeHost : IAsyncDisposable
                 payload),
             cancellationToken),
             requireSuccess: false);
+    }
+
+    private void OnUnityStatusChanged(InteractionHostStatus status) =>
+        UpdateSnapshot(snapshot => snapshot with { Unity = status });
+
+    private void UpdateSnapshot(Func<BridgeHostSnapshot, BridgeHostSnapshot> update)
+    {
+        Action<BridgeHostSnapshot>? handlers;
+        BridgeHostSnapshot next;
+        lock (_snapshotGate)
+        {
+            next = update(_currentSnapshot);
+            if (Equals(next, _currentSnapshot))
+            {
+                return;
+            }
+
+            _currentSnapshot = next;
+            handlers = SnapshotChanged;
+        }
+
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (Action<BridgeHostSnapshot> handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(next);
+            }
+            catch (Exception exception)
+            {
+                Trace.TraceWarning("Bridge UI status observer failed: {0}", exception);
+            }
+        }
     }
 
     private void QueueOutbound(

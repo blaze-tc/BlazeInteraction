@@ -441,6 +441,153 @@ public sealed class BridgeHostTests
     }
 
     [Fact]
+    public async Task AvailableProviders_AreImmutableDescriptorSnapshots()
+    {
+        var radar = new RecordingProvider("radar-main");
+        var camera = new RecordingProvider("camera-main");
+        await using var fixture = BridgeFixture.Create(
+            radar,
+            camera,
+            firstDescriptor: Descriptor("blaze.radar.f10f20", "Radar", "Radar"),
+            secondDescriptor: Descriptor("blaze.camera.vision", "Camera", "Camera"));
+
+        Assert.Collection(
+            fixture.Host.AvailableProviders,
+            choice =>
+            {
+                Assert.Equal("blaze.radar.f10f20", choice.ProviderId);
+                Assert.Equal("radar-main", choice.ProviderInstanceId);
+                Assert.Equal("Radar", choice.DisplayName);
+                Assert.Equal("Radar", choice.Category);
+                Assert.True(choice.IsAvailable);
+            },
+            choice => Assert.Equal("blaze.camera.vision", choice.ProviderId));
+        Assert.Throws<NotSupportedException>(() =>
+            ((IList<BridgeAvailableProvider>)fixture.Host.AvailableProviders).Add(
+                fixture.Host.AvailableProviders[0]));
+    }
+
+    [Fact]
+    public async Task SelectProviderBeforeHello_PersistsIntentAndFirstHelloStartsSelection()
+    {
+        using var root = new TemporaryDirectory();
+        var store = new BridgeSettingsStore(root.Path);
+        var radar = new RecordingProvider("radar-main");
+        var camera = new RecordingProvider("camera-main");
+        await using var fixture = BridgeFixture.Create(
+            radar,
+            camera,
+            firstDescriptor: Descriptor("blaze.radar.f10f20"),
+            secondDescriptor: Descriptor("blaze.camera.vision"),
+            settingsStore: store);
+
+        await fixture.Host.SelectProviderAsync("blaze.camera.vision", CancellationToken.None);
+
+        Assert.Empty(radar.Operations);
+        Assert.Empty(camera.Operations);
+        Assert.Equal(
+            "blaze.camera.vision",
+            (await store.LoadAsync(CancellationToken.None)).SelectedProviderId);
+
+        var acknowledgement = await fixture.Host.HandleHelloAsync(Hello(), CancellationToken.None);
+
+        Assert.Equal("camera-main", acknowledgement.ActiveProvider!.InstanceId);
+        Assert.Equal(["initialize:FRONT", "start"], camera.Operations);
+        Assert.Empty(radar.Operations);
+    }
+
+    [Fact]
+    public async Task SelectProviderAfterHello_PerformsOneSafeSwitchAndUpdatesSnapshot()
+    {
+        using var root = new TemporaryDirectory();
+        var radar = new RecordingProvider("radar-main");
+        var camera = new RecordingProvider("camera-main");
+        await using var fixture = BridgeFixture.Create(
+            radar,
+            camera,
+            firstDescriptor: Descriptor("blaze.radar.f10f20"),
+            secondDescriptor: Descriptor("blaze.camera.vision"),
+            settingsStore: new BridgeSettingsStore(root.Path));
+        await fixture.Host.HandleHelloAsync(Hello(), CancellationToken.None);
+
+        await fixture.Host.SelectProviderAsync("blaze.camera.vision", CancellationToken.None);
+
+        Assert.Equal(["initialize:FRONT", "start", "stop", "dispose"], radar.Operations);
+        Assert.Equal(["initialize:FRONT", "start"], camera.Operations);
+        Assert.Equal("blaze.camera.vision", fixture.Host.CurrentSnapshot.ActiveProvider?.ProviderId);
+        Assert.Equal(ProviderRuntimeStatus.Running, fixture.Host.CurrentSnapshot.ProviderStatus);
+    }
+
+    [Fact]
+    public async Task SelectActiveProvider_IsIdempotentButPersistsSelection()
+    {
+        using var root = new TemporaryDirectory();
+        var radar = new RecordingProvider("radar-main");
+        await using var fixture = BridgeFixture.Create(
+            radar,
+            firstDescriptor: Descriptor("blaze.radar.f10f20"),
+            settingsStore: new BridgeSettingsStore(root.Path));
+        await fixture.Host.HandleHelloAsync(Hello(), CancellationToken.None);
+
+        await fixture.Host.SelectProviderAsync("blaze.radar.f10f20", CancellationToken.None);
+        await fixture.Host.SelectProviderAsync("blaze.radar.f10f20", CancellationToken.None);
+
+        Assert.Equal(["initialize:FRONT", "start"], radar.Operations);
+        Assert.Equal(
+            "blaze.radar.f10f20",
+            (await new BridgeSettingsStore(root.Path).LoadAsync(CancellationToken.None))
+            .SelectedProviderId);
+    }
+
+    [Fact]
+    public async Task SelectUnknownProvider_FailsWithoutChangingActiveOrPersistedSelection()
+    {
+        using var root = new TemporaryDirectory();
+        var store = new BridgeSettingsStore(root.Path);
+        var radar = new RecordingProvider("radar-main");
+        await using var fixture = BridgeFixture.Create(
+            radar,
+            firstDescriptor: Descriptor("blaze.radar.f10f20"),
+            settingsStore: store);
+        await fixture.Host.HandleHelloAsync(Hello(), CancellationToken.None);
+
+        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            fixture.Host.SelectProviderAsync("blaze.unknown", CancellationToken.None));
+
+        Assert.Equal(["initialize:FRONT", "start"], radar.Operations);
+        Assert.Equal("blaze.radar.f10f20", fixture.Host.CurrentSnapshot.ActiveProvider?.ProviderId);
+        Assert.False(File.Exists(store.SettingsPath));
+    }
+
+    [Fact]
+    public async Task Snapshot_UsesAuthenticatedHostStatusRatherThanRawTransportState()
+    {
+        var provider = new RecordingProvider("radar-main");
+        var manager = new ProviderManager();
+        var descriptor = Descriptor("blaze.radar.f10f20");
+        manager.Register(descriptor, provider.ProviderInstanceId, () => provider);
+        var sink = new RecordingMessageSink { IsConnected = true };
+        var status = new BridgeInteractionHostStatus();
+        await using var host = new BridgeHost(
+            manager,
+            sink,
+            _ => Task.CompletedTask,
+            new RecordingParentProcessMonitor(),
+            null,
+            provider.ProviderInstanceId,
+            new Dictionary<string, ProviderDescriptor> { [provider.ProviderInstanceId] = descriptor },
+            [],
+            services: new BridgeServiceProvider([status]));
+
+        Assert.False(host.CurrentSnapshot.Unity.IsConnected);
+
+        status.ApplyConnected(Hello());
+
+        Assert.True(host.CurrentSnapshot.Unity.IsConnected);
+        Assert.Equal(Environment.ProcessId, host.CurrentSnapshot.Unity.ProcessId);
+    }
+
+    [Fact]
     public async Task ProviderFrame_IsForwardedToInteractionPipe()
     {
         var provider = new RecordingProvider("radar-main");
@@ -1219,18 +1366,23 @@ public sealed class BridgeHostTests
             RecordingProvider first,
             RecordingProvider? second = null,
             int? parentProcessId = null,
-            IParentProcessMonitor? parentMonitor = null)
+            IParentProcessMonitor? parentMonitor = null,
+            ProviderDescriptor? firstDescriptor = null,
+            ProviderDescriptor? secondDescriptor = null,
+            BridgeSettingsStore? settingsStore = null)
         {
             var manager = new ProviderManager();
-            manager.Register(Descriptor(), first.ProviderInstanceId, () => first);
+            firstDescriptor ??= Descriptor();
+            manager.Register(firstDescriptor, first.ProviderInstanceId, () => first);
             var descriptors = new Dictionary<string, ProviderDescriptor>(StringComparer.Ordinal)
             {
-                [first.ProviderInstanceId] = Descriptor()
+                [first.ProviderInstanceId] = firstDescriptor
             };
             if (second is not null)
             {
-                manager.Register(Descriptor(), second.ProviderInstanceId, () => second);
-                descriptors.Add(second.ProviderInstanceId, Descriptor());
+                secondDescriptor ??= Descriptor();
+                manager.Register(secondDescriptor, second.ProviderInstanceId, () => second);
+                descriptors.Add(second.ProviderInstanceId, secondDescriptor);
             }
 
             var sink = new RecordingMessageSink();
@@ -1243,7 +1395,8 @@ public sealed class BridgeHostTests
                 parentProcessId,
                 first.ProviderInstanceId,
                 descriptors,
-                []);
+                [],
+                settingsStore: settingsStore);
             return new BridgeFixture(host, sink, server);
         }
 
@@ -1548,6 +1701,35 @@ public sealed class BridgeHostTests
         new Version(1, 0, 0),
         "Test",
         ["interaction-point"]);
+
+    private static ProviderDescriptor Descriptor(string id, string displayName, string category) => new(
+        id,
+        displayName,
+        new Version(1, 0, 0),
+        category,
+        ["interaction-point"]);
+
+    private sealed class TemporaryDirectory : IDisposable
+    {
+        public TemporaryDirectory()
+        {
+            Path = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(),
+                "Blaze.Interaction.Bridge.Wpf.Tests",
+                Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Path);
+        }
+
+        public string Path { get; }
+
+        public void Dispose()
+        {
+            if (Directory.Exists(Path))
+            {
+                Directory.Delete(Path, recursive: true);
+            }
+        }
+    }
 
     private sealed class RecordingPlugin(
         ProviderDescriptor descriptor,
