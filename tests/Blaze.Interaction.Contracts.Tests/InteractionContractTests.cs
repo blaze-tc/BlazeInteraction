@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Blaze.Interaction.Contracts;
 
@@ -191,9 +192,6 @@ public sealed class InteractionContractTests
     public void ObjectInitializationRejectsUndefinedEnumValues()
     {
         Assert.ThrowsAny<ArgumentException>(() => CreatePoint((InteractionPhase)99));
-        Assert.ThrowsAny<ArgumentException>(() => new HandInteractionExtension(
-            (InteractionHandedness)99,
-            "PalmCenter"));
     }
 
     [Fact]
@@ -337,21 +335,65 @@ public sealed class InteractionContractTests
     }
 
     [Fact]
-    public void HandTypedHelperReadsKnownHandednessFromRawExtension()
+    public void HandTypedHelperReadsTwentyOneOrderedLandmarks()
     {
+        var expectedLandmarks = CreateHandLandmarks();
         var point = CreateFrame(
             InteractionPhase.Hover,
             new InteractionExtensions(new Dictionary<string, JsonElement>
             {
                 ["hand"] = JsonSerializer.SerializeToElement(
-                    new HandInteractionExtension(InteractionHandedness.Right, "PalmCenter"),
+                    new HandInteractionExtension(1, "PalmCenter", expectedLandmarks),
                     InteractionJson.Options)
             })).Points[0];
 
         Assert.True(point.TryGetHandExtension(out var hand));
         Assert.NotNull(hand);
-        Assert.Equal(InteractionHandedness.Right, hand.Handedness);
+        Assert.Equal(1, hand.SchemaVersion);
         Assert.Equal("PalmCenter", hand.TrackingPoint);
+        Assert.Equal(21, hand.Landmarks.Count);
+        Assert.Equal(Enumerable.Range(0, 21), hand.Landmarks.Select(landmark => landmark.Index));
+        Assert.Equal(expectedLandmarks[8].NormalizedPosition, hand.Landmarks[8].NormalizedPosition);
+        Assert.Equal(expectedLandmarks[8].PixelPosition, hand.Landmarks[8].PixelPosition);
+        Assert.Equal(expectedLandmarks[8].Z, hand.Landmarks[8].Z);
+    }
+
+    [Fact]
+    public void HandExtensionSnapshotsItsLandmarksAndExposesAReadOnlyCollection()
+    {
+        var source = CreateHandLandmarks().ToList();
+        var extension = new HandInteractionExtension(1, "IndexTip", source);
+
+        source.Clear();
+
+        Assert.Equal(21, extension.Landmarks.Count);
+        var exposed = Assert.IsAssignableFrom<IList<HandLandmarkExtension>>(extension.Landmarks);
+        Assert.Throws<NotSupportedException>(() => exposed.Clear());
+        Assert.Equal(21, extension.Landmarks.Count);
+    }
+
+    [Fact]
+    public void HandExtensionRejectsInvalidSchemaLandmarkShapeAndMeasurements()
+    {
+        var landmarks = CreateHandLandmarks();
+        var duplicateIndex = landmarks.ToArray();
+        duplicateIndex[8] = CreateHandLandmark(7);
+        var outOfOrder = landmarks.ToArray();
+        (outOfOrder[7], outOfOrder[8]) = (outOfOrder[8], outOfOrder[7]);
+
+        Assert.ThrowsAny<ArgumentException>(() => new HandInteractionExtension(2, "PalmCenter", landmarks));
+        Assert.ThrowsAny<ArgumentException>(() => new HandInteractionExtension(1, " ", landmarks));
+        Assert.ThrowsAny<ArgumentException>(() => new HandInteractionExtension(1, "PalmCenter", null!));
+        Assert.ThrowsAny<ArgumentException>(() => new HandInteractionExtension(1, "PalmCenter", landmarks.Take(20).ToArray()));
+        Assert.ThrowsAny<ArgumentException>(() => new HandInteractionExtension(1, "PalmCenter", landmarks.Append(CreateHandLandmark(20)).ToArray()));
+        Assert.ThrowsAny<ArgumentException>(() => new HandInteractionExtension(1, "PalmCenter", duplicateIndex));
+        Assert.ThrowsAny<ArgumentException>(() => new HandInteractionExtension(1, "PalmCenter", outOfOrder));
+        Assert.ThrowsAny<ArgumentException>(() => new HandLandmarkExtension(-1, new Vector2Data(0f, 0f), new Vector2Data(0f, 0f), 0f));
+        Assert.ThrowsAny<ArgumentException>(() => new HandLandmarkExtension(21, new Vector2Data(0f, 0f), new Vector2Data(0f, 0f), 0f));
+        Assert.ThrowsAny<ArgumentException>(() => new HandLandmarkExtension(0, null!, new Vector2Data(0f, 0f), 0f));
+        Assert.ThrowsAny<ArgumentException>(() => new HandLandmarkExtension(0, new Vector2Data(0f, 0f), null!, 0f));
+        Assert.ThrowsAny<ArgumentException>(() => new HandLandmarkExtension(0, new Vector2Data(0f, 0f), new Vector2Data(0f, 0f), float.NaN));
+        Assert.ThrowsAny<ArgumentException>(() => new HandLandmarkExtension(0, new Vector2Data(0f, 0f), new Vector2Data(0f, 0f), float.PositiveInfinity));
     }
 
     [Theory]
@@ -368,20 +410,33 @@ public sealed class InteractionContractTests
         Assert.Null(radar);
     }
 
-    [Theory]
-    [InlineData("{}")]
-    [InlineData("[]")]
-    [InlineData("null")]
-    [InlineData("{\"handedness\":\"Right\"}")]
-    [InlineData("{\"handedness\":\"Right\",\"trackingPoint\":null}")]
-    [InlineData("{\"handedness\":\"Invalid\",\"trackingPoint\":\"PalmCenter\"}")]
-    [InlineData("{\"handedness\":2,\"trackingPoint\":\"PalmCenter\"}")]
-    public void HandTypedHelperRejectsMalformedHandExtension(string rawJson)
+    [Fact]
+    public void HandTypedHelperRejectsMalformedHandExtensionsWithoutDiscardingRawData()
     {
-        var point = CreatePointWithRawExtension("hand", rawJson);
+        var malformedCases = new[]
+        {
+            "{}",
+            "[]",
+            "null",
+            CreateRawHandExtension(schemaVersion: 2),
+            CreateRawHandExtension(landmarkCount: 20),
+            CreateRawHandExtension(landmarkCount: 22),
+            CreateRawHandExtension(replaceIndexAt: 8, replacementIndex: 7),
+            CreateRawHandExtension(swapIndices: true),
+            CreateRawHandExtension(removeNormalizedPosition: true),
+            CreateRawHandExtension(removePixelPosition: true),
+            CreateRawHandExtension(nonFiniteZ: true)
+        };
 
-        Assert.False(point.TryGetHandExtension(out var hand));
-        Assert.Null(hand);
+        foreach (var rawJson in malformedCases)
+        {
+            var point = CreatePointWithRawExtension("hand", rawJson);
+
+            Assert.False(point.TryGetHandExtension(out var hand));
+            Assert.Null(hand);
+            Assert.NotNull(point.Extensions);
+            Assert.True(point.Extensions.ContainsKey("hand"));
+        }
     }
 
     [Fact]
@@ -459,6 +514,75 @@ public sealed class InteractionContractTests
             {
                 [key] = document.RootElement
             }));
+    }
+
+    private static IReadOnlyList<HandLandmarkExtension> CreateHandLandmarks()
+    {
+        return Enumerable.Range(0, 21).Select(CreateHandLandmark).ToArray();
+    }
+
+    private static HandLandmarkExtension CreateHandLandmark(int index)
+    {
+        return new HandLandmarkExtension(
+            index,
+            new Vector2Data(index / 20f, (20 - index) / 20f),
+            new Vector2Data(index * 10f, index * 5f),
+            index * -0.01f);
+    }
+
+    private static string CreateRawHandExtension(
+        int schemaVersion = 1,
+        int landmarkCount = 21,
+        int? replaceIndexAt = null,
+        int replacementIndex = 0,
+        bool swapIndices = false,
+        bool removeNormalizedPosition = false,
+        bool removePixelPosition = false,
+        bool nonFiniteZ = false)
+    {
+        var root = JsonNode.Parse(JsonSerializer.Serialize(
+            new
+            {
+                schemaVersion,
+                trackingPoint = "PalmCenter",
+                landmarks = Enumerable.Range(0, landmarkCount).Select(index => new
+                {
+                    index,
+                    normalizedPosition = new { x = index / 20f, y = (20 - index) / 20f },
+                    pixelPosition = new { x = index * 10f, y = index * 5f },
+                    z = index * -0.01f
+                })
+            },
+            InteractionJson.Options))!.AsObject();
+        var landmarks = root["landmarks"]!.AsArray();
+
+        if (replaceIndexAt is not null)
+        {
+            landmarks[replaceIndexAt.Value]!["index"] = replacementIndex;
+        }
+
+        if (swapIndices)
+        {
+            landmarks[7]!["index"] = 8;
+            landmarks[8]!["index"] = 7;
+        }
+
+        if (removeNormalizedPosition)
+        {
+            landmarks[0]!.AsObject().Remove("normalizedPosition");
+        }
+
+        if (removePixelPosition)
+        {
+            landmarks[0]!.AsObject().Remove("pixelPosition");
+        }
+
+        if (nonFiniteZ)
+        {
+            landmarks[0]!["z"] = "NaN";
+        }
+
+        return root.ToJsonString(InteractionJson.Options);
     }
 
     private sealed record InteractionTopology

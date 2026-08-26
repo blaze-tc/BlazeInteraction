@@ -62,20 +62,92 @@ public sealed record RadarInteractionExtension
     public string SensorId { get; }
 }
 
-public sealed record HandInteractionExtension
+public sealed record HandLandmarkExtension
 {
     [JsonConstructor]
-    public HandInteractionExtension(
-        InteractionHandedness handedness,
-        string trackingPoint)
+    public HandLandmarkExtension(
+        int index,
+        Vector2Data normalizedPosition,
+        Vector2Data pixelPosition,
+        float z)
     {
-        Handedness = InteractionContractGuard.Defined(handedness, nameof(handedness));
-        TrackingPoint = InteractionContractGuard.NotBlank(trackingPoint, nameof(trackingPoint));
+        if (index is < 0 or >= HandInteractionExtension.LandmarkCount)
+        {
+            throw new ArgumentOutOfRangeException(nameof(index));
+        }
+
+        Index = index;
+        NormalizedPosition = normalizedPosition
+            ?? throw new ArgumentNullException(nameof(normalizedPosition));
+        PixelPosition = pixelPosition
+            ?? throw new ArgumentNullException(nameof(pixelPosition));
+        Z = InteractionContractGuard.Finite(z, nameof(z));
     }
 
-    public InteractionHandedness Handedness { get; }
+    public int Index { get; }
+
+    public Vector2Data NormalizedPosition { get; }
+
+    public Vector2Data PixelPosition { get; }
+
+    public float Z { get; }
+}
+
+public sealed record HandInteractionExtension
+{
+    public const int CurrentSchemaVersion = 1;
+
+    public const int LandmarkCount = 21;
+
+    [JsonConstructor]
+    public HandInteractionExtension(
+        int schemaVersion,
+        string trackingPoint,
+        IReadOnlyList<HandLandmarkExtension> landmarks)
+    {
+        if (schemaVersion != CurrentSchemaVersion)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(schemaVersion),
+                schemaVersion,
+                $"Only hand extension schema {CurrentSchemaVersion} is supported.");
+        }
+
+        ArgumentNullException.ThrowIfNull(landmarks);
+        var snapshot = landmarks.ToArray();
+        if (snapshot.Length != LandmarkCount)
+        {
+            throw new ArgumentException(
+                $"A hand extension requires exactly {LandmarkCount} landmarks.",
+                nameof(landmarks));
+        }
+
+        for (var index = 0; index < snapshot.Length; index++)
+        {
+            var landmark = snapshot[index];
+            if (landmark is null)
+            {
+                throw new ArgumentException("Hand landmarks cannot contain null elements.", nameof(landmarks));
+            }
+
+            if (landmark.Index != index)
+            {
+                throw new ArgumentException(
+                    $"Hand landmark at position {index} must have index {index}.",
+                    nameof(landmarks));
+            }
+        }
+
+        SchemaVersion = schemaVersion;
+        TrackingPoint = InteractionContractGuard.NotBlank(trackingPoint, nameof(trackingPoint));
+        Landmarks = Array.AsReadOnly(snapshot);
+    }
+
+    public int SchemaVersion { get; }
 
     public string TrackingPoint { get; }
+
+    public IReadOnlyList<HandLandmarkExtension> Landmarks { get; }
 }
 
 public static class InteractionPointExtensionHelpers

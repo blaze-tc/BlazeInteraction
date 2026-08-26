@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using System.Text.Json;
 using Blaze.Interaction.Contracts;
 using Blaze.Interaction.Ipc;
 
@@ -195,7 +196,20 @@ public sealed class InteractionFrameCodecTests
                     PixelPosition = new Vector2Data(480f, 270f),
                     Confidence = 1f,
                     TimestampUnixMs = 1234,
-                    Fp = [new Vector2Data(10f, 20f), new Vector2Data(30f, 40f), new Vector2Data(10f, 20f)]
+                    Fp = Array.Empty<Vector2Data>(),
+                    Extensions = new InteractionExtensions(new Dictionary<string, JsonElement>
+                    {
+                        ["hand"] = JsonSerializer.SerializeToElement(
+                            new HandInteractionExtension(
+                                1,
+                                "IndexTip",
+                                Enumerable.Range(0, 21).Select(index => new HandLandmarkExtension(
+                                    index,
+                                    new Vector2Data(index / 20f, (20 - index) / 20f),
+                                    new Vector2Data(index * 10f, index * 5f),
+                                    index * -0.01f)).ToArray()),
+                            InteractionJson.Options)
+                    })
                 }
             ]
         };
@@ -210,10 +224,18 @@ public sealed class InteractionFrameCodecTests
         Assert.Equal(InteractionMessageType.InteractionFrame, decoded.MessageType);
         Assert.Equal("blaze.camera.vision", payload.ProviderId);
         Assert.Equal("camera-vision-main", payload.ProviderInstanceId);
-        Assert.Equal(InteractionPhase.Hover, Assert.Single(payload.Points).Phase);
-        Assert.Equal(
-            [new Vector2Data(10f, 20f), new Vector2Data(30f, 40f), new Vector2Data(10f, 20f)],
-            Assert.Single(payload.Points).Fp);
+        var point = Assert.Single(payload.Points);
+        Assert.Equal(InteractionPhase.Hover, point.Phase);
+        Assert.Empty(point.Fp);
+        Assert.True(point.TryGetHandExtension(out var hand));
+        Assert.NotNull(hand);
+        Assert.Equal(1, hand.SchemaVersion);
+        Assert.Equal("IndexTip", hand.TrackingPoint);
+        Assert.Equal(21, hand.Landmarks.Count);
+        Assert.Equal(8, hand.Landmarks[8].Index);
+        Assert.Equal(new Vector2Data(0.4f, 0.6f), hand.Landmarks[8].NormalizedPosition);
+        Assert.Equal(new Vector2Data(80f, 40f), hand.Landmarks[8].PixelPosition);
+        Assert.Equal(-0.08f, hand.Landmarks[8].Z);
         Assert.DoesNotContain(
             Enum.GetNames<InteractionMessageType>(),
             name => name.Contains("Camera", StringComparison.OrdinalIgnoreCase));
