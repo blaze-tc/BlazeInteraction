@@ -4,12 +4,13 @@ using Blaze.Interaction.Provider.Abstractions;
 
 namespace Blaze.Provider.CameraVision;
 
-public sealed class CameraVisionProvider : IInteractionProvider
+public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionControl
 {
     private readonly string _providerDirectory;
     private readonly IServiceProvider _services;
     private readonly ICameraCaptureBackendFactory _captureFactory;
     private readonly CameraVisionConfigurationStore _configurationStore;
+    private readonly IInteractionHostStatusSubscription? _hostStatusSubscription;
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private readonly object _pointGate = new();
     private readonly Dictionary<long, InteractionPoint> _lastPoints = new();
@@ -23,6 +24,11 @@ public sealed class CameraVisionProvider : IInteractionProvider
     private int _status = (int)ProviderRuntimeStatus.Created;
     private int _disposed;
     private int _completedRunCount;
+    private InteractionHostStatus _unityStatus = InteractionHostStatus.Disconnected;
+    private CameraVisionStatusSnapshot _currentControlStatus;
+    private long _runStartedTimestamp;
+    private long _runStartedOutputSequence;
+    private string? _controlError;
 
     internal CameraVisionProvider(string providerInstanceId, ProviderCreateContext createContext)
     {
@@ -40,6 +46,15 @@ public sealed class CameraVisionProvider : IInteractionProvider
             ?? throw new InvalidOperationException(
                 "CameraVision requires project-scoped provider storage.");
         _configurationStore = new CameraVisionConfigurationStore(storage);
+        var hostStatus = createContext.Services.GetService(typeof(IInteractionHostStatus))
+            as IInteractionHostStatus;
+        if (hostStatus is not null)
+        {
+            _hostStatusSubscription = hostStatus.Subscribe(OnUnityStatusChanged);
+            _unityStatus = _hostStatusSubscription.Current;
+        }
+
+        _currentControlStatus = CreateStatusSnapshot();
     }
 
     public string ProviderInstanceId { get; }
@@ -49,9 +64,20 @@ public sealed class CameraVisionProvider : IInteractionProvider
     public CameraFrameStatistics? FrameStatistics =>
         Volatile.Read(ref _captureService)?.Statistics;
     internal int CompletedRunCount => Volatile.Read(ref _completedRunCount);
+    CameraVisionConfiguration? ICameraVisionControl.CurrentConfiguration =>
+        Volatile.Read(ref _configuration);
+    CameraVisionStatusSnapshot ICameraVisionControl.CurrentStatus =>
+        Volatile.Read(ref _currentControlStatus);
 
     public event EventHandler<InteractionFrameEventArgs>? FrameReceived;
     public event EventHandler<ProviderStatusChangedEventArgs>? StatusChanged;
+    event Action<CameraVisionStatusSnapshot>? ICameraVisionControl.StatusChanged
+    {
+        add => _controlStatusChanged += value;
+        remove => _controlStatusChanged -= value;
+    }
+
+    private event Action<CameraVisionStatusSnapshot>? _controlStatusChanged;
 
     public async Task InitializeAsync(
         ProviderInitializationContext context,
@@ -118,37 +144,7 @@ public sealed class CameraVisionProvider : IInteractionProvider
                 throw new InvalidOperationException($"CameraVision cannot start from {Status}.");
             }
 
-            var configuration = _configuration
-                ?? throw new InvalidOperationException("CameraVision is not initialized.");
-            var surface = _surface
-                ?? throw new InvalidOperationException("CameraVision has no selected surface.");
-            TransitionTo(ProviderRuntimeStatus.Starting);
-            lock (_pointGate)
-            {
-                _lastPoints.Clear();
-            }
-
-            var capture = new CameraCaptureService(_captureFactory, configuration.Capture);
-            var processing = CreateProcessingService(capture, configuration, surface);
-            processing.FrameProcessed += PublishHandFrame;
-            try
-            {
-                _captureService = capture;
-                _processingService = processing;
-                await capture.StartAsync(cancellationToken).ConfigureAwait(false);
-                await processing.StartAsync(cancellationToken).ConfigureAwait(false);
-                _processingMonitor = MonitorProcessingAsync(processing);
-                TransitionTo(ProviderRuntimeStatus.Running);
-            }
-            catch (Exception exception)
-            {
-                processing.FrameProcessed -= PublishHandFrame;
-                _processingService = null;
-                _captureService = null;
-                await DisposeRunResourcesAsync(processing, capture).ConfigureAwait(false);
-                TransitionTo(ProviderRuntimeStatus.Faulted, exception);
-                throw;
-            }
+            await StartRunAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -186,6 +182,292 @@ public sealed class CameraVisionProvider : IInteractionProvider
         finally
         {
             _lifecycle.Release();
+        }
+
+        _hostStatusSubscription?.Dispose();
+        _lifecycle.Dispose();
+    }
+
+    Task<IReadOnlyList<CameraDeviceDescriptor>> ICameraVisionControl.EnumerateDevicesAsync(
+        CancellationToken cancellationToken) =>
+        EnumerateDevicesAsync(cancellationToken);
+
+    Task ICameraVisionControl.ApplyAsync(
+        CameraVisionConfiguration configuration,
+        CancellationToken cancellationToken) =>
+        ApplyConfigurationAsync(configuration, cancellationToken);
+
+    Task ICameraVisionControl.ReconnectAsync(CancellationToken cancellationToken) =>
+        ReconnectAsync(cancellationToken);
+
+    Task ICameraVisionControl.SetCalibrationPointAsync(
+        string surfaceId,
+        int pointIndex,
+        Vector2Data previewPosition,
+        Vector2Data previewSize,
+        CancellationToken cancellationToken) =>
+        SetCalibrationPointAsync(
+            surfaceId,
+            pointIndex,
+            previewPosition,
+            previewSize,
+            cancellationToken);
+
+    Task ICameraVisionControl.ResetCalibrationAsync(
+        string surfaceId,
+        CancellationToken cancellationToken) =>
+        ResetCalibrationAsync(surfaceId, cancellationToken);
+
+    private async Task<IReadOnlyList<CameraDeviceDescriptor>> EnumerateDevicesAsync(
+        CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            return await new CameraDeviceEnumerator(_captureFactory)
+                .EnumerateAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycle.Release();
+        }
+    }
+
+    private async Task ApplyConfigurationAsync(
+        CameraVisionConfiguration configuration,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        var validated = CloneConfiguration(configuration);
+        ThrowIfDisposed();
+        await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            await ApplyConfigurationCoreAsync(validated, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycle.Release();
+        }
+    }
+
+    private async Task ReconnectAsync(CancellationToken cancellationToken)
+    {
+        ThrowIfDisposed();
+        await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            _ = _configuration
+                ?? throw new InvalidOperationException("CameraVision is not initialized.");
+            await StopRunAsync().ConfigureAwait(false);
+            TransitionTo(ProviderRuntimeStatus.Stopped);
+            await StartRunAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycle.Release();
+        }
+    }
+
+    private async Task SetCalibrationPointAsync(
+        string surfaceId,
+        int pointIndex,
+        Vector2Data previewPosition,
+        Vector2Data previewSize,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(surfaceId))
+        {
+            throw new ArgumentException("A surface ID is required.", nameof(surfaceId));
+        }
+        if (pointIndex is < 0 or > 3)
+        {
+            throw new ArgumentOutOfRangeException(nameof(pointIndex));
+        }
+        ArgumentNullException.ThrowIfNull(previewPosition);
+        ArgumentNullException.ThrowIfNull(previewSize);
+        if (!float.IsFinite(previewSize.X) || !float.IsFinite(previewSize.Y) ||
+            previewSize.X <= 0 || previewSize.Y <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(previewSize));
+        }
+
+        ThrowIfDisposed();
+        await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var configuration = _configuration
+                ?? throw new InvalidOperationException("CameraVision is not initialized.");
+            var preview = _processingService?.LatestFrame?.Preview;
+            var cameraWidth = preview?.Width ?? RotatedWidth(configuration.Capture);
+            var cameraHeight = preview?.Height ?? RotatedHeight(configuration.Capture);
+            var cameraPoint = new Vector2Data(
+                previewPosition.X / previewSize.X * cameraWidth,
+                previewPosition.Y / previewSize.Y * cameraHeight);
+            var calibration = configuration.Calibrations.TryGetValue(surfaceId, out var current)
+                ? current
+                : FullFrameCalibration(configuration.Capture);
+            var points = calibration.Points.ToArray();
+            points[pointIndex] = cameraPoint;
+            var nextCalibration = new CameraCalibration(points[0], points[1], points[2], points[3]);
+            var calibrations = configuration.Calibrations.ToDictionary(
+                static pair => pair.Key,
+                static pair => pair.Value,
+                StringComparer.Ordinal);
+            calibrations[surfaceId] = nextCalibration;
+            await ApplyConfigurationCoreAsync(
+                    CloneConfiguration(configuration, calibrations),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycle.Release();
+        }
+    }
+
+    private async Task ResetCalibrationAsync(
+        string surfaceId,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(surfaceId))
+        {
+            throw new ArgumentException("A surface ID is required.", nameof(surfaceId));
+        }
+
+        ThrowIfDisposed();
+        await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var configuration = _configuration
+                ?? throw new InvalidOperationException("CameraVision is not initialized.");
+            var calibrations = configuration.Calibrations.ToDictionary(
+                static pair => pair.Key,
+                static pair => pair.Value,
+                StringComparer.Ordinal);
+            calibrations.Remove(surfaceId);
+            await ApplyConfigurationCoreAsync(
+                    CloneConfiguration(configuration, calibrations),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycle.Release();
+        }
+    }
+
+    private async Task ApplyConfigurationCoreAsync(
+        CameraVisionConfiguration configuration,
+        CancellationToken cancellationToken)
+    {
+        var previous = _configuration
+            ?? throw new InvalidOperationException("CameraVision is not initialized.");
+        var captureChanged = !CaptureConfigurationEquals(
+            previous.Capture,
+            configuration.Capture);
+        var processingChanged = !ProcessingConfigurationEquals(previous, configuration);
+        await _configurationStore.SaveAsync(configuration, cancellationToken).ConfigureAwait(false);
+        Volatile.Write(ref _configuration, configuration);
+
+        if (Status != ProviderRuntimeStatus.Running || (!captureChanged && !processingChanged))
+        {
+            PublishControlStatus();
+            return;
+        }
+
+        if (captureChanged)
+        {
+            await StopRunAsync().ConfigureAwait(false);
+            TransitionTo(ProviderRuntimeStatus.Stopped);
+            await StartRunAsync(cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        await RestartProcessingAsync(configuration, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task StartRunAsync(CancellationToken cancellationToken)
+    {
+        var configuration = _configuration
+            ?? throw new InvalidOperationException("CameraVision is not initialized.");
+        var surface = _surface
+            ?? throw new InvalidOperationException("CameraVision has no selected surface.");
+        TransitionTo(ProviderRuntimeStatus.Starting);
+        lock (_pointGate)
+        {
+            _lastPoints.Clear();
+        }
+
+        var capture = new CameraCaptureService(_captureFactory, configuration.Capture);
+        capture.StatusChanged += OnCameraStatusChanged;
+        var processing = CreateProcessingService(capture, configuration, surface);
+        processing.FrameProcessed += PublishHandFrame;
+        try
+        {
+            _captureService = capture;
+            _processingService = processing;
+            await capture.StartAsync(cancellationToken).ConfigureAwait(false);
+            await processing.StartAsync(cancellationToken).ConfigureAwait(false);
+            _processingMonitor = MonitorProcessingAsync(processing);
+            Interlocked.Exchange(ref _runStartedTimestamp, System.Diagnostics.Stopwatch.GetTimestamp());
+            Interlocked.Exchange(ref _runStartedOutputSequence, Interlocked.Read(ref _sequence));
+            TransitionTo(ProviderRuntimeStatus.Running);
+        }
+        catch (Exception exception)
+        {
+            processing.FrameProcessed -= PublishHandFrame;
+            capture.StatusChanged -= OnCameraStatusChanged;
+            _processingService = null;
+            _captureService = null;
+            await DisposeRunResourcesAsync(processing, capture).ConfigureAwait(false);
+            TransitionTo(ProviderRuntimeStatus.Faulted, exception);
+            throw;
+        }
+    }
+
+    private async Task RestartProcessingAsync(
+        CameraVisionConfiguration configuration,
+        CancellationToken cancellationToken)
+    {
+        var capture = _captureService
+            ?? throw new InvalidOperationException("CameraVision capture is not running.");
+        var surface = _surface
+            ?? throw new InvalidOperationException("CameraVision has no selected surface.");
+        TransitionTo(ProviderRuntimeStatus.Starting);
+        var previous = Interlocked.Exchange(ref _processingService, null);
+        var monitor = Interlocked.Exchange(ref _processingMonitor, null);
+        if (previous is not null)
+        {
+            previous.FrameProcessed -= PublishHandFrame;
+            await previous.DisposeAsync().ConfigureAwait(false);
+        }
+        if (monitor is not null)
+        {
+            await monitor.ConfigureAwait(false);
+        }
+
+        var next = CreateProcessingService(capture, configuration, surface);
+        next.FrameProcessed += PublishHandFrame;
+        try
+        {
+            _processingService = next;
+            await next.StartAsync(cancellationToken).ConfigureAwait(false);
+            _processingMonitor = MonitorProcessingAsync(next);
+            TransitionTo(ProviderRuntimeStatus.Running);
+        }
+        catch (Exception exception)
+        {
+            next.FrameProcessed -= PublishHandFrame;
+            _processingService = null;
+            await next.DisposeAsync().ConfigureAwait(false);
+            TransitionTo(ProviderRuntimeStatus.Faulted, exception);
+            throw;
         }
     }
 
@@ -245,6 +527,7 @@ public sealed class CameraVisionProvider : IInteractionProvider
             Points = Array.AsReadOnly(points.ToArray())
         };
         InvokeFrameReceived(frame);
+        PublishControlStatus(handFrame);
     }
 
     private CameraHandProcessingService CreateProcessingService(
@@ -375,6 +658,10 @@ public sealed class CameraVisionProvider : IInteractionProvider
         {
             processing.FrameProcessed -= PublishHandFrame;
         }
+        if (capture is not null)
+        {
+            capture.StatusChanged -= OnCameraStatusChanged;
+        }
 
         await DisposeRunResourcesAsync(processing, capture).ConfigureAwait(false);
         if (monitor is not null)
@@ -456,6 +743,15 @@ public sealed class CameraVisionProvider : IInteractionProvider
             return;
         }
 
+        if (error is not null)
+        {
+            Volatile.Write(ref _controlError, error.Message);
+        }
+        else if (status != ProviderRuntimeStatus.Faulted)
+        {
+            Volatile.Write(ref _controlError, null);
+        }
+        PublishControlStatus();
         var handlers = StatusChanged;
         if (handlers is null)
         {
@@ -477,4 +773,157 @@ public sealed class CameraVisionProvider : IInteractionProvider
 
     private void ThrowIfDisposed() =>
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
+    private void OnCameraStatusChanged(object? sender, CameraCaptureStatusChangedEventArgs eventArgs) =>
+        PublishControlStatus();
+
+    private void OnUnityStatusChanged(InteractionHostStatus status)
+    {
+        Volatile.Write(ref _unityStatus, status);
+        PublishControlStatus();
+    }
+
+    private void PublishControlStatus(
+        CameraHandFrame? handFrame = null,
+        Exception? error = null)
+    {
+        if (error is not null)
+        {
+            Volatile.Write(ref _controlError, error.Message);
+        }
+        var snapshot = CreateStatusSnapshot(handFrame, error?.Message);
+        Volatile.Write(ref _currentControlStatus, snapshot);
+        var handlers = _controlStatusChanged;
+        if (handlers is null)
+        {
+            return;
+        }
+
+        foreach (Action<CameraVisionStatusSnapshot> handler in handlers.GetInvocationList())
+        {
+            try
+            {
+                handler(snapshot);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    private CameraVisionStatusSnapshot CreateStatusSnapshot(
+        CameraHandFrame? handFrame = null,
+        string? error = null)
+    {
+        var capture = Volatile.Read(ref _captureService);
+        var statistics = capture?.Statistics;
+        var elapsedSeconds = ElapsedRunSeconds();
+        var processedFrames = handFrame?.ProcessedFrameCount
+            ?? Volatile.Read(ref _processingService)?.LatestFrame?.ProcessedFrameCount
+            ?? 0;
+        var outputFrames = Math.Max(
+            0,
+            Interlocked.Read(ref _sequence) - Interlocked.Read(ref _runStartedOutputSequence));
+        var latest = handFrame ?? Volatile.Read(ref _processingService)?.LatestFrame;
+        return new CameraVisionStatusSnapshot(
+            Status,
+            capture?.Status ?? CameraCaptureStatus.Stopped,
+            Rate(statistics?.CapturedFrames ?? 0, elapsedSeconds),
+            Rate(processedFrames, elapsedSeconds),
+            Rate(outputFrames, elapsedSeconds),
+            latest?.InferenceMilliseconds ?? 0,
+            latest?.DetectedHandCount ?? 0,
+            latest?.ActiveHands.Select(static hand => hand.NormalizedPosition)
+                ?? Enumerable.Empty<Vector2Data>(),
+            latest?.DroppedFrameCount ?? statistics?.DroppedFrames ?? 0,
+            Volatile.Read(ref _unityStatus).IsConnected,
+            latest?.Preview,
+            error ?? Volatile.Read(ref _controlError));
+    }
+
+    private double ElapsedRunSeconds()
+    {
+        var started = Interlocked.Read(ref _runStartedTimestamp);
+        if (started <= 0)
+        {
+            return 0;
+        }
+
+        return Math.Max(
+            0,
+            (System.Diagnostics.Stopwatch.GetTimestamp() - started) /
+            (double)System.Diagnostics.Stopwatch.Frequency);
+    }
+
+    private static double Rate(long count, double elapsedSeconds) =>
+        elapsedSeconds > 0 ? Math.Max(0, count / elapsedSeconds) : 0;
+
+    private static int RotatedWidth(CameraCaptureOptions capture) =>
+        capture.Rotation is CameraRotation.Rotate90 or CameraRotation.Rotate270
+            ? capture.Height
+            : capture.Width;
+
+    private static int RotatedHeight(CameraCaptureOptions capture) =>
+        capture.Rotation is CameraRotation.Rotate90 or CameraRotation.Rotate270
+            ? capture.Width
+            : capture.Height;
+
+    private static CameraVisionConfiguration CloneConfiguration(
+        CameraVisionConfiguration configuration,
+        IReadOnlyDictionary<string, CameraCalibration>? calibrations = null) =>
+        new(
+            configuration.SchemaVersion,
+            configuration.Capture,
+            configuration.MaxHands,
+            configuration.MinDetectionConfidence,
+            configuration.MinTrackingConfidence,
+            configuration.TrackingPoint,
+            configuration.SmoothingFactor,
+            configuration.MaximumMatchDistance,
+            configuration.LostFrameTolerance,
+            calibrations ?? configuration.Calibrations);
+
+    private static bool ProcessingConfigurationEquals(
+        CameraVisionConfiguration left,
+        CameraVisionConfiguration right) =>
+        left.MaxHands == right.MaxHands &&
+        left.MinDetectionConfidence.Equals(right.MinDetectionConfidence) &&
+        left.MinTrackingConfidence.Equals(right.MinTrackingConfidence) &&
+        left.TrackingPoint == right.TrackingPoint &&
+        left.SmoothingFactor.Equals(right.SmoothingFactor) &&
+        left.MaximumMatchDistance.Equals(right.MaximumMatchDistance) &&
+        left.LostFrameTolerance == right.LostFrameTolerance &&
+        CalibrationEquals(left.Calibrations, right.Calibrations);
+
+    private static bool CaptureConfigurationEquals(
+        CameraCaptureOptions left,
+        CameraCaptureOptions right) =>
+        left.DeviceIndex == right.DeviceIndex &&
+        left.Width == right.Width &&
+        left.Height == right.Height &&
+        left.FramesPerSecond.Equals(right.FramesPerSecond) &&
+        left.MirrorX == right.MirrorX &&
+        left.Rotation == right.Rotation &&
+        left.ReconnectDelay == right.ReconnectDelay;
+
+    private static bool CalibrationEquals(
+        IReadOnlyDictionary<string, CameraCalibration> left,
+        IReadOnlyDictionary<string, CameraCalibration> right)
+    {
+        if (left.Count != right.Count)
+        {
+            return false;
+        }
+
+        foreach (var (surfaceId, calibration) in left)
+        {
+            if (!right.TryGetValue(surfaceId, out var other) ||
+                !calibration.Points.SequenceEqual(other.Points))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 }
