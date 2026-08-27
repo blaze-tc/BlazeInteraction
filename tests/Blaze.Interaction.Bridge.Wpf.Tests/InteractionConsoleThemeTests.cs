@@ -85,6 +85,42 @@ public sealed class InteractionConsoleThemeTests
         Assert.Contains("FlexibleNumericTextConverter", xaml, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(
+        "src/Blaze.Interaction.Bridge.Wpf/App.xaml",
+        "/BlazeInteractionBridge;component/Resources/InteractionConsoleTheme.xaml")]
+    [InlineData(
+        "src/Radar.Bridge.Wpf/RadarTheme.xaml",
+        "/RadarBridge;component/Resources/InteractionConsoleTheme.xaml")]
+    [InlineData(
+        "providers/CameraVision/Blaze.Provider.CameraVision/UI/CameraVisionSettingsWindow.xaml",
+        "/Blaze.Provider.CameraVision;component/Resources/InteractionConsoleTheme.xaml")]
+    public void UiHost_MergesSharedTheme(string relativePath, string resourceSource)
+    {
+        var path = Path.Combine(
+            FindRepositoryRoot(),
+            relativePath.Replace('/', Path.DirectorySeparatorChar));
+        var xaml = File.ReadAllText(path);
+
+        Assert.Contains(resourceSource, xaml, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RadarApplication_MergesTheRadarWrapperTheme()
+    {
+        var path = Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "Radar.Bridge.Wpf",
+            "App.xaml");
+        var xaml = File.ReadAllText(path);
+
+        Assert.Contains(
+            "/RadarBridge;component/RadarTheme.xaml",
+            xaml,
+            StringComparison.Ordinal);
+    }
+
     private static string FindRepositoryRoot()
     {
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory);

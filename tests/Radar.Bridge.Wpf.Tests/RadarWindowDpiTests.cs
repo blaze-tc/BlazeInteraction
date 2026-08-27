@@ -20,7 +20,12 @@ public sealed class RadarWindowDpiTests
     [Fact]
     public void ApplicationTheme_RoundsLayoutAndUsesClearTypeText()
     {
-        var document = XDocument.Load(Path.Combine(FindRepositoryRoot(), "src", "Radar.Bridge.Wpf", "App.xaml"));
+        var document = XDocument.Load(Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "Blaze.Interaction.Bridge.Wpf",
+            "Resources",
+            "InteractionConsoleTheme.xaml"));
         var presentation = XNamespace.Get("http://schemas.microsoft.com/winfx/2006/xaml/presentation");
         var windowStyle = document.Descendants(presentation + "Style").Single(element =>
             (string?)element.Attribute("TargetType") == "Window");

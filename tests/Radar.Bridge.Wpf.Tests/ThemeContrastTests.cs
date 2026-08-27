@@ -15,7 +15,7 @@ public sealed class ThemeContrastTests
     [InlineData("TextBox")]
     public void ApplicationTheme_GivesInteractiveControlsExplicitDarkSurfaces(string targetType)
     {
-        var document = XDocument.Load(Path.Combine(FindRepositoryRoot(), "src", "Radar.Bridge.Wpf", "App.xaml"));
+        var document = XDocument.Load(SharedThemePath());
         var presentation = XNamespace.Get("http://schemas.microsoft.com/winfx/2006/xaml/presentation");
         var xaml = XNamespace.Get("http://schemas.microsoft.com/winfx/2006/xaml");
         var style = document.Descendants(presentation + "Style").Single(element =>
@@ -33,7 +33,7 @@ public sealed class ThemeContrastTests
     [Fact]
     public void ApplicationTheme_GivesTextAndComboBoxesReadableForegrounds()
     {
-        var document = XDocument.Load(Path.Combine(FindRepositoryRoot(), "src", "Radar.Bridge.Wpf", "App.xaml"));
+        var document = XDocument.Load(SharedThemePath());
         var presentation = XNamespace.Get("http://schemas.microsoft.com/winfx/2006/xaml/presentation");
         var xaml = XNamespace.Get("http://schemas.microsoft.com/winfx/2006/xaml");
 
@@ -83,7 +83,7 @@ public sealed class ThemeContrastTests
     [Fact]
     public void ApplicationTheme_CheckBoxHasVisibleDarkThemeStatesAndCheckedGlyph()
     {
-        var document = XDocument.Load(Path.Combine(FindRepositoryRoot(), "src", "Radar.Bridge.Wpf", "App.xaml"));
+        var document = XDocument.Load(SharedThemePath());
         var presentation = XNamespace.Get("http://schemas.microsoft.com/winfx/2006/xaml/presentation");
         var xaml = XNamespace.Get("http://schemas.microsoft.com/winfx/2006/xaml");
         var style = document.Descendants(presentation + "Style").Single(element =>
@@ -118,7 +118,7 @@ public sealed class ThemeContrastTests
     [Fact]
     public void ApplicationTheme_TabItemOwnsEveryVisualStateAndKeepsHeaderForegroundReadable()
     {
-        var document = XDocument.Load(Path.Combine(FindRepositoryRoot(), "src", "Radar.Bridge.Wpf", "App.xaml"));
+        var document = XDocument.Load(SharedThemePath());
         var presentation = XNamespace.Get("http://schemas.microsoft.com/winfx/2006/xaml/presentation");
         var xaml = XNamespace.Get("http://schemas.microsoft.com/winfx/2006/xaml");
         var style = document.Descendants(presentation + "Style").Single(element =>
@@ -169,6 +169,13 @@ public sealed class ThemeContrastTests
             .Value;
         return (Color)ColorConverter.ConvertFromString(text)!;
     }
+
+    private static string SharedThemePath() => Path.Combine(
+        FindRepositoryRoot(),
+        "src",
+        "Blaze.Interaction.Bridge.Wpf",
+        "Resources",
+        "InteractionConsoleTheme.xaml");
 
     private static double ContrastRatio(Color first, Color second)
     {

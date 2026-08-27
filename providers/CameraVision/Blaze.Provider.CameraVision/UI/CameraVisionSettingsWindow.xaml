@@ -3,6 +3,13 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="CameraVision · 多人手部感应" Width="1280" Height="800"
         MinWidth="980" MinHeight="640" Background="#F5F7FA">
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="/Blaze.Provider.CameraVision;component/Resources/InteractionConsoleTheme.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Window.Resources>
     <Grid Margin="16">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="2*" />
