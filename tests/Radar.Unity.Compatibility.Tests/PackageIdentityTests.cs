@@ -104,7 +104,9 @@ public sealed class PackageIdentityTests
     {
         var sampleRoot = Path.Combine(PackageRoot(), "Samples~", "BasicInteraction");
         var presenterMetaPath = Path.Combine(sampleRoot, "BasicInteractionPresenter.cs.meta");
+        var handPresenterMetaPath = Path.Combine(sampleRoot, "HandSkeletonPresenter.cs.meta");
         Assert.True(File.Exists(presenterMetaPath), "BasicInteractionPresenter.cs.meta");
+        Assert.True(File.Exists(handPresenterMetaPath), "HandSkeletonPresenter.cs.meta");
 
         var presenterGuid = File.ReadLines(presenterMetaPath)
             .Select(line => line.Trim())
@@ -124,7 +126,21 @@ public sealed class PackageIdentityTests
             "m_Script: {fileID: 11500000, guid: 5f7201a12d95ffc409449d95f23cf332, type: 3}",
             statusText,
             StringComparison.Ordinal);
-        Assert.Contains("m_Text: IPC: DISCONNECTED", statusText, StringComparison.Ordinal);
+        Assert.Matches(
+            new Regex(@"^  m_Text: ['""]?IPC: DISCONNECTED['""]?$", RegexOptions.Multiline),
+            statusText);
+
+        var handPresenterGuid = File.ReadLines(handPresenterMetaPath)
+            .Select(line => line.Trim())
+            .Single(line => line.StartsWith("guid: ", StringComparison.Ordinal))["guid: ".Length..];
+        var handPresenter = FindYamlObjectByScriptGuid(scene, handPresenterGuid);
+        var visualRootReference = Regex.Match(
+            handPresenter,
+            @"^  visualRoot: \{fileID: (?<fileId>\d+)\}$",
+            RegexOptions.Multiline);
+
+        Assert.True(visualRootReference.Success, "HandSkeletonPresenter.visualRoot must be serialized.");
+        Assert.NotEqual("0", visualRootReference.Groups["fileId"].Value);
     }
 
     [Fact]

@@ -24,6 +24,7 @@
   <ItemGroup>
     <Compile Include="..\..\UnityPackage\com.blaze.interaction\Runtime\Contracts\InteractionMessageModels.cs" Link="Runtime\InteractionMessageModels.cs" />
     <Compile Include="..\..\UnityPackage\com.blaze.interaction\Runtime\Contracts\HandInteractionModels.cs" Link="Runtime\HandInteractionModels.cs" />
+    <Compile Include="..\..\UnityPackage\com.blaze.interaction\Runtime\HandSkeletonGeometry.cs" Link="Runtime\HandSkeletonGeometry.cs" />
     <Compile Include="..\..\UnityPackage\com.blaze.interaction\Runtime\Internal\InteractionBridgePathResolver.cs" Link="Runtime\InteractionBridgePathResolver.cs" />
     <Compile Include="..\..\UnityPackage\com.blaze.interaction\Runtime\Internal\LengthPrefixedFrameDecoder.cs" Link="Runtime\LengthPrefixedFrameDecoder.cs" />
     <Compile Include="..\..\UnityPackage\com.blaze.interaction\Runtime\Internal\LatestValueBuffer.cs" Link="Runtime\LatestValueBuffer.cs" />

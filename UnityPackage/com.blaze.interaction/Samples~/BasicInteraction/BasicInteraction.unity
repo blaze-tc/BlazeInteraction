@@ -559,6 +559,7 @@ GameObject:
   - component: {fileID: 2100000003}
   - component: {fileID: 2100000004}
   - component: {fileID: 2100000005}
+  - component: {fileID: 2100000010}
   m_Layer: 5
   m_Name: Interaction Diagnostics
   m_TagString: Untagged
@@ -649,6 +650,9 @@ MonoBehaviour:
   cursor: {fileID: 0}
   cursorImage: {fileID: 0}
   cursorSize: 32
+  footprintParticleSize: 10
+  footprintLifetimeSeconds: 0.5
+  footprintParticleColor: {r: 0.1, g: 0.9, b: 1, a: 0.9}
 --- !u!1 &2100000006
 GameObject:
   m_ObjectHideFlags: 0
@@ -728,4 +732,19 @@ MonoBehaviour:
     m_HorizontalOverflow: 0
     m_VerticalOverflow: 1
     m_LineSpacing: 1.08
-  m_Text: IPC: DISCONNECTED
+  m_Text: 'IPC: DISCONNECTED'
+--- !u!114 &2100000010
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2100000001}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 50f94b3e6ccb4a4581569bc5125c8a8f, type: 3}
+  m_Name:
+  m_EditorClassIdentifier:
+  visualRoot: {fileID: 2100000002}
+  jointSize: 12
+  boneThickness: 4

@@ -24,7 +24,7 @@ namespace Blaze.Interaction.Tests
             Assert.That(hand.Landmarks.Select(landmark => landmark.Index),
                 Is.EqualTo(Enumerable.Range(0, 21)));
             Assert.That(hand.Landmarks[8].NormalizedPosition.X, Is.EqualTo(.4f));
-            Assert.That(hand.Landmarks[8].NormalizedPosition.Y, Is.EqualTo(.6f));
+            Assert.That(hand.Landmarks[8].NormalizedPosition.Y, Is.EqualTo(.4f));
             Assert.That(hand.Landmarks[8].PixelPosition.X, Is.EqualTo(80f));
             Assert.That(hand.Landmarks[8].PixelPosition.Y, Is.EqualTo(40f));
             Assert.That(hand.Landmarks[8].Z, Is.EqualTo(-.08f));
@@ -93,7 +93,8 @@ namespace Blaze.Interaction.Tests
             bool swapIndices = false,
             bool removeNormalizedPosition = false,
             bool removePixelPosition = false,
-            bool nonFiniteZ = false)
+            bool nonFiniteZ = false,
+            float normalizedXOffset = 0f)
         {
             var builder = new StringBuilder();
             builder.Append("{\"schemaVersion\":");
@@ -125,9 +126,9 @@ namespace Blaze.Interaction.Tests
                 if (!(removeNormalizedPosition && index == 0))
                 {
                     builder.Append(",\"normalizedPosition\":{\"x\":");
-                    AppendFloat(builder, index / 20f);
+                    AppendFloat(builder, index / 20f + normalizedXOffset);
                     builder.Append(",\"y\":");
-                    AppendFloat(builder, (20 - index) / 20f);
+                    AppendFloat(builder, index / 20f);
                     builder.Append('}');
                 }
 
