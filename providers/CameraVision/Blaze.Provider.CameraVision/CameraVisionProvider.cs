@@ -544,7 +544,8 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
             }
         }
 
-        PublishControlStatus(handFrame);
+        var pointSnapshot = Array.AsReadOnly(points.ToArray());
+        PublishControlStatus(handFrame, outputPoints: pointSnapshot);
         if (points.Count == 0)
         {
             return;
@@ -557,7 +558,7 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
             SurfaceId = surface.SurfaceId,
             Sequence = Interlocked.Increment(ref _sequence),
             TimestampUnixMs = handFrame.TimestampUnixMs,
-            Points = Array.AsReadOnly(points.ToArray())
+            Points = pointSnapshot
         };
         InvokeFrameReceived(frame);
     }
@@ -823,13 +824,14 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
 
     private void PublishControlStatus(
         CameraHandFrame? handFrame = null,
-        Exception? error = null)
+        Exception? error = null,
+        IReadOnlyList<InteractionPoint>? outputPoints = null)
     {
         if (error is not null)
         {
             Volatile.Write(ref _controlError, error.Message);
         }
-        var snapshot = CreateStatusSnapshot(handFrame, error?.Message);
+        var snapshot = CreateStatusSnapshot(handFrame, error?.Message, outputPoints);
         Volatile.Write(ref _currentControlStatus, snapshot);
         var handlers = _controlStatusChanged;
         if (handlers is null)
@@ -851,7 +853,8 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
 
     private CameraVisionStatusSnapshot CreateStatusSnapshot(
         CameraHandFrame? handFrame = null,
-        string? error = null)
+        string? error = null,
+        IReadOnlyList<InteractionPoint>? outputPoints = null)
     {
         var capture = Volatile.Read(ref _captureService);
         var statistics = capture?.Statistics;
@@ -863,6 +866,21 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
             0,
             Interlocked.Read(ref _sequence) - Interlocked.Read(ref _runStartedOutputSequence));
         var latest = handFrame ?? Volatile.Read(ref _processingService)?.LatestFrame;
+        if (outputPoints is null)
+        {
+            lock (_pointGate)
+            {
+                outputPoints = Array.AsReadOnly(_lastPoints.Values.ToArray());
+            }
+        }
+        var configuration = Volatile.Read(ref _configuration);
+        var surface = Volatile.Read(ref _surface);
+        var calibration = configuration is not null && surface is not null &&
+                          configuration.Calibrations.TryGetValue(surface.SurfaceId, out var configured)
+            ? configured
+            : configuration is not null
+                ? FullFrameCalibration(configuration.Capture)
+                : null;
         return new CameraVisionStatusSnapshot(
             Status,
             capture?.Status ?? CameraCaptureStatus.Stopped,
@@ -877,7 +895,12 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
             Volatile.Read(ref _unityStatus).IsConnected,
             latest?.Preview,
             latest?.ActiveHands,
-            error ?? Volatile.Read(ref _controlError));
+            error ?? Volatile.Read(ref _controlError),
+            latest?.TimestampUnixMs ?? 0,
+            statistics?.ActualWidth ?? latest?.Preview.Width ?? 0,
+            statistics?.ActualHeight ?? latest?.Preview.Height ?? 0,
+            outputPoints,
+            calibration?.Points);
     }
 
     private double ElapsedRunSeconds()

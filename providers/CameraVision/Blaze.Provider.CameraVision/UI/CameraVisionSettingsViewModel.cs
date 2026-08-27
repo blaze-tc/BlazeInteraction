@@ -539,13 +539,16 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
         DroppedFrames = status.DroppedFrames;
         UnityConnected = status.UnityConnected;
         Preview = status.Preview;
+        if (status.ActualWidth > 0) _actualWidth = status.ActualWidth;
+        if (status.ActualHeight > 0) _actualHeight = status.ActualHeight;
         ErrorMessage = status.Error ?? ErrorMessage;
         foreach (var property in new[]
                  {
                      nameof(ProviderStatus), nameof(CameraStatus), nameof(CameraFramesPerSecond),
                      nameof(InferenceFramesPerSecond), nameof(OutputFramesPerSecond),
                      nameof(InferenceLatencyMilliseconds), nameof(DetectedHandCount),
-                     nameof(DroppedFrames), nameof(UnityConnected), nameof(Preview)
+                     nameof(DroppedFrames), nameof(UnityConnected), nameof(Preview),
+                     nameof(ActualWidth), nameof(ActualHeight)
                  }) OnPropertyChanged(property);
     }
 

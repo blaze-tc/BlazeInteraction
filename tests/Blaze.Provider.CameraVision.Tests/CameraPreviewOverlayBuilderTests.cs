@@ -7,6 +7,59 @@ namespace Blaze.Provider.CameraVision.Tests;
 public sealed class CameraPreviewOverlayBuilderTests
 {
     [Fact]
+    public void PreviewModelsShareTimestampAndUnityUsesExactOutputPointsWithoutBones()
+    {
+        var hands = new[] { Hand(1, 0.25f), Hand(2, 0.75f) };
+        var outputPoints = hands.Select(hand => OutputPoint(hand.TrackId, hand.NormalizedPosition))
+            .ToArray();
+        var status = Status(
+            hands,
+            timestampUnixMs: 1234,
+            outputPoints: outputPoints,
+            calibrationPoints:
+            [
+                new Vector2Data(0, 0),
+                new Vector2Data(100, 0),
+                new Vector2Data(100, 50),
+                new Vector2Data(0, 50)
+            ]);
+        var surface = new InteractionSurface
+        {
+            SurfaceId = "main",
+            Name = "Main",
+            LogicalWidth = 1920,
+            LogicalHeight = 1080,
+            IsPrimary = true,
+            Order = 0
+        };
+
+        var models = CameraPreviewModelBuilder.Build(
+            status,
+            surface,
+            rawWidth: 200,
+            rawHeight: 200,
+            calibrationWidth: 200,
+            calibrationHeight: 100,
+            unityWidth: 400,
+            unityHeight: 400);
+
+        Assert.Equal(1234, models.Raw.TimestampUnixMs);
+        Assert.Equal(1234, models.Calibration.TimestampUnixMs);
+        Assert.Equal(1234, models.Unity.TimestampUnixMs);
+        Assert.Equal(50, models.Raw.Transform.OffsetY, 3);
+        Assert.Equal(new Vector2Data(0, 50), models.Raw.CalibrationVertices[0]);
+        Assert.Equal(100, models.Calibration.Preview.Width);
+        Assert.Equal(50, models.Calibration.Preview.Height);
+        Assert.Equal(2, models.Unity.Points.Count);
+        Assert.All(models.Unity.Points, point => Assert.Equal(21, point.Fp.Count));
+        Assert.Equal(outputPoints[0].PixelPosition, models.Unity.Points[0].Source.PixelPosition);
+        Assert.Equal(outputPoints[0].Fp, models.Unity.Points[0].Source.Fp);
+        Assert.DoesNotContain(
+            typeof(CameraUnityPreviewModel).GetProperties(),
+            property => property.Name.Contains("Bone", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void EveryHandProducesTwentyOneJointsTwentyOneBonesTrackingPointAndOutline()
     {
         var overlay = CameraPreviewOverlayBuilder.Build(Status([Hand(1, 0.25f)]), 200, 100);
@@ -69,7 +122,11 @@ public sealed class CameraPreviewOverlayBuilderTests
         Assert.Empty(overlay.Bones);
     }
 
-    private static CameraVisionStatusSnapshot Status(IEnumerable<CameraHandSnapshot> hands) => new(
+    private static CameraVisionStatusSnapshot Status(
+        IEnumerable<CameraHandSnapshot> hands,
+        long timestampUnixMs = 0,
+        IEnumerable<InteractionPoint>? outputPoints = null,
+        IEnumerable<Vector2Data>? calibrationPoints = null) => new(
         ProviderRuntimeStatus.Running,
         CameraCaptureStatus.Connected,
         30,
@@ -82,7 +139,33 @@ public sealed class CameraPreviewOverlayBuilderTests
         true,
         new CameraPreviewSnapshot(100, 50, 300, new byte[15000]),
         hands,
-        null);
+        null,
+        timestampUnixMs,
+        100,
+        50,
+        outputPoints,
+        calibrationPoints);
+
+    private static InteractionPoint OutputPoint(long trackId, Vector2Data normalized)
+    {
+        var center = new Vector2Data(normalized.X * 1920, normalized.Y * 1080);
+        return new InteractionPoint
+        {
+            Id = trackId,
+            SurfaceId = "main",
+            ProviderId = CameraVisionPlugin.ProviderId,
+            ProviderInstanceId = "camera-main",
+            SourceId = $"hand-track-{trackId}",
+            Phase = InteractionPhase.Hover,
+            NormalizedPosition = normalized,
+            PixelPosition = center,
+            Confidence = 0.9f,
+            TimestampUnixMs = 1234,
+            Fp = Enumerable.Range(0, 21)
+                .Select(index => new Vector2Data(center.X + index, center.Y + index))
+                .ToArray()
+        };
+    }
 
     private static CameraHandSnapshot Hand(long trackId, float x)
     {

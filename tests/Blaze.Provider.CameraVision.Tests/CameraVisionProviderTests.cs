@@ -54,11 +54,26 @@ public sealed class CameraVisionProviderTests
         await services.SeedConfigurationAsync();
         var provider = await InitializedProviderAsync(services);
         var frameReady = NextInteractionFrame(provider);
+        var control = (ICameraVisionControl)provider;
+        var statusReady = new TaskCompletionSource<CameraVisionStatusSnapshot>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        control.StatusChanged += snapshot =>
+        {
+            if (snapshot.OutputPoints.Count == 8)
+            {
+                statusReady.TrySetResult(snapshot);
+            }
+        };
 
         await provider.StartAsync(CancellationToken.None);
         var frame = await frameReady.WaitAsync(TimeSpan.FromSeconds(5));
+        var status = await statusReady.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(8, frame.Points.Count);
+        Assert.Equal(frame.TimestampUnixMs, status.TimestampUnixMs);
+        Assert.Equal(frame.Points, status.OutputPoints);
+        Assert.Equal(frame.Points.Select(point => point.PixelPosition),
+            status.OutputPoints.Select(point => point.PixelPosition));
         Assert.Equal(8, frame.Points.Select(point => point.Id).Distinct().Count());
         foreach (var point in frame.Points)
         {
