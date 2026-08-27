@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Security.Cryptography;
 using Blaze.Interaction.Editor;
 
 namespace Radar.Unity.Compatibility.Tests;
@@ -167,6 +168,72 @@ public sealed class BridgePayloadValidatorTests
     }
 
     [Theory]
+    [InlineData("manifest")]
+    [InlineData("native")]
+    [InlineData("model")]
+    public void MissingHandRuntimeAssetIsRejected(string target)
+    {
+        using var fixture = PayloadFixture.Create();
+        File.Delete(target switch
+        {
+            "manifest" => fixture.HandRuntimeManifestPath,
+            "native" => fixture.HandNativePath,
+            "model" => fixture.HandModelPath,
+            _ => throw new ArgumentOutOfRangeException(nameof(target))
+        });
+
+        Assert.Contains(
+            target,
+            InteractionBridgePayloadValidator.Validate(fixture.Root, "1.0.0"),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("Blaze.HandTracking.Native.dll")]
+    [InlineData("hand_landmarker.task")]
+    public void DuplicateHandRuntimeAssetIsRejected(string fileName)
+    {
+        using var fixture = PayloadFixture.Create();
+        fixture.Write("Providers/CameraVision/duplicate/" + fileName, "duplicate");
+
+        Assert.Contains(
+            "exactly one",
+            InteractionBridgePayloadValidator.Validate(fixture.Root, "1.0.0"),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("native")]
+    [InlineData("model")]
+    public void HandRuntimeHashMismatchIsRejected(string target)
+    {
+        using var fixture = PayloadFixture.Create();
+        File.WriteAllText(target == "native" ? fixture.HandNativePath : fixture.HandModelPath, "changed");
+
+        Assert.Contains(
+            "SHA-256",
+            InteractionBridgePayloadValidator.Validate(fixture.Root, "1.0.0"),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("python311.dll")]
+    [InlineData("CameraWorker.dll")]
+    [InlineData("MediaPipeWorker.dll")]
+    [InlineData("ProviderHost.dll")]
+    [InlineData("python/runtime.zip")]
+    public void ForbiddenCameraRuntimeNamesAreRejected(string relativePath)
+    {
+        using var fixture = PayloadFixture.Create();
+        fixture.Write("Providers/CameraVision/" + relativePath, "forbidden");
+
+        Assert.Contains(
+            "forbidden",
+            InteractionBridgePayloadValidator.Validate(fixture.Root, "1.0.0"),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
     [InlineData("{")]
     [InlineData("null")]
     [InlineData("[]")]
@@ -226,6 +293,9 @@ public sealed class BridgePayloadValidatorTests
             ManifestPath = Path.Combine(RadarRoot, "provider.json");
             CameraRoot = Path.Combine(root, "Providers", "CameraVision");
             CameraManifestPath = Path.Combine(CameraRoot, "provider.json");
+            HandRuntimeManifestPath = Path.Combine(CameraRoot, "hand-runtime.json");
+            HandNativePath = Path.Combine(CameraRoot, "runtimes", "win-x64", "native", "Blaze.HandTracking.Native.dll");
+            HandModelPath = Path.Combine(CameraRoot, "models", "hand_landmarker.task");
         }
 
         public string Root { get; }
@@ -233,6 +303,9 @@ public sealed class BridgePayloadValidatorTests
         public string ManifestPath { get; }
         public string CameraRoot { get; }
         public string CameraManifestPath { get; }
+        public string HandRuntimeManifestPath { get; }
+        public string HandNativePath { get; }
+        public string HandModelPath { get; }
 
         public static PayloadFixture Create()
         {
@@ -278,8 +351,30 @@ public sealed class BridgePayloadValidatorTests
                 }));
             fixture.Write("Providers/CameraVision/Blaze.Provider.CameraVision.dll", "provider");
             fixture.Write("Providers/CameraVision/OpenCvSharpExtern.dll", "native");
+            fixture.Write("Providers/CameraVision/runtimes/win-x64/native/Blaze.HandTracking.Native.dll", "hand-native");
+            fixture.Write("Providers/CameraVision/models/hand_landmarker.task", "hand-model");
+            fixture.Write(
+                "Providers/CameraVision/hand-runtime.json",
+                JsonSerializer.Serialize(new
+                {
+                    schemaVersion = 1,
+                    abiVersion = 1,
+                    nativeLibrary = new
+                    {
+                        path = "runtimes/win-x64/native/Blaze.HandTracking.Native.dll",
+                        sha256 = Sha256(fixture.HandNativePath)
+                    },
+                    model = new
+                    {
+                        path = "models/hand_landmarker.task",
+                        sha256 = Sha256(fixture.HandModelPath)
+                    }
+                }));
             return fixture;
         }
+
+        private static string Sha256(string path) =>
+            Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
 
         public void SetManifest(string property, JsonNode? value)
         {

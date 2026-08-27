@@ -115,6 +115,46 @@ if ($cameraVisionNativeLibrary.Count -ne 1) {
     throw 'CameraVision publish must contain exactly one OpenCvSharpExtern.dll native runtime.'
 }
 
+$handProvenancePath = Join-Path $repositoryRoot 'eng\mediapipe-hand.json'
+try {
+    $handProvenance = Get-Content -LiteralPath $handProvenancePath -Raw -Encoding UTF8 | ConvertFrom-Json
+}
+catch {
+    throw "MediaPipe hand provenance manifest is invalid JSON: $($_.Exception.Message)"
+}
+$handNativeRelativePath = 'runtimes/win-x64/native/Blaze.HandTracking.Native.dll'
+$handModelRelativePath = 'models/hand_landmarker.task'
+$handNativePath = Join-Path $cameraVisionDirectory $handNativeRelativePath
+$handModelPath = Join-Path $cameraVisionDirectory $handModelRelativePath
+foreach ($asset in @(
+    [PSCustomObject]@{ Label = 'native'; Path = $handNativePath; ExpectedHash = [string]$handProvenance.nativeDllSha256 },
+    [PSCustomObject]@{ Label = 'model'; Path = $handModelPath; ExpectedHash = [string]$handProvenance.modelSha256 })) {
+    if (-not (Test-Path -LiteralPath $asset.Path -PathType Leaf)) {
+        throw "CameraVision hand $($asset.Label) asset is missing: $($asset.Path)"
+    }
+    $actualHash = Get-Sha256Hash -Path $asset.Path
+    if ($actualHash -cne $asset.ExpectedHash.ToLowerInvariant()) {
+        throw "CameraVision hand $($asset.Label) SHA-256 mismatch. Expected $($asset.ExpectedHash), actual $actualHash."
+    }
+}
+$handRuntimeManifest = [ordered]@{
+    schemaVersion = 1
+    abiVersion = [int]$handProvenance.abiVersion
+    nativeLibrary = [ordered]@{
+        path = $handNativeRelativePath
+        sha256 = ([string]$handProvenance.nativeDllSha256).ToLowerInvariant()
+    }
+    model = [ordered]@{
+        path = $handModelRelativePath
+        sha256 = ([string]$handProvenance.modelSha256).ToLowerInvariant()
+    }
+}
+[System.IO.File]::WriteAllText(
+    (Join-Path $cameraVisionDirectory 'hand-runtime.json'),
+    ($handRuntimeManifest | ConvertTo-Json -Depth 4),
+    [System.Text.UTF8Encoding]::new($false))
+Assert-CameraVisionHandRuntime -Directory $cameraVisionDirectory
+
 [System.IO.File]::WriteAllText(
     (Join-Path $publishRoot 'bridge-version.txt'),
     $expectedVersion,

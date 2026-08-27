@@ -1,5 +1,23 @@
 Set-StrictMode -Version Latest
 
+function Get-Sha256Hash {
+    param([Parameter(Mandatory)] [string]$Path)
+
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            return [System.BitConverter]::ToString($sha256.ComputeHash($stream)).Replace('-', '').ToLowerInvariant()
+        }
+        finally {
+            $sha256.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
+}
+
 function Assert-ExactDeletionTarget {
     param(
         [Parameter(Mandatory)] [string]$Path,
@@ -418,6 +436,67 @@ function Assert-InteractionBridgePayload {
     }
 }
 
+function Assert-CameraVisionHandRuntime {
+    param([Parameter(Mandatory)] [string]$Directory)
+
+    foreach ($entry in (Get-ChildItem -LiteralPath $Directory -Force -Recurse)) {
+        foreach ($forbiddenName in @('python', 'CameraWorker', 'MediaPipeWorker', 'ProviderHost')) {
+            if ($entry.Name.IndexOf($forbiddenName, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                throw "CameraVision payload contains forbidden runtime name '$($entry.Name)'."
+            }
+        }
+    }
+
+    $manifestPath = Join-Path $Directory 'hand-runtime.json'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        throw 'The external CameraVision hand runtime manifest is missing.'
+    }
+    try { $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch { throw "The external CameraVision hand runtime manifest is invalid JSON: $($_.Exception.Message)" }
+
+    if ($manifest.schemaVersion -ne 1 -or $manifest.abiVersion -ne 1) {
+        throw 'The external CameraVision hand runtime manifest must use schemaVersion 1 and ABI version 1.'
+    }
+
+    foreach ($asset in @(
+        [PSCustomObject]@{
+            Label = 'native'
+            FileName = 'Blaze.HandTracking.Native.dll'
+            RelativePath = 'runtimes/win-x64/native/Blaze.HandTracking.Native.dll'
+            ManifestAsset = $manifest.nativeLibrary
+        },
+        [PSCustomObject]@{
+            Label = 'model'
+            FileName = 'hand_landmarker.task'
+            RelativePath = 'models/hand_landmarker.task'
+            ManifestAsset = $manifest.model
+        })) {
+        $matches = @(Get-ChildItem -LiteralPath $Directory -Filter $asset.FileName -File -Recurse)
+        if ($matches.Count -ne 1) {
+            throw "The external CameraVision hand $($asset.Label) payload must contain exactly one $($asset.FileName)."
+        }
+        if ($null -eq $asset.ManifestAsset -or
+            [string]$asset.ManifestAsset.path -cne $asset.RelativePath -or
+            [string]::IsNullOrWhiteSpace([string]$asset.ManifestAsset.sha256)) {
+            throw "The external CameraVision hand $($asset.Label) manifest entry is invalid."
+        }
+        $expectedPath = [System.IO.Path]::GetFullPath((Join-Path $Directory $asset.RelativePath))
+        if (-not [string]::Equals(
+                $matches[0].FullName,
+                $expectedPath,
+                [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "The external CameraVision hand $($asset.Label) asset is not at '$($asset.RelativePath)'."
+        }
+        $actualHash = Get-Sha256Hash -Path $expectedPath
+        if (-not [string]::Equals(
+                $actualHash,
+                [string]$asset.ManifestAsset.sha256,
+                [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "The external CameraVision hand $($asset.Label) SHA-256 does not match hand-runtime.json."
+        }
+    }
+}
+
 function Copy-ValidatedInteractionBridgePayload {
     param(
         [Parameter(Mandatory)] [string]$SourceDirectory,
@@ -432,8 +511,8 @@ function Copy-ValidatedInteractionBridgePayload {
     Get-ChildItem -LiteralPath $SourceDirectory | Copy-Item -Destination $DestinationDirectory -Recurse -Force
     Assert-InteractionBridgePayload -Directory $DestinationDirectory -ExpectedVersion $ExpectedVersion
 
-    $sourceHash = (Get-FileHash -LiteralPath (Join-Path $SourceDirectory 'BlazeInteractionBridge.exe') -Algorithm SHA256).Hash
-    $destinationHash = (Get-FileHash -LiteralPath (Join-Path $DestinationDirectory 'BlazeInteractionBridge.exe') -Algorithm SHA256).Hash
+    $sourceHash = Get-Sha256Hash -Path (Join-Path $SourceDirectory 'BlazeInteractionBridge.exe')
+    $destinationHash = Get-Sha256Hash -Path (Join-Path $DestinationDirectory 'BlazeInteractionBridge.exe')
     if ($sourceHash -cne $destinationHash) {
         throw "BlazeInteractionBridge embedded copy SHA-256 mismatch. Source $sourceHash, destination $destinationHash."
     }

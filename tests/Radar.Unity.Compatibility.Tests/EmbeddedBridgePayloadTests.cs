@@ -57,6 +57,15 @@ public sealed class EmbeddedBridgePayloadTests
                 "*.dll",
                 SearchOption.AllDirectories),
             path => string.Equals(Path.GetFileName(path), "OpenCvSharpExtern.dll", StringComparison.OrdinalIgnoreCase));
+        foreach (var forbiddenName in new[] { "python", "CameraWorker", "MediaPipeWorker", "ProviderHost" })
+        {
+            Assert.DoesNotContain(
+                Directory.EnumerateFileSystemEntries(
+                    Path.Combine(publishDirectory, "Providers", "CameraVision"),
+                    "*",
+                    SearchOption.AllDirectories),
+                path => Path.GetFileName(path).Contains(forbiddenName, StringComparison.OrdinalIgnoreCase));
+        }
     }
 
     [Fact]

@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using UnityEngine;
 
 namespace Blaze.Interaction.Editor
@@ -126,7 +128,122 @@ namespace Blaze.Interaction.Editor
                 return "External CameraVision Provider must contain exactly one OpenCvSharpExtern.dll native runtime.";
             }
 
+            var handRuntimeError = ValidateHandRuntime(cameraDirectory);
+            if (handRuntimeError != null)
+            {
+                return handRuntimeError;
+            }
+
             return null;
+        }
+
+        private static string ValidateHandRuntime(string cameraDirectory)
+        {
+            var entries = Directory.GetFileSystemEntries(cameraDirectory, "*", SearchOption.AllDirectories);
+            var forbiddenNames = new[] { "python", "CameraWorker", "MediaPipeWorker", "ProviderHost" };
+            for (var entryIndex = 0; entryIndex < entries.Length; entryIndex++)
+            {
+                var name = Path.GetFileName(entries[entryIndex]);
+                for (var forbiddenIndex = 0; forbiddenIndex < forbiddenNames.Length; forbiddenIndex++)
+                {
+                    if (name.IndexOf(forbiddenNames[forbiddenIndex], StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        return "External CameraVision Provider contains forbidden runtime name: " + name;
+                    }
+                }
+            }
+
+            var manifestPath = Path.Combine(cameraDirectory, "hand-runtime.json");
+            if (!File.Exists(manifestPath))
+            {
+                return "External CameraVision hand runtime manifest is missing.";
+            }
+
+            HandRuntimeManifest manifest;
+            try
+            {
+                manifest = JsonUtility.FromJson<HandRuntimeManifest>(File.ReadAllText(manifestPath));
+            }
+            catch (Exception exception)
+            {
+                return "External CameraVision hand runtime manifest is invalid JSON: " + exception.Message;
+            }
+
+            if (manifest == null || manifest.schemaVersion != 1 || manifest.abiVersion != 1)
+            {
+                return "External CameraVision hand runtime manifest must use schemaVersion 1 and ABI version 1.";
+            }
+
+            var nativeError = ValidateHandAsset(
+                cameraDirectory,
+                "native",
+                "Blaze.HandTracking.Native.dll",
+                "runtimes/win-x64/native/Blaze.HandTracking.Native.dll",
+                manifest.nativeLibrary);
+            if (nativeError != null)
+            {
+                return nativeError;
+            }
+
+            return ValidateHandAsset(
+                cameraDirectory,
+                "model",
+                "hand_landmarker.task",
+                "models/hand_landmarker.task",
+                manifest.model);
+        }
+
+        private static string ValidateHandAsset(
+            string cameraDirectory,
+            string label,
+            string fileName,
+            string relativePath,
+            HandRuntimeAsset manifestAsset)
+        {
+            var matches = Directory.GetFiles(cameraDirectory, fileName, SearchOption.AllDirectories);
+            if (matches.Length != 1)
+            {
+                return "External CameraVision hand " + label + " payload must contain exactly one " + fileName + ".";
+            }
+
+            if (manifestAsset == null ||
+                !string.Equals(manifestAsset.path, relativePath, StringComparison.Ordinal) ||
+                string.IsNullOrWhiteSpace(manifestAsset.sha256))
+            {
+                return "External CameraVision hand " + label + " manifest entry is invalid.";
+            }
+
+            var expectedPath = Path.GetFullPath(Path.Combine(
+                cameraDirectory,
+                relativePath.Replace('/', Path.DirectorySeparatorChar)));
+            if (!string.Equals(Path.GetFullPath(matches[0]), expectedPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return "External CameraVision hand " + label + " asset is not at " + relativePath + ".";
+            }
+
+            var actualHash = ComputeSha256(expectedPath);
+            if (!string.Equals(actualHash, manifestAsset.sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                return "External CameraVision hand " + label + " SHA-256 does not match hand-runtime.json.";
+            }
+
+            return null;
+        }
+
+        private static string ComputeSha256(string path)
+        {
+            using (var stream = File.OpenRead(path))
+            using (var sha256 = SHA256.Create())
+            {
+                var bytes = sha256.ComputeHash(stream);
+                var builder = new StringBuilder(bytes.Length * 2);
+                for (var index = 0; index < bytes.Length; index++)
+                {
+                    builder.Append(bytes[index].ToString("x2"));
+                }
+
+                return builder.ToString();
+            }
         }
 
         [Serializable]
@@ -137,6 +254,22 @@ namespace Blaze.Interaction.Editor
             public int providerApiVersion;
             public string entryAssembly;
             public string entryType;
+        }
+
+        [Serializable]
+        private sealed class HandRuntimeManifest
+        {
+            public int schemaVersion;
+            public int abiVersion;
+            public HandRuntimeAsset nativeLibrary;
+            public HandRuntimeAsset model;
+        }
+
+        [Serializable]
+        private sealed class HandRuntimeAsset
+        {
+            public string path;
+            public string sha256;
         }
     }
 }

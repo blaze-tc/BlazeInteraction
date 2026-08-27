@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.IO.Pipes;
+using System.Security.Cryptography;
+using System.Text.Json;
 using Blaze.Interaction.Contracts;
 using Blaze.Interaction.Ipc;
 using Blaze.Interaction.Runtime;
@@ -94,6 +96,36 @@ public sealed class InteractionPublishLayoutTests
             "win-x64",
             "native",
             "Blaze.HandTracking.Native.dll")));
+        var provenancePath = Path.Combine(repositoryRoot, "eng", "mediapipe-hand.json");
+        using var provenance = JsonDocument.Parse(await File.ReadAllTextAsync(provenancePath));
+        var expectedModelHash = provenance.RootElement.GetProperty("modelSha256").GetString();
+        var expectedNativeHash = provenance.RootElement.GetProperty("nativeDllSha256").GetString();
+        var expectedAbiVersion = provenance.RootElement.GetProperty("abiVersion").GetInt32();
+        var runtimeManifestPath = Path.Combine(cameraDirectory, "hand-runtime.json");
+        Assert.True(File.Exists(runtimeManifestPath), "CameraVision hand-runtime.json");
+        using var runtimeManifest = JsonDocument.Parse(await File.ReadAllTextAsync(runtimeManifestPath));
+        Assert.Equal(1, runtimeManifest.RootElement.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(expectedAbiVersion, runtimeManifest.RootElement.GetProperty("abiVersion").GetInt32());
+        Assert.Equal(
+            expectedNativeHash,
+            runtimeManifest.RootElement.GetProperty("nativeLibrary").GetProperty("sha256").GetString());
+        Assert.Equal(
+            expectedModelHash,
+            runtimeManifest.RootElement.GetProperty("model").GetProperty("sha256").GetString());
+        Assert.Equal(
+            expectedNativeHash,
+            Sha256(Path.Combine(cameraDirectory,
+                runtimeManifest.RootElement.GetProperty("nativeLibrary").GetProperty("path").GetString()!)));
+        Assert.Equal(
+            expectedModelHash,
+            Sha256(Path.Combine(cameraDirectory,
+                runtimeManifest.RootElement.GetProperty("model").GetProperty("path").GetString()!)));
+        foreach (var forbiddenName in new[] { "python", "CameraWorker", "MediaPipeWorker", "ProviderHost" })
+        {
+            Assert.DoesNotContain(
+                Directory.EnumerateFileSystemEntries(cameraDirectory, "*", SearchOption.AllDirectories),
+                path => Path.GetFileName(path).Contains(forbiddenName, StringComparison.OrdinalIgnoreCase));
+        }
         Assert.Contains(
             Directory.EnumerateFiles(cameraDirectory, "*.dll", SearchOption.AllDirectories),
             path => string.Equals(
@@ -283,6 +315,9 @@ public sealed class InteractionPublishLayoutTests
                 smokeFailure);
         }
     }
+
+    private static string Sha256(string path) =>
+        Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
 
     private static string FindRepositoryRoot()
     {
