@@ -33,6 +33,33 @@ public sealed record CameraCaptureOptions
 
 public sealed record CameraDeviceDescriptor(int Index, string DisplayName);
 
+public sealed record CameraCaptureMode
+{
+    public CameraCaptureMode(int width, int height, double framesPerSecond)
+    {
+        if (width <= 0 || height <= 0 ||
+            !double.IsFinite(framesPerSecond) || framesPerSecond <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(width),
+                "Camera capture mode is invalid.");
+        }
+
+        Width = width;
+        Height = height;
+        FramesPerSecond = framesPerSecond;
+    }
+
+    public int Width { get; }
+    public int Height { get; }
+    public double FramesPerSecond { get; }
+}
+
+public sealed record CameraDeviceCapabilities(
+    CameraDeviceDescriptor Device,
+    IReadOnlyList<CameraCaptureMode> Modes,
+    bool UsesFallbackPresets,
+    string? Warning);
+
 public interface ICameraCaptureBackendFactory
 {
     ICameraCaptureBackend Create();
@@ -42,6 +69,11 @@ public interface ICameraCaptureBackend : IAsyncDisposable
 {
     bool IsOpen { get; }
     bool TryOpen(CameraCaptureOptions options);
+    bool TryGetActiveMode(out CameraCaptureMode? mode)
+    {
+        mode = null;
+        return false;
+    }
     bool TryRead(out CameraFrame? frame);
     void Close();
 }

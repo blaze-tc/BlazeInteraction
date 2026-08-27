@@ -193,6 +193,11 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
         CancellationToken cancellationToken) =>
         EnumerateDevicesAsync(cancellationToken);
 
+    Task<CameraDeviceCapabilities> ICameraVisionControl.GetCapabilitiesAsync(
+        int deviceIndex,
+        CancellationToken cancellationToken) =>
+        GetCapabilitiesAsync(deviceIndex, cancellationToken);
+
     Task ICameraVisionControl.ApplyAsync(
         CameraVisionConfiguration configuration,
         CancellationToken cancellationToken) =>
@@ -229,6 +234,32 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
             ThrowIfDisposed();
             return await new CameraDeviceEnumerator(_captureFactory)
                 .EnumerateAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _lifecycle.Release();
+        }
+    }
+
+    private async Task<CameraDeviceCapabilities> GetCapabilitiesAsync(
+        int deviceIndex,
+        CancellationToken cancellationToken)
+    {
+        if (deviceIndex < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(deviceIndex));
+        }
+
+        ThrowIfDisposed();
+        await _lifecycle.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            return await new CameraCapabilityEnumerator(_captureFactory)
+                .EnumerateAsync(
+                    new CameraDeviceDescriptor(deviceIndex, $"Camera {deviceIndex}"),
+                    cancellationToken)
                 .ConfigureAwait(false);
         }
         finally

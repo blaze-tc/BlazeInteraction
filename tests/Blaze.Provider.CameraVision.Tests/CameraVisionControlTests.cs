@@ -6,6 +6,30 @@ namespace Blaze.Provider.CameraVision.Tests;
 public sealed class CameraVisionControlTests
 {
     [Fact]
+    public async Task GetCapabilities_UsesIndependentBackendsWithoutRestartingActiveCamera()
+    {
+        using var services = new ControlServices(
+            cameraBackendFactory: static () => new SteadyCameraBackend());
+        await services.SaveAsync(Configuration(maxHands: 8));
+        var provider = await CreateInitializedAsync(services);
+        var control = (ICameraVisionControl)provider;
+        await provider.StartAsync(CancellationToken.None);
+        await WaitUntilAsync(() =>
+            control.CurrentStatus.CameraStatus == CameraCaptureStatus.Connected);
+        var activeStatus = provider.Status;
+        var completedRuns = provider.CompletedRunCount;
+
+        var capabilities = await control.GetCapabilitiesAsync(0, CancellationToken.None);
+
+        Assert.Equal(0, capabilities.Device.Index);
+        Assert.NotEmpty(capabilities.Modes);
+        Assert.Equal(activeStatus, provider.Status);
+        Assert.Equal(CameraCaptureStatus.Connected, control.CurrentStatus.CameraStatus);
+        Assert.Equal(completedRuns, provider.CompletedRunCount);
+        await provider.DisposeAsync();
+    }
+
+    [Fact]
     public async Task Apply_ValidatesBeforeSaving()
     {
         using var services = new ControlServices();

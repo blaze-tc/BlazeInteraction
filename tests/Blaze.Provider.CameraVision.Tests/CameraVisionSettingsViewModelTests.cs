@@ -209,6 +209,17 @@ public sealed class CameraVisionSettingsViewModelTests
             EnumerateCalls++;
             return Task.FromResult(EnumeratedDevices);
         }
+        public Task<CameraDeviceCapabilities> GetCapabilitiesAsync(
+            int deviceIndex,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new CameraDeviceCapabilities(
+                new CameraDeviceDescriptor(deviceIndex, $"Camera {deviceIndex}"),
+                [new CameraCaptureMode(
+                    CurrentConfiguration!.Capture.Width,
+                    CurrentConfiguration.Capture.Height,
+                    CurrentConfiguration.Capture.FramesPerSecond)],
+                false,
+                null));
         public async Task ApplyAsync(CameraVisionConfiguration next, CancellationToken cancellationToken)
         {
             ApplyCalls++;

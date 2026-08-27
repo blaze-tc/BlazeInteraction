@@ -8,6 +8,9 @@ internal interface ICameraVisionControl
     CameraVisionStatusSnapshot CurrentStatus { get; }
     event Action<CameraVisionStatusSnapshot>? StatusChanged;
     Task<IReadOnlyList<CameraDeviceDescriptor>> EnumerateDevicesAsync(CancellationToken cancellationToken);
+    Task<CameraDeviceCapabilities> GetCapabilitiesAsync(
+        int deviceIndex,
+        CancellationToken cancellationToken);
     Task ApplyAsync(CameraVisionConfiguration configuration, CancellationToken cancellationToken);
     Task ReconnectAsync(CancellationToken cancellationToken);
     Task SetCalibrationPointAsync(

@@ -79,6 +79,35 @@ public sealed class OpenCvCameraCaptureBackend : ICameraCaptureBackend
         }
     }
 
+    public bool TryGetActiveMode(out CameraCaptureMode? mode)
+    {
+        mode = null;
+        var capture = _capture;
+        if (capture is null || !capture.IsOpened())
+        {
+            return false;
+        }
+
+        try
+        {
+            var width = (int)Math.Round(capture.Get(VideoCaptureProperties.FrameWidth));
+            var height = (int)Math.Round(capture.Get(VideoCaptureProperties.FrameHeight));
+            var framesPerSecond = capture.Get(VideoCaptureProperties.Fps);
+            if (width <= 0 || height <= 0 ||
+                !double.IsFinite(framesPerSecond) || framesPerSecond <= 0)
+            {
+                return false;
+            }
+
+            mode = new CameraCaptureMode(width, height, framesPerSecond);
+            return true;
+        }
+        catch (OpenCVException)
+        {
+            return false;
+        }
+    }
+
     public void Close()
     {
         var capture = Interlocked.Exchange(ref _capture, null);
