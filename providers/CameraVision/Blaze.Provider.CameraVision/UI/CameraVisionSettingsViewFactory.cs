@@ -21,7 +21,8 @@ public sealed class CameraVisionSettingsViewFactory : IProviderSettingsViewFacto
         var viewModel = new CameraVisionSettingsViewModel(
             control,
             new WpfCameraUiDispatcher(Dispatcher.CurrentDispatcher),
-            surfaceId);
+            surfaceId,
+            camera.ActiveSurface);
         return new CameraVisionSettingsWindow { DataContext = viewModel };
     }
 }

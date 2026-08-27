@@ -94,7 +94,7 @@ internal static class CameraPreviewModelBuilder
             tracking,
             outlines);
 
-        var warped = Warp(preview, calibration);
+        var warped = Warp(preview, calibration, calibrationWidth, calibrationHeight);
         var calibrationTransform = AspectFitTransform.Create(
             warped.Width, warped.Height, calibrationWidth, calibrationHeight);
         var effectiveRegion = new[]
@@ -144,11 +144,21 @@ internal static class CameraPreviewModelBuilder
 
     private static CameraPreviewSnapshot Warp(
         CameraPreviewSnapshot preview,
-        IReadOnlyList<Vector2Data> calibration)
+        IReadOnlyList<Vector2Data> calibration,
+        double viewportWidth,
+        double viewportHeight)
     {
-        var sourceBytes = preview.Bgr24.ToArray();
+        var previewScale = Math.Min(
+            1d,
+            Math.Min(viewportWidth / preview.Width, viewportHeight / preview.Height));
+        var outputWidth = Math.Max(1, (int)Math.Round(preview.Width * previewScale));
+        var outputHeight = Math.Max(1, (int)Math.Round(preview.Height * previewScale));
         using var source = new Mat(preview.Height, preview.Width, MatType.CV_8UC3);
-        Marshal.Copy(sourceBytes, 0, source.Data, sourceBytes.Length);
+        Marshal.Copy(
+            preview.Bgr24Buffer,
+            0,
+            source.Data,
+            preview.Bgr24Buffer.Length);
         using var destination = new Mat();
         Point2f[] sourcePoints = calibration
             .Select(point => new Point2f(point.X, point.Y))
@@ -156,22 +166,23 @@ internal static class CameraPreviewModelBuilder
         Point2f[] destinationPoints =
         [
             new(0, 0),
-            new(preview.Width - 1, 0),
-            new(preview.Width - 1, preview.Height - 1),
-            new(0, preview.Height - 1)
+            new(outputWidth - 1, 0),
+            new(outputWidth - 1, outputHeight - 1),
+            new(0, outputHeight - 1)
         ];
         using var transform = Cv2.GetPerspectiveTransform(sourcePoints, destinationPoints);
         Cv2.WarpPerspective(
             source,
             destination,
             transform,
-            new OpenCvSharp.Size(preview.Width, preview.Height));
-        var output = new byte[checked(preview.StrideBytes * preview.Height)];
+            new OpenCvSharp.Size(outputWidth, outputHeight));
+        var outputStride = checked(outputWidth * 3);
+        var output = new byte[checked(outputStride * outputHeight)];
         Marshal.Copy(destination.Data, output, 0, output.Length);
         return new CameraPreviewSnapshot(
-            preview.Width,
-            preview.Height,
-            preview.StrideBytes,
+            outputWidth,
+            outputHeight,
+            outputStride,
             output);
     }
 }

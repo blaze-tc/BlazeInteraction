@@ -64,8 +64,9 @@ public sealed class CameraVisionSettingsViewFactoryTests
 
         foreach (var name in new[]
                  {
-                     "PreviewImage", "OverlayCanvas", "DeviceCombo", "WidthBox", "HeightBox",
-                     "FpsBox", "MirrorCheck", "RotationCombo", "MaxHandsBox", "TrackingCombo",
+                     "RawCameraPreview", "CalibrationPreview", "UnityPointPreview",
+                     "DeviceCombo", "ResolutionCombo", "FrameRateCombo",
+                     "MirrorCheck", "RotationCombo", "MaxHandsBox", "TrackingCombo",
                      "DetectionConfidenceBox", "TrackingConfidenceBox", "SmoothingBox",
                      "CalibrationP1", "CalibrationP2", "CalibrationP3", "CalibrationP4",
                      "ResetCalibrationButton", "RefreshDevicesButton", "ApplyButton", "ReconnectButton",

@@ -33,6 +33,7 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
     private readonly ICameraVisionControl _control;
     private readonly ICameraUiDispatcher _dispatcher;
     private readonly string _surfaceId;
+    private readonly InteractionSurface _outputSurface;
     private readonly object _snapshotGate = new();
     private readonly AsyncCommand _applyCommand;
     private readonly AsyncCommand _reconnectCommand;
@@ -74,13 +75,23 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
     internal CameraVisionSettingsViewModel(
         ICameraVisionControl control,
         ICameraUiDispatcher dispatcher,
-        string surfaceId)
+        string surfaceId,
+        InteractionSurface? outputSurface = null)
     {
         _control = control ?? throw new ArgumentNullException(nameof(control));
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _surfaceId = string.IsNullOrWhiteSpace(surfaceId)
             ? throw new ArgumentException("A surface ID is required.", nameof(surfaceId))
             : surfaceId;
+        _outputSurface = outputSurface ?? new InteractionSurface
+        {
+            SurfaceId = _surfaceId,
+            Name = _surfaceId,
+            LogicalWidth = 1920,
+            LogicalHeight = 1080,
+            IsPrimary = true,
+            Order = 0
+        };
         var configuration = control.CurrentConfiguration
             ?? throw new InvalidOperationException("CameraVision settings require an initialized provider.");
         ApplyConfiguration(configuration);
@@ -221,6 +232,7 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
     public long UiRenderedFrames => _previewScheduler.RenderedCount;
     public long UiSupersededFrames => _previewScheduler.SupersededCount;
     internal CameraVisionStatusSnapshot CurrentStatus { get; private set; } = null!;
+    internal InteractionSurface OutputSurface => _outputSurface;
     internal bool IsDisposed => Volatile.Read(ref _disposed) != 0;
     public ICommand ApplyCommand => _applyCommand;
     public ICommand ReconnectCommand => _reconnectCommand;
