@@ -63,7 +63,7 @@ public sealed class CameraVisionProviderTests
         foreach (var point in frame.Points)
         {
             Assert.Equal(InteractionPhase.Hover, point.Phase);
-            Assert.Empty(point.Fp);
+            Assert.Equal(21, point.Fp.Count);
             Assert.StartsWith("hand-track-", point.SourceId, StringComparison.Ordinal);
             Assert.NotNull(point.Extensions);
             var hand = point.Extensions!["hand"];
@@ -74,6 +74,12 @@ public sealed class CameraVisionProviderTests
             Assert.Equal(21, landmarks.Length);
             Assert.Equal(Enumerable.Range(0, 21),
                 landmarks.Select(landmark => landmark.GetProperty("index").GetInt32()));
+            for (var index = 0; index < landmarks.Length; index++)
+            {
+                var landmarkPixel = landmarks[index].GetProperty("pixelPosition");
+                Assert.Equal(landmarkPixel.GetProperty("x").GetSingle(), point.Fp[index].X, 3);
+                Assert.Equal(landmarkPixel.GetProperty("y").GetSingle(), point.Fp[index].Y, 3);
+            }
             Assert.InRange(point.NormalizedPosition.X, 0f, 1f);
             Assert.Equal(point.NormalizedPosition.X * 1920f, point.PixelPosition.X, 3);
             Assert.Equal(point.NormalizedPosition.Y * 1080f, point.PixelPosition.Y, 3);
@@ -285,7 +291,10 @@ public sealed class CameraVisionProviderTests
     private static DetectedHand Hand(float x, float y)
     {
         var landmarks = Enumerable.Range(0, 21)
-            .Select(index => new HandLandmark(x, y, -index / 100f))
+            .Select(index => new HandLandmark(
+                x + (index / 1000f),
+                y + (index / 2000f),
+                -index / 100f))
             .ToArray();
         landmarks[8] = new HandLandmark(x, y, -0.08f);
         return new DetectedHand(0.9f, landmarks);

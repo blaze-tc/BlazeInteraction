@@ -175,6 +175,9 @@ public sealed class InteractionFrameCodecTests
     [Fact]
     public void CameraVisionFrame_UsesTheStandardInteractionFrameMessageWithoutCameraSpecificIpc()
     {
+        var footprint = Enumerable.Range(0, 21)
+            .Select(index => new Vector2Data(index * 10f, index * 5f))
+            .ToArray();
         var frame = new InteractionFrame
         {
             ProviderId = "blaze.camera.vision",
@@ -196,7 +199,7 @@ public sealed class InteractionFrameCodecTests
                     PixelPosition = new Vector2Data(480f, 270f),
                     Confidence = 1f,
                     TimestampUnixMs = 1234,
-                    Fp = Array.Empty<Vector2Data>(),
+                    Fp = footprint,
                     Extensions = new InteractionExtensions(new Dictionary<string, JsonElement>
                     {
                         ["hand"] = JsonSerializer.SerializeToElement(
@@ -226,7 +229,8 @@ public sealed class InteractionFrameCodecTests
         Assert.Equal("camera-vision-main", payload.ProviderInstanceId);
         var point = Assert.Single(payload.Points);
         Assert.Equal(InteractionPhase.Hover, point.Phase);
-        Assert.Empty(point.Fp);
+        Assert.Equal(21, point.Fp.Count);
+        Assert.Equal(footprint, point.Fp);
         Assert.True(point.TryGetHandExtension(out var hand));
         Assert.NotNull(hand);
         Assert.Equal(1, hand.SchemaVersion);

@@ -588,18 +588,24 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
         InteractionSurface surface,
         CameraVisionConfiguration configuration)
     {
+        var orderedLandmarks = hand.Landmarks
+            .OrderBy(landmark => landmark.Index)
+            .ToArray();
+        var mappedLandmarks = orderedLandmarks
+            .Select(landmark => new Vector2Data(
+                landmark.NormalizedPosition.X * surface.LogicalWidth,
+                landmark.NormalizedPosition.Y * surface.LogicalHeight))
+            .ToArray();
         var extension = JsonSerializer.SerializeToElement(
             new
             {
                 schemaVersion = 1,
                 trackingPoint = configuration.TrackingPoint.ToString(),
-                landmarks = hand.Landmarks.Select(landmark => new
+                landmarks = orderedLandmarks.Select((landmark, index) => new
                 {
                     index = landmark.Index,
                     normalizedPosition = landmark.NormalizedPosition,
-                    pixelPosition = new Vector2Data(
-                        landmark.NormalizedPosition.X * surface.LogicalWidth,
-                        landmark.NormalizedPosition.Y * surface.LogicalHeight),
+                    pixelPosition = mappedLandmarks[index],
                     z = landmark.Z
                 }).ToArray()
             },
@@ -618,7 +624,7 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
                 hand.NormalizedPosition.Y * surface.LogicalHeight),
             Confidence = hand.Confidence,
             TimestampUnixMs = timestampUnixMs,
-            Fp = Array.Empty<Vector2Data>(),
+            Fp = mappedLandmarks,
             Extensions = new InteractionExtensions(
                 new Dictionary<string, JsonElement> { ["hand"] = extension })
         };

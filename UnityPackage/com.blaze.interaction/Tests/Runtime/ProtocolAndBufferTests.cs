@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text;
 using Blaze.Interaction.Internal;
 using NUnit.Framework;
@@ -59,6 +60,55 @@ namespace Blaze.Interaction.Tests
 
             Assert.That(missingFootprintPoint.Fp, Is.Not.Null);
             Assert.That(missingFootprintPoint.Fp, Is.Empty);
+        }
+
+        [Test]
+        public void CameraFrame_RoundTripsCenterAndTwentyOneLandmarkFootprint()
+        {
+            var footprint = new List<Vector2Data>();
+            for (var index = 0; index < 21; index++)
+            {
+                footprint.Add(new Vector2Data { X = index * 10f, Y = index * 5f });
+            }
+
+            var frame = new InteractionFrame
+            {
+                ProviderId = "blaze.camera.vision",
+                ProviderInstanceId = "camera-main",
+                SurfaceId = "main",
+                Sequence = 7,
+                TimestampUnixMs = 1234,
+                Points =
+                {
+                    new InteractionPoint
+                    {
+                        Id = 1,
+                        SurfaceId = "main",
+                        ProviderId = "blaze.camera.vision",
+                        ProviderInstanceId = "camera-main",
+                        SourceId = "hand-track-1",
+                        Phase = InteractionPhase.Hover,
+                        NormalizedPosition = new Vector2Data { X = 0.25f, Y = 0.75f },
+                        PixelPosition = new Vector2Data { X = 480f, Y = 270f },
+                        Confidence = 1f,
+                        TimestampUnixMs = 1234,
+                        Fp = footprint
+                    }
+                }
+            };
+
+            var json = InteractionIpcProtocol.Serialize(InteractionIpcProtocol.Create(
+                InteractionMessageType.InteractionFrame,
+                frame.Sequence,
+                frame));
+            var point = InteractionIpcProtocol.Deserialize(json)
+                .DeserializePayload<InteractionFrame>().Points[0];
+
+            Assert.That(point.PixelPosition.X, Is.EqualTo(480f));
+            Assert.That(point.PixelPosition.Y, Is.EqualTo(270f));
+            Assert.That(point.Fp, Has.Count.EqualTo(21));
+            Assert.That(point.Fp[20].X, Is.EqualTo(200f));
+            Assert.That(point.Fp[20].Y, Is.EqualTo(100f));
         }
 
         [Test]
