@@ -81,6 +81,8 @@ internal sealed class CameraHandSnapshot
 
 internal sealed class CameraPreviewSnapshot
 {
+    private readonly byte[] _bgr24;
+
     public CameraPreviewSnapshot(int width, int height, int strideBytes, byte[] bgr24)
     {
         if (width <= 0 || height <= 0 || strideBytes != checked(width * 3))
@@ -97,13 +99,15 @@ internal sealed class CameraPreviewSnapshot
         Width = width;
         Height = height;
         StrideBytes = strideBytes;
-        Bgr24 = Array.AsReadOnly((byte[])bgr24.Clone());
+        _bgr24 = (byte[])bgr24.Clone();
+        Bgr24 = Array.AsReadOnly(_bgr24);
     }
 
     public int Width { get; }
     public int Height { get; }
     public int StrideBytes { get; }
     public ReadOnlyCollection<byte> Bgr24 { get; }
+    internal byte[] Bgr24Buffer => _bgr24;
 }
 
 internal sealed class CameraHandFrame

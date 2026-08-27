@@ -217,6 +217,25 @@ public sealed class CameraVisionSettingsViewModelTests
         Assert.Equal(0, control.SubscriberCount);
     }
 
+    [Fact]
+    public async Task VisualSnapshotsAreLimitedAndKeepLatestStatus()
+    {
+        var control = new FakeControl(Configuration());
+        using var viewModel = new CameraVisionSettingsViewModel(
+            control,
+            new ImmediateDispatcher(),
+            "main");
+
+        control.Publish(Status(detectedHands: 1));
+        control.Publish(Status(detectedHands: 2));
+        control.Publish(Status(detectedHands: 3));
+        await WaitUntilAsync(() => viewModel.VisualSnapshot?.DetectedHandCount == 3);
+
+        Assert.True(viewModel.UiRenderedFrames >= 2);
+        Assert.True(viewModel.UiSupersededFrames >= 1);
+        Assert.Equal(3, viewModel.VisualSnapshot!.DetectedHandCount);
+    }
+
     private static CameraVisionSettingsViewModel ViewModel() => new(
         new FakeControl(Configuration()),
         new ImmediateDispatcher(),

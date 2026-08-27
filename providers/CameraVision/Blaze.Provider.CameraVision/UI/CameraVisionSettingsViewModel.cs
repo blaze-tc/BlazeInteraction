@@ -39,6 +39,7 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
     private readonly AsyncCommand _refreshDevicesCommand;
     private readonly AsyncCommand _resetCalibrationCommand;
     private readonly CancellationTokenSource _capabilityLifetime = new();
+    private readonly LatestUiFrameScheduler<CameraVisionStatusSnapshot> _previewScheduler;
     private CameraVisionStatusSnapshot? _pendingSnapshot;
     private bool _snapshotDispatchScheduled;
     private IReadOnlyList<CameraDeviceDescriptor> _devices = Array.Empty<CameraDeviceDescriptor>();
@@ -68,6 +69,7 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
     private float _smoothingFactor;
     private float _maximumMatchDistance;
     private int _lostFrameTolerance;
+    private CameraVisionStatusSnapshot? _visualSnapshot;
 
     internal CameraVisionSettingsViewModel(
         ICameraVisionControl control,
@@ -96,7 +98,12 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
             token => _control.ResetCalibrationAsync(_surfaceId, token),
             () => !IsBusy,
             ExecuteOperationAsync);
+        _previewScheduler = new LatestUiFrameScheduler<CameraVisionStatusSnapshot>(
+            TimeSpan.FromSeconds(1d / 15d),
+            dispatcher,
+            ApplyVisualSnapshot);
         ApplyStatus(control.CurrentStatus);
+        _previewScheduler.Offer(control.CurrentStatus);
         _control.StatusChanged += OnStatusChanged;
         StartCapabilityLoad(DeviceIndex);
     }
@@ -206,6 +213,13 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
     public long DroppedFrames { get; private set; }
     public bool UnityConnected { get; private set; }
     public CameraPreviewSnapshot? Preview { get; private set; }
+    public CameraVisionStatusSnapshot? VisualSnapshot
+    {
+        get => _visualSnapshot;
+        private set => Set(ref _visualSnapshot, value);
+    }
+    public long UiRenderedFrames => _previewScheduler.RenderedCount;
+    public long UiSupersededFrames => _previewScheduler.SupersededCount;
     internal CameraVisionStatusSnapshot CurrentStatus { get; private set; } = null!;
     internal bool IsDisposed => Volatile.Read(ref _disposed) != 0;
     public ICommand ApplyCommand => _applyCommand;
@@ -231,6 +245,7 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 0)
         {
+            _previewScheduler.Dispose();
             _capabilityLifetime.Cancel();
             _control.StatusChanged -= OnStatusChanged;
             _capabilityLifetime.Dispose();
@@ -475,6 +490,7 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
 
     private void OnStatusChanged(CameraVisionStatusSnapshot snapshot)
     {
+        _previewScheduler.Offer(snapshot);
         lock (_snapshotGate)
         {
             _pendingSnapshot = snapshot;
@@ -482,6 +498,13 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
             _snapshotDispatchScheduled = true;
         }
         _ = DrainSnapshotAsync();
+    }
+
+    private void ApplyVisualSnapshot(CameraVisionStatusSnapshot snapshot)
+    {
+        VisualSnapshot = snapshot;
+        OnPropertyChanged(nameof(UiRenderedFrames));
+        OnPropertyChanged(nameof(UiSupersededFrames));
     }
 
     private async Task DrainSnapshotAsync()
