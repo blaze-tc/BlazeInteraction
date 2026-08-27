@@ -434,6 +434,7 @@ function Assert-InteractionBridgePayload {
     if ($cameraNativeLibraries.Count -ne 1) {
         throw 'The external CameraVision Provider must contain exactly one OpenCvSharpExtern.dll native runtime.'
     }
+    Assert-CameraVisionHandRuntime -Directory $cameraDirectory
 }
 
 function Assert-CameraVisionHandRuntime {

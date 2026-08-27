@@ -197,10 +197,27 @@ namespace Blaze.Interaction.Editor.Tests
                 "\",\"providerApiVersion\":1,\"entryAssembly\":\"Blaze.Provider.Radar.dll\",\"entryType\":\"Blaze.Provider.Radar.RadarPlugin\"}");
             var camera = Path.Combine(root, "Providers", "CameraVision");
             Directory.CreateDirectory(Path.Combine(camera, "runtimes", "win-x64", "native"));
+            Directory.CreateDirectory(Path.Combine(camera, "models"));
             File.WriteAllText(Path.Combine(camera, "Blaze.Provider.CameraVision.dll"), "provider");
             File.WriteAllText(
                 Path.Combine(camera, "runtimes", "win-x64", "native", "OpenCvSharpExtern.dll"),
                 "native");
+            var handLibrary = Path.Combine(
+                camera,
+                "runtimes",
+                "win-x64",
+                "native",
+                "Blaze.HandTracking.Native.dll");
+            var handModel = Path.Combine(camera, "models", "hand_landmarker.task");
+            File.WriteAllText(handLibrary, "hand-native");
+            File.WriteAllText(handModel, "hand-model");
+            File.WriteAllText(
+                Path.Combine(camera, "hand-runtime.json"),
+                "{\"schemaVersion\":1,\"abiVersion\":1," +
+                "\"nativeLibrary\":{\"path\":\"runtimes/win-x64/native/Blaze.HandTracking.Native.dll\",\"sha256\":\"" +
+                InteractionBuildProcessor.ComputeSha256ForTests(handLibrary) +
+                "\"},\"model\":{\"path\":\"models/hand_landmarker.task\",\"sha256\":\"" +
+                InteractionBuildProcessor.ComputeSha256ForTests(handModel) + "\"}}");
             File.WriteAllText(Path.Combine(camera, "provider.json"),
                 "{\"id\":\"blaze.camera.vision\",\"version\":\"" + providerVersion +
                 "\",\"providerApiVersion\":1,\"entryAssembly\":\"Blaze.Provider.CameraVision.dll\",\"entryType\":\"Blaze.Provider.CameraVision.CameraVisionPlugin\"}");

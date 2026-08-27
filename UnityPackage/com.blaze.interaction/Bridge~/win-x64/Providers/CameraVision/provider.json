@@ -8,6 +8,7 @@
   "category": "Camera",
   "capabilities": [
     "interaction-point",
-    "preview"
+    "preview",
+    "hand-landmarks"
   ]
 }

@@ -11,7 +11,8 @@ param(
     [ValidateRange(1, 60)]
     [int]$StartupTimeoutSeconds = 15,
     [ValidateRange(0, 30)]
-    [int]$SetupDelaySeconds = 0
+    [int]$SetupDelaySeconds = 0,
+    [switch]$HelloAckOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -106,6 +107,14 @@ try {
     if ($response.payload.activeProvider.id -cne $ExpectedProviderId -or
         $response.payload.activeProvider.instanceId -cne $ExpectedProviderInstanceId) {
         throw "HelloAck provider mismatch: expected '$ExpectedProviderId/$ExpectedProviderInstanceId', got '$($response.payload.activeProvider.id)/$($response.payload.activeProvider.instanceId)'."
+    }
+
+    if ($HelloAckOnly) {
+        Write-SmokeResult -Value 'OK'
+
+        # Remain the verified Unity/parent process until the outer smoke harness deliberately ends us.
+        Start-Sleep -Seconds ($StartupTimeoutSeconds + 30)
+        return
     }
 
     $frame = $null

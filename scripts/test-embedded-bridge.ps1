@@ -52,6 +52,7 @@ function Invoke-ProviderSmoke {
         [Parameter(Mandatory)] [string]$ExpectedWindowTitlePrefix,
         [string]$SelectedProviderId = '',
         [Parameter(Mandatory)] [string]$SuccessMessage,
+        [switch]$HelloAckOnly,
         [switch]$InjectFailure
     )
 
@@ -66,6 +67,9 @@ function Invoke-ProviderSmoke {
     $clientStartInfo = New-Object System.Diagnostics.ProcessStartInfo
     $clientStartInfo.FileName = 'powershell.exe'
     $clientStartInfo.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$clientScript`" -PipeName `"$pipeName`" -ResultFile `"$clientResult`" -ExpectedProviderId `"$ExpectedProviderId`" -ExpectedProviderInstanceId `"$ExpectedProviderInstanceId`" -StartupTimeoutSeconds $StartupTimeoutSeconds -SetupDelaySeconds $SetupDelaySeconds"
+    if ($HelloAckOnly) {
+        $clientStartInfo.Arguments += ' -HelloAckOnly'
+    }
     $clientStartInfo.WorkingDirectory = $repositoryRoot
     $clientStartInfo.UseShellExecute = $false
     $clientStartInfo.CreateNoWindow = $true
@@ -195,9 +199,10 @@ try {
     Invoke-ProviderSmoke `
         -ExpectedProviderId 'blaze.camera.vision' `
         -ExpectedProviderInstanceId 'camera-vision-main' `
-        -ExpectedWindowTitlePrefix 'Blaze Interaction Bridge' `
+        -ExpectedWindowTitlePrefix 'CameraVision' `
         -SelectedProviderId 'blaze.camera.vision' `
-        -SuccessMessage 'CameraVision fake standard InteractionFrame passed.'
+        -SuccessMessage 'CameraVision live provider HelloAck passed.' `
+        -HelloAckOnly
 }
 finally {
     Stop-OwnedProcess -Process $bridgeProcess
