@@ -14,6 +14,11 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.1" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Page Include="..\Blaze.Interaction.Bridge.Wpf\Resources\InteractionConsoleTheme.xaml"
+          Link="Resources\InteractionConsoleTheme.xaml" />
+  </ItemGroup>
+
   <PropertyGroup>
     <AssemblyName>RadarBridge</AssemblyName>
     <Version>1.2.10</Version>

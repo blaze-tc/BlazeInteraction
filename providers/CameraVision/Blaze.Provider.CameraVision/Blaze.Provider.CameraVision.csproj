@@ -20,6 +20,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Page Include="..\..\..\src\Blaze.Interaction.Bridge.Wpf\Resources\InteractionConsoleTheme.xaml"
+          Link="Resources\InteractionConsoleTheme.xaml" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="Blaze.Provider.CameraVision.Tests" />
     <None Include="provider.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="profiles\camera-vision-default.json"
