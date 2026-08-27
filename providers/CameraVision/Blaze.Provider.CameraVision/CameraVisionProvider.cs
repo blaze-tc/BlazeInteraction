@@ -513,6 +513,7 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
             }
         }
 
+        PublishControlStatus(handFrame);
         if (points.Count == 0)
         {
             return;
@@ -528,7 +529,6 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
             Points = Array.AsReadOnly(points.ToArray())
         };
         InvokeFrameReceived(frame);
-        PublishControlStatus(handFrame);
     }
 
     private CameraHandProcessingService CreateProcessingService(

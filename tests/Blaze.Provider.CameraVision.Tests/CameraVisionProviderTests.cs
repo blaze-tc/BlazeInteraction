@@ -149,6 +149,37 @@ public sealed class CameraVisionProviderTests
     }
 
     [Fact]
+    public async Task ZeroHandProcessing_RefreshesPreviewAndStatusWithoutPublishingFakePoint()
+    {
+        using var services = new TestServices(
+            () => new UnavailableCameraBackend(),
+            () => new FakeHandBackend(HandDetectionResult.Empty));
+        await services.SeedConfigurationAsync();
+        var provider = await InitializedProviderAsync(services);
+        var control = (ICameraVisionControl)provider;
+        var received = 0;
+        var statusChanged = new TaskCompletionSource<CameraVisionStatusSnapshot>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        provider.FrameReceived += (_, _) => Interlocked.Increment(ref received);
+        control.StatusChanged += snapshot =>
+        {
+            if (snapshot.Preview is not null && snapshot.DetectedHandCount == 0)
+            {
+                statusChanged.TrySetResult(snapshot);
+            }
+        };
+
+        await provider.StartAsync(CancellationToken.None);
+        provider.PublishHandFrame(ProcessingFrame([], [], 7));
+        var snapshot = await statusChanged.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.NotNull(snapshot.Preview);
+        Assert.Equal(0, snapshot.DetectedHandCount);
+        Assert.Equal(0, Volatile.Read(ref received));
+        await provider.DisposeAsync();
+    }
+
+    [Fact]
     public async Task BackendInitializationFailure_FaultsProviderWithActionableError()
     {
         using var services = new TestServices(

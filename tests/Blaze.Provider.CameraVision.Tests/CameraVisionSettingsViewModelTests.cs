@@ -77,6 +77,39 @@ public sealed class CameraVisionSettingsViewModelTests
     }
 
     [Fact]
+    public void ConfiguredDeviceIsImmediatelySelectableBeforeHardwareRefresh()
+    {
+        var configuration = Configuration(deviceIndex: 3);
+        var viewModel = new CameraVisionSettingsViewModel(
+            new FakeControl(configuration),
+            new ImmediateDispatcher(),
+            "main");
+
+        var device = Assert.Single(viewModel.Devices);
+        Assert.Equal(3, device.Index);
+        Assert.Equal("Camera 3", device.DisplayName);
+    }
+
+    [Fact]
+    public async Task RefreshDevicesPreservesConfiguredDeviceWhenItIsAlreadyInUse()
+    {
+        var configuration = Configuration(deviceIndex: 3);
+        var control = new FakeControl(configuration)
+        {
+            EnumeratedDevices = [new CameraDeviceDescriptor(1, "Camera 1")]
+        };
+        var viewModel = new CameraVisionSettingsViewModel(
+            control,
+            new ImmediateDispatcher(),
+            "main");
+
+        viewModel.RefreshDevicesCommand.Execute(null);
+        await WaitUntilAsync(() => control.EnumerateCalls == 1 && !viewModel.IsBusy);
+
+        Assert.Equal(new[] { 1, 3 }, viewModel.Devices.Select(device => device.Index));
+    }
+
+    [Fact]
     public async Task ApplyBusyAndErrorStateAreObservable()
     {
         var control = new FakeControl(Configuration());
@@ -118,9 +151,9 @@ public sealed class CameraVisionSettingsViewModelTests
         new ImmediateDispatcher(),
         "main");
 
-    private static CameraVisionConfiguration Configuration() => new(
+    private static CameraVisionConfiguration Configuration(int deviceIndex = 0) => new(
         1,
-        new CameraCaptureOptions(),
+        new CameraCaptureOptions { DeviceIndex = deviceIndex },
         8,
         0.5f,
         0.5f,
@@ -161,6 +194,9 @@ public sealed class CameraVisionSettingsViewModelTests
         public int SubscriberCount { get; private set; }
         public CameraVisionConfiguration? AppliedConfiguration { get; private set; }
         public Exception? ApplyFailure { get; set; }
+        public IReadOnlyList<CameraDeviceDescriptor> EnumeratedDevices { get; set; } =
+            [new CameraDeviceDescriptor(0, "Camera 0")];
+        public int EnumerateCalls { get; private set; }
         public TaskCompletionSource ApplyStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public event Action<CameraVisionStatusSnapshot>? StatusChanged
@@ -168,8 +204,11 @@ public sealed class CameraVisionSettingsViewModelTests
             add { _statusChanged += value; SubscriberCount++; }
             remove { _statusChanged -= value; SubscriberCount--; }
         }
-        public Task<IReadOnlyList<CameraDeviceDescriptor>> EnumerateDevicesAsync(CancellationToken cancellationToken) =>
-            Task.FromResult<IReadOnlyList<CameraDeviceDescriptor>>([new(0, "Camera 0")]);
+        public Task<IReadOnlyList<CameraDeviceDescriptor>> EnumerateDevicesAsync(CancellationToken cancellationToken)
+        {
+            EnumerateCalls++;
+            return Task.FromResult(EnumeratedDevices);
+        }
         public async Task ApplyAsync(CameraVisionConfiguration next, CancellationToken cancellationToken)
         {
             ApplyCalls++;

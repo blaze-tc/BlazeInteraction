@@ -27,7 +27,12 @@
                             <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
-                        <TextBlock VerticalAlignment="Center" Text="设备"/><ComboBox x:Name="DeviceCombo" Grid.Column="1" ItemsSource="{Binding Devices}" DisplayMemberPath="DisplayName" SelectedValuePath="Index" SelectedValue="{Binding DeviceIndex}"/>
+                        <TextBlock VerticalAlignment="Center" Text="设备"/>
+                        <Grid Grid.Column="1">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <ComboBox x:Name="DeviceCombo" ItemsSource="{Binding Devices}" DisplayMemberPath="DisplayName" SelectedValuePath="Index" SelectedValue="{Binding DeviceIndex}"/>
+                            <Button x:Name="RefreshDevicesButton" Grid.Column="1" Margin="6,0,0,0" Padding="10,3" Content="刷新" Command="{Binding RefreshDevicesCommand}"/>
+                        </Grid>
                         <TextBlock Grid.Row="1" VerticalAlignment="Center" Text="分辨率"/><StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal"><TextBox x:Name="WidthBox" Width="72" Text="{Binding Width}"/><TextBlock Margin="6,0" VerticalAlignment="Center" Text="×"/><TextBox x:Name="HeightBox" Width="72" Text="{Binding Height}"/></StackPanel>
                         <TextBlock Grid.Row="2" VerticalAlignment="Center" Text="FPS"/><TextBox x:Name="FpsBox" Grid.Row="2" Grid.Column="1" Text="{Binding FramesPerSecond}"/>
                         <TextBlock Grid.Row="3" VerticalAlignment="Center" Text="镜像"/><CheckBox x:Name="MirrorCheck" Grid.Row="3" Grid.Column="1" IsChecked="{Binding MirrorX}"/>

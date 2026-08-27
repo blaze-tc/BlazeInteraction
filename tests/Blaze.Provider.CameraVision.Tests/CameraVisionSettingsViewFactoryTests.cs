@@ -68,7 +68,7 @@ public sealed class CameraVisionSettingsViewFactoryTests
                      "FpsBox", "MirrorCheck", "RotationCombo", "MaxHandsBox", "TrackingCombo",
                      "DetectionConfidenceBox", "TrackingConfidenceBox", "SmoothingBox",
                      "CalibrationP1", "CalibrationP2", "CalibrationP3", "CalibrationP4",
-                     "ResetCalibrationButton", "ApplyButton", "ReconnectButton",
+                     "ResetCalibrationButton", "RefreshDevicesButton", "ApplyButton", "ReconnectButton",
                      "UnityStatusText", "CameraStatusText", "CameraFpsText", "InferenceFpsText",
                      "OutputFpsText", "LatencyText", "DetectedHandsText", "DroppedFramesText"
                  })
@@ -78,6 +78,7 @@ public sealed class CameraVisionSettingsViewFactoryTests
         Assert.DoesNotContain("handedness", xaml, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("left hand", xaml, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("right hand", xaml, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Command=\"{Binding RefreshDevicesCommand}\"", xaml, StringComparison.Ordinal);
     }
 
     private static ProviderInitializationContext Initialization(IServiceProvider services) => new(

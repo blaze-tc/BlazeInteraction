@@ -66,6 +66,7 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
         var configuration = control.CurrentConfiguration
             ?? throw new InvalidOperationException("CameraVision settings require an initialized provider.");
         ApplyConfiguration(configuration);
+        Devices = IncludeSelectedDevice(Array.Empty<CameraDeviceDescriptor>(), DeviceIndex);
         _applyCommand = new AsyncCommand(ApplyAsync, () => !IsBusy, ExecuteOperationAsync);
         _reconnectCommand = new AsyncCommand(
             token => _control.ReconnectAsync(token),
@@ -164,8 +165,32 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
         return _control.ApplyAsync(next, cancellationToken);
     }
 
-    private async Task RefreshDevicesAsync(CancellationToken cancellationToken) =>
-        Devices = await _control.EnumerateDevicesAsync(cancellationToken).ConfigureAwait(false);
+    private async Task RefreshDevicesAsync(CancellationToken cancellationToken)
+    {
+        var devices = await _control.EnumerateDevicesAsync(cancellationToken).ConfigureAwait(false);
+        await _dispatcher.InvokeAsync(() =>
+            Devices = IncludeSelectedDevice(devices, DeviceIndex)).ConfigureAwait(false);
+    }
+
+    private static IReadOnlyList<CameraDeviceDescriptor> IncludeSelectedDevice(
+        IReadOnlyList<CameraDeviceDescriptor> devices,
+        int selectedDeviceIndex)
+    {
+        var available = devices
+            .GroupBy(device => device.Index)
+            .Select(group => group.First())
+            .ToList();
+        if (available.All(device => device.Index != selectedDeviceIndex))
+        {
+            available.Add(new CameraDeviceDescriptor(
+                selectedDeviceIndex,
+                $"Camera {selectedDeviceIndex}"));
+        }
+
+        return Array.AsReadOnly(available
+            .OrderBy(device => device.Index)
+            .ToArray());
+    }
 
     private async Task ExecuteOperationAsync(
         Func<CancellationToken, Task> operation,
