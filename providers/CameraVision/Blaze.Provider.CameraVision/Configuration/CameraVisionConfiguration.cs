@@ -3,9 +3,14 @@ using System.Text.Json.Serialization;
 
 namespace Blaze.Provider.CameraVision;
 
+internal sealed record CameraDeviceProfile(
+    CameraCaptureMode Mode,
+    bool MirrorX,
+    CameraRotation Rotation);
+
 internal sealed class CameraVisionConfiguration
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     [JsonConstructor]
     public CameraVisionConfiguration(
@@ -18,13 +23,14 @@ internal sealed class CameraVisionConfiguration
         float smoothingFactor,
         float maximumMatchDistance,
         int lostFrameTolerance,
-        IReadOnlyDictionary<string, CameraCalibration>? calibrations)
+        IReadOnlyDictionary<string, CameraCalibration>? calibrations,
+        IReadOnlyDictionary<int, CameraDeviceProfile>? deviceProfiles = null)
     {
-        if (schemaVersion != CurrentSchemaVersion)
+        if (schemaVersion is < 1 or > CurrentSchemaVersion)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(schemaVersion),
-                $"CameraVision configuration schema must be {CurrentSchemaVersion}.");
+                $"CameraVision configuration schema must be between 1 and {CurrentSchemaVersion}.");
         }
 
         Capture = capture ?? throw new ArgumentNullException(nameof(capture));
@@ -82,7 +88,43 @@ internal sealed class CameraVisionConfiguration
             }
         }
 
-        SchemaVersion = schemaVersion;
+        var profileSnapshot = new Dictionary<int, CameraDeviceProfile>();
+        if (schemaVersion >= 2 && deviceProfiles is not null)
+        {
+            foreach (var (deviceIndex, profile) in deviceProfiles)
+            {
+                if (deviceIndex < 0)
+                {
+                    throw new ArgumentOutOfRangeException(
+                        nameof(deviceProfiles),
+                        "Camera profile device indexes cannot be negative.");
+                }
+
+                if (profile is null || profile.Mode is null || !Enum.IsDefined(profile.Rotation))
+                {
+                    throw new ArgumentException(
+                        "Camera device profiles are invalid.",
+                        nameof(deviceProfiles));
+                }
+
+                profileSnapshot.Add(deviceIndex, profile);
+            }
+        }
+
+        if (!profileSnapshot.ContainsKey(Capture.DeviceIndex))
+        {
+            profileSnapshot.Add(
+                Capture.DeviceIndex,
+                new CameraDeviceProfile(
+                    new CameraCaptureMode(
+                        Capture.Width,
+                        Capture.Height,
+                        Capture.FramesPerSecond),
+                    Capture.MirrorX,
+                    Capture.Rotation));
+        }
+
+        SchemaVersion = CurrentSchemaVersion;
         MaxHands = maxHands;
         MinDetectionConfidence = minDetectionConfidence;
         MinTrackingConfidence = minTrackingConfidence;
@@ -91,6 +133,7 @@ internal sealed class CameraVisionConfiguration
         MaximumMatchDistance = maximumMatchDistance;
         LostFrameTolerance = lostFrameTolerance;
         Calibrations = new ReadOnlyDictionary<string, CameraCalibration>(calibrationSnapshot);
+        DeviceProfiles = new ReadOnlyDictionary<int, CameraDeviceProfile>(profileSnapshot);
     }
 
     public int SchemaVersion { get; }
@@ -103,6 +146,7 @@ internal sealed class CameraVisionConfiguration
     public float MaximumMatchDistance { get; }
     public int LostFrameTolerance { get; }
     public IReadOnlyDictionary<string, CameraCalibration> Calibrations { get; }
+    public IReadOnlyDictionary<int, CameraDeviceProfile> DeviceProfiles { get; }
 
     public static CameraVisionConfiguration CreateDefault() => new(
         CurrentSchemaVersion,

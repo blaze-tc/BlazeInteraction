@@ -6,6 +6,77 @@ namespace Blaze.Provider.CameraVision.Tests;
 public sealed class CameraVisionSettingsViewModelTests
 {
     [Fact]
+    public async Task SelectingDevice_LoadsItsProfileAndFiltersFrameRatesByResolution()
+    {
+        var profiles = new Dictionary<int, CameraDeviceProfile>
+        {
+            [0] = new(new CameraCaptureMode(1280, 720, 30), false, CameraRotation.Rotate0),
+            [1] = new(new CameraCaptureMode(1920, 1080, 60), true, CameraRotation.Rotate90)
+        };
+        var control = new FakeControl(Configuration(deviceIndex: 0, profiles: profiles));
+        control.Capabilities[1] = new CameraDeviceCapabilities(
+            new CameraDeviceDescriptor(1, "Camera 1"),
+            [
+                new CameraCaptureMode(1280, 720, 30),
+                new CameraCaptureMode(1920, 1080, 30),
+                new CameraCaptureMode(1920, 1080, 60)
+            ],
+            false,
+            null);
+        var viewModel = new CameraVisionSettingsViewModel(
+            control,
+            new ImmediateDispatcher(),
+            "main");
+
+        viewModel.DeviceIndex = 1;
+        await viewModel.WaitForCapabilitiesAsync();
+
+        Assert.Equal(new CameraResolutionOption(1920, 1080), viewModel.SelectedResolution);
+        Assert.Equal(new double[] { 30, 60 }, viewModel.FrameRates);
+        Assert.Equal(60, viewModel.SelectedFrameRate);
+        Assert.True(viewModel.MirrorX);
+        Assert.Equal(CameraRotation.Rotate90, viewModel.Rotation);
+        Assert.Null(viewModel.CapabilityWarning);
+    }
+
+    [Fact]
+    public async Task SelectingResolution_FiltersFrameRatesAndApplyPreservesOtherDeviceProfiles()
+    {
+        var profiles = new Dictionary<int, CameraDeviceProfile>
+        {
+            [0] = new(new CameraCaptureMode(1280, 720, 30), false, CameraRotation.Rotate0),
+            [1] = new(new CameraCaptureMode(1920, 1080, 60), false, CameraRotation.Rotate0)
+        };
+        var control = new FakeControl(Configuration(deviceIndex: 0, profiles: profiles));
+        control.Capabilities[0] = new CameraDeviceCapabilities(
+            new CameraDeviceDescriptor(0, "Camera 0"),
+            [
+                new CameraCaptureMode(1280, 720, 30),
+                new CameraCaptureMode(1280, 720, 60),
+                new CameraCaptureMode(1920, 1080, 30)
+            ],
+            false,
+            null);
+        var viewModel = new CameraVisionSettingsViewModel(
+            control,
+            new ImmediateDispatcher(),
+            "main");
+
+        await viewModel.WaitForCapabilitiesAsync();
+        viewModel.SelectedResolution = new CameraResolutionOption(1280, 720);
+        viewModel.SelectedFrameRate = 60;
+        viewModel.ApplyCommand.Execute(null);
+        await WaitUntilAsync(() => control.ApplyCalls == 1 && !viewModel.IsBusy);
+
+        Assert.Equal(new double[] { 30, 60 }, viewModel.FrameRates);
+        Assert.Equal(60, control.AppliedConfiguration!.Capture.FramesPerSecond);
+        Assert.Equal(60, control.AppliedConfiguration.DeviceProfiles[0].Mode.FramesPerSecond);
+        Assert.Equal(
+            new CameraCaptureMode(1920, 1080, 60),
+            control.AppliedConfiguration.DeviceProfiles[1].Mode);
+    }
+
+    [Fact]
     public async Task CaptureAndHandSettingsRoundTripThroughApply()
     {
         var control = new FakeControl(Configuration());
@@ -151,9 +222,27 @@ public sealed class CameraVisionSettingsViewModelTests
         new ImmediateDispatcher(),
         "main");
 
-    private static CameraVisionConfiguration Configuration(int deviceIndex = 0) => new(
-        1,
-        new CameraCaptureOptions { DeviceIndex = deviceIndex },
+    private static CameraVisionConfiguration Configuration(
+        int deviceIndex = 0,
+        IReadOnlyDictionary<int, CameraDeviceProfile>? profiles = null)
+    {
+        var selectedProfile = profiles is not null && profiles.TryGetValue(deviceIndex, out var profile)
+            ? profile
+            : new CameraDeviceProfile(
+                new CameraCaptureMode(1280, 720, 30),
+                false,
+                CameraRotation.Rotate0);
+        return new CameraVisionConfiguration(
+        2,
+        new CameraCaptureOptions
+        {
+            DeviceIndex = deviceIndex,
+            Width = selectedProfile.Mode.Width,
+            Height = selectedProfile.Mode.Height,
+            FramesPerSecond = selectedProfile.Mode.FramesPerSecond,
+            MirrorX = selectedProfile.MirrorX,
+            Rotation = selectedProfile.Rotation
+        },
         8,
         0.5f,
         0.5f,
@@ -161,7 +250,9 @@ public sealed class CameraVisionSettingsViewModelTests
         0.35f,
         0.2f,
         2,
-        null);
+        null,
+        profiles);
+    }
 
     private static CameraVisionStatusSnapshot Status(int detectedHands) => new(
         Blaze.Interaction.Provider.Abstractions.ProviderRuntimeStatus.Running,
@@ -196,6 +287,7 @@ public sealed class CameraVisionSettingsViewModelTests
         public Exception? ApplyFailure { get; set; }
         public IReadOnlyList<CameraDeviceDescriptor> EnumeratedDevices { get; set; } =
             [new CameraDeviceDescriptor(0, "Camera 0")];
+        public Dictionary<int, CameraDeviceCapabilities> Capabilities { get; } = new();
         public int EnumerateCalls { get; private set; }
         public TaskCompletionSource ApplyStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -211,8 +303,14 @@ public sealed class CameraVisionSettingsViewModelTests
         }
         public Task<CameraDeviceCapabilities> GetCapabilitiesAsync(
             int deviceIndex,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(new CameraDeviceCapabilities(
+            CancellationToken cancellationToken)
+        {
+            if (Capabilities.TryGetValue(deviceIndex, out var capabilities))
+            {
+                return Task.FromResult(capabilities);
+            }
+
+            return Task.FromResult(new CameraDeviceCapabilities(
                 new CameraDeviceDescriptor(deviceIndex, $"Camera {deviceIndex}"),
                 [new CameraCaptureMode(
                     CurrentConfiguration!.Capture.Width,
@@ -220,6 +318,7 @@ public sealed class CameraVisionSettingsViewModelTests
                     CurrentConfiguration.Capture.FramesPerSecond)],
                 false,
                 null));
+        }
         public async Task ApplyAsync(CameraVisionConfiguration next, CancellationToken cancellationToken)
         {
             ApplyCalls++;

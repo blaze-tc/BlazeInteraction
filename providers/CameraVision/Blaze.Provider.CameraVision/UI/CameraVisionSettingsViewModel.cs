@@ -7,6 +7,11 @@ using Blaze.Interaction.Provider.Abstractions;
 
 namespace Blaze.Provider.CameraVision;
 
+internal sealed record CameraResolutionOption(int Width, int Height)
+{
+    public override string ToString() => $"{Width} × {Height}";
+}
+
 internal interface ICameraUiDispatcher
 {
     Task InvokeAsync(Action action);
@@ -33,6 +38,7 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
     private readonly AsyncCommand _reconnectCommand;
     private readonly AsyncCommand _refreshDevicesCommand;
     private readonly AsyncCommand _resetCalibrationCommand;
+    private readonly CancellationTokenSource _capabilityLifetime = new();
     private CameraVisionStatusSnapshot? _pendingSnapshot;
     private bool _snapshotDispatchScheduled;
     private IReadOnlyList<CameraDeviceDescriptor> _devices = Array.Empty<CameraDeviceDescriptor>();
@@ -43,6 +49,16 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
     private int _width;
     private int _height;
     private double _framesPerSecond;
+    private IReadOnlyList<CameraCaptureMode> _capabilityModes = Array.Empty<CameraCaptureMode>();
+    private IReadOnlyList<CameraResolutionOption> _resolutions = Array.Empty<CameraResolutionOption>();
+    private CameraResolutionOption? _selectedResolution;
+    private IReadOnlyList<double> _frameRates = Array.Empty<double>();
+    private double _selectedFrameRate;
+    private string? _capabilityWarning;
+    private int _actualWidth;
+    private int _actualHeight;
+    private Task _capabilityLoadTask = Task.CompletedTask;
+    private int _capabilityRequestVersion;
     private bool _mirrorX;
     private CameraRotation _rotation;
     private int _maxHands;
@@ -82,14 +98,93 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
             ExecuteOperationAsync);
         ApplyStatus(control.CurrentStatus);
         _control.StatusChanged += OnStatusChanged;
+        StartCapabilityLoad(DeviceIndex);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
     public IReadOnlyList<CameraDeviceDescriptor> Devices { get => _devices; private set => Set(ref _devices, value); }
-    public int DeviceIndex { get => _deviceIndex; set { if (value < 0) throw new ArgumentOutOfRangeException(nameof(value)); Set(ref _deviceIndex, value); } }
-    public int Width { get => _width; set { if (value <= 0) throw new ArgumentOutOfRangeException(nameof(value)); Set(ref _width, value); } }
-    public int Height { get => _height; set { if (value <= 0) throw new ArgumentOutOfRangeException(nameof(value)); Set(ref _height, value); } }
-    public double FramesPerSecond { get => _framesPerSecond; set { if (!double.IsFinite(value) || value <= 0) throw new ArgumentOutOfRangeException(nameof(value)); Set(ref _framesPerSecond, value); } }
+    public int DeviceIndex
+    {
+        get => _deviceIndex;
+        set
+        {
+            if (value < 0) throw new ArgumentOutOfRangeException(nameof(value));
+            if (!Set(ref _deviceIndex, value)) return;
+            LoadSavedProfile(value);
+            StartCapabilityLoad(value);
+        }
+    }
+    public int Width
+    {
+        get => _width;
+        set
+        {
+            if (value <= 0) throw new ArgumentOutOfRangeException(nameof(value));
+            if (!Set(ref _width, value)) return;
+            SetSelectedResolutionFromDimensions();
+        }
+    }
+    public int Height
+    {
+        get => _height;
+        set
+        {
+            if (value <= 0) throw new ArgumentOutOfRangeException(nameof(value));
+            if (!Set(ref _height, value)) return;
+            SetSelectedResolutionFromDimensions();
+        }
+    }
+    public double FramesPerSecond
+    {
+        get => _framesPerSecond;
+        set
+        {
+            ValidateFrameRate(value);
+            if (!Set(ref _framesPerSecond, value)) return;
+            _selectedFrameRate = value;
+            OnPropertyChanged(nameof(SelectedFrameRate));
+        }
+    }
+    public IReadOnlyList<CameraResolutionOption> Resolutions
+    {
+        get => _resolutions;
+        private set => Set(ref _resolutions, value);
+    }
+    public CameraResolutionOption? SelectedResolution
+    {
+        get => _selectedResolution;
+        set
+        {
+            if (value is not null && (value.Width <= 0 || value.Height <= 0))
+                throw new ArgumentOutOfRangeException(nameof(value));
+            if (!Set(ref _selectedResolution, value) || value is null) return;
+            SetDimensionFields(value.Width, value.Height);
+            RefreshFrameRates(_selectedFrameRate);
+        }
+    }
+    public IReadOnlyList<double> FrameRates
+    {
+        get => _frameRates;
+        private set => Set(ref _frameRates, value);
+    }
+    public double SelectedFrameRate
+    {
+        get => _selectedFrameRate;
+        set
+        {
+            ValidateFrameRate(value);
+            if (!Set(ref _selectedFrameRate, value)) return;
+            _framesPerSecond = value;
+            OnPropertyChanged(nameof(FramesPerSecond));
+        }
+    }
+    public int ActualWidth { get => _actualWidth; private set => Set(ref _actualWidth, value); }
+    public int ActualHeight { get => _actualHeight; private set => Set(ref _actualHeight, value); }
+    public string? CapabilityWarning
+    {
+        get => _capabilityWarning;
+        private set => Set(ref _capabilityWarning, value);
+    }
     public bool MirrorX { get => _mirrorX; set => Set(ref _mirrorX, value); }
     public CameraRotation Rotation { get => _rotation; set { if (!Enum.IsDefined(value)) throw new ArgumentOutOfRangeException(nameof(value)); Set(ref _rotation, value); } }
     public int MaxHands { get => _maxHands; set { if (value <= 0) throw new ArgumentOutOfRangeException(nameof(value)); Set(ref _maxHands, value); } }
@@ -130,11 +225,15 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
             previewSize,
             cancellationToken);
 
+    internal Task WaitForCapabilitiesAsync() => Volatile.Read(ref _capabilityLoadTask);
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 0)
         {
+            _capabilityLifetime.Cancel();
             _control.StatusChanged -= OnStatusChanged;
+            _capabilityLifetime.Dispose();
         }
     }
 
@@ -161,7 +260,8 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
             SmoothingFactor,
             MaximumMatchDistance,
             LostFrameTolerance,
-            current.Calibrations);
+            current.Calibrations,
+            UpdateDeviceProfiles(current));
         return _control.ApplyAsync(next, cancellationToken);
     }
 
@@ -170,6 +270,164 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
         var devices = await _control.EnumerateDevicesAsync(cancellationToken).ConfigureAwait(false);
         await _dispatcher.InvokeAsync(() =>
             Devices = IncludeSelectedDevice(devices, DeviceIndex)).ConfigureAwait(false);
+        StartCapabilityLoad(DeviceIndex);
+    }
+
+    private IReadOnlyDictionary<int, CameraDeviceProfile> UpdateDeviceProfiles(
+        CameraVisionConfiguration current)
+    {
+        var profiles = current.DeviceProfiles.ToDictionary(
+            static pair => pair.Key,
+            static pair => pair.Value);
+        profiles[DeviceIndex] = new CameraDeviceProfile(
+            new CameraCaptureMode(Width, Height, FramesPerSecond),
+            MirrorX,
+            Rotation);
+        return profiles;
+    }
+
+    private void StartCapabilityLoad(int deviceIndex)
+    {
+        if (IsDisposed) return;
+        var version = Interlocked.Increment(ref _capabilityRequestVersion);
+        var task = LoadCapabilitiesAsync(deviceIndex, version, _capabilityLifetime.Token);
+        Volatile.Write(ref _capabilityLoadTask, task);
+    }
+
+    private async Task LoadCapabilitiesAsync(
+        int deviceIndex,
+        int version,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var capabilities = await _control
+                .GetCapabilitiesAsync(deviceIndex, cancellationToken)
+                .ConfigureAwait(false);
+            await _dispatcher.InvokeAsync(() =>
+            {
+                if (version != Volatile.Read(ref _capabilityRequestVersion) ||
+                    deviceIndex != DeviceIndex || IsDisposed)
+                {
+                    return;
+                }
+
+                ApplyCapabilities(capabilities);
+            }).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            await _dispatcher.InvokeAsync(() =>
+            {
+                if (version == Volatile.Read(ref _capabilityRequestVersion) && !IsDisposed)
+                {
+                    CapabilityWarning = exception.Message;
+                }
+            }).ConfigureAwait(false);
+        }
+    }
+
+    private void ApplyCapabilities(CameraDeviceCapabilities capabilities)
+    {
+        _capabilityModes = capabilities.Modes
+            .Distinct()
+            .OrderBy(mode => (long)mode.Width * mode.Height)
+            .ThenBy(mode => mode.Width)
+            .ThenBy(mode => mode.Height)
+            .ThenBy(mode => mode.FramesPerSecond)
+            .ToArray();
+        Resolutions = _capabilityModes
+            .Select(mode => new CameraResolutionOption(mode.Width, mode.Height))
+            .Distinct()
+            .ToArray();
+
+        var savedMode = new CameraCaptureMode(Width, Height, FramesPerSecond);
+        var selectedMode = _capabilityModes.FirstOrDefault(mode => mode == savedMode);
+        var savedModeUnavailable = selectedMode is null && _capabilityModes.Count > 0;
+        selectedMode ??= _capabilityModes
+            .OrderBy(mode => Math.Abs(
+                (long)mode.Width * mode.Height - (long)savedMode.Width * savedMode.Height))
+            .ThenBy(mode => Math.Abs(mode.FramesPerSecond - savedMode.FramesPerSecond))
+            .FirstOrDefault();
+        selectedMode ??= savedMode;
+
+        CapabilityWarning = capabilities.Warning ?? (savedModeUnavailable
+            ? "已保存的模式不可用，已选择最接近的支持模式。"
+            : null);
+        ActualWidth = selectedMode.Width;
+        ActualHeight = selectedMode.Height;
+        _selectedResolution = new CameraResolutionOption(selectedMode.Width, selectedMode.Height);
+        OnPropertyChanged(nameof(SelectedResolution));
+        SetDimensionFields(selectedMode.Width, selectedMode.Height);
+        RefreshFrameRates(selectedMode.FramesPerSecond);
+    }
+
+    private void LoadSavedProfile(int deviceIndex)
+    {
+        var configuration = _control.CurrentConfiguration;
+        if (configuration is null ||
+            !configuration.DeviceProfiles.TryGetValue(deviceIndex, out var profile))
+        {
+            return;
+        }
+
+        SetDimensionFields(profile.Mode.Width, profile.Mode.Height);
+        _framesPerSecond = profile.Mode.FramesPerSecond;
+        _selectedFrameRate = profile.Mode.FramesPerSecond;
+        OnPropertyChanged(nameof(FramesPerSecond));
+        OnPropertyChanged(nameof(SelectedFrameRate));
+        MirrorX = profile.MirrorX;
+        Rotation = profile.Rotation;
+    }
+
+    private void SetSelectedResolutionFromDimensions()
+    {
+        if (_width <= 0 || _height <= 0) return;
+        _selectedResolution = new CameraResolutionOption(_width, _height);
+        OnPropertyChanged(nameof(SelectedResolution));
+        RefreshFrameRates(_selectedFrameRate);
+    }
+
+    private void SetDimensionFields(int width, int height)
+    {
+        if (_width != width)
+        {
+            _width = width;
+            OnPropertyChanged(nameof(Width));
+        }
+        if (_height != height)
+        {
+            _height = height;
+            OnPropertyChanged(nameof(Height));
+        }
+    }
+
+    private void RefreshFrameRates(double preferred)
+    {
+        if (_selectedResolution is null)
+        {
+            FrameRates = Array.Empty<double>();
+            return;
+        }
+
+        FrameRates = _capabilityModes
+            .Where(mode => mode.Width == _selectedResolution.Width &&
+                           mode.Height == _selectedResolution.Height)
+            .Select(mode => mode.FramesPerSecond)
+            .Distinct()
+            .OrderBy(rate => rate)
+            .ToArray();
+        var selected = FrameRates.Contains(preferred)
+            ? preferred
+            : FrameRates.OrderBy(rate => Math.Abs(rate - preferred)).FirstOrDefault();
+        if (selected <= 0) selected = preferred > 0 ? preferred : 30;
+        _selectedFrameRate = selected;
+        _framesPerSecond = selected;
+        OnPropertyChanged(nameof(SelectedFrameRate));
+        OnPropertyChanged(nameof(FramesPerSecond));
     }
 
     private static IReadOnlyList<CameraDeviceDescriptor> IncludeSelectedDevice(
@@ -251,6 +509,12 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
         _width = configuration.Capture.Width;
         _height = configuration.Capture.Height;
         _framesPerSecond = configuration.Capture.FramesPerSecond;
+        _selectedResolution = new CameraResolutionOption(_width, _height);
+        _resolutions = [_selectedResolution];
+        _selectedFrameRate = _framesPerSecond;
+        _frameRates = [_selectedFrameRate];
+        _actualWidth = _width;
+        _actualHeight = _height;
         _mirrorX = configuration.Capture.MirrorX;
         _rotation = configuration.Capture.Rotation;
         _maxHands = configuration.MaxHands;
@@ -307,6 +571,12 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
     private static void ValidateUnit(float value)
     {
         if (!float.IsFinite(value) || value is < 0 or > 1) throw new ArgumentOutOfRangeException(nameof(value));
+    }
+
+    private static void ValidateFrameRate(double value)
+    {
+        if (!double.IsFinite(value) || value <= 0)
+            throw new ArgumentOutOfRangeException(nameof(value));
     }
 
     private sealed class AsyncCommand : ICommand

@@ -920,7 +920,8 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
             configuration.SmoothingFactor,
             configuration.MaximumMatchDistance,
             configuration.LostFrameTolerance,
-            calibrations ?? configuration.Calibrations);
+            calibrations ?? configuration.Calibrations,
+            configuration.DeviceProfiles);
 
     private static bool ProcessingConfigurationEquals(
         CameraVisionConfiguration left,
