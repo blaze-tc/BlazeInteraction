@@ -24,6 +24,13 @@ public partial class RadarRegionEditorWindow : Window
         EditorRangeMeters = RadarViewportTransform.CalculateFittedRange(sensor.VisualizationRangeMeters, sensor.RegionVertices);
     }
 
+    protected override void OnClosed(EventArgs eventArgs)
+    {
+        RegionEditorView.DisposeDisplayResources();
+        DataContext = null;
+        base.OnClosed(eventArgs);
+    }
+
     public float EditorRangeMeters
     {
         get => (float)GetValue(EditorRangeMetersProperty);

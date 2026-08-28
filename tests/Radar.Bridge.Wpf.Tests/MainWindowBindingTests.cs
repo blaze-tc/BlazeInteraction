@@ -352,7 +352,7 @@ public sealed class MainWindowBindingTests
         Assert.All(bindings, binding => Assert.IsType<FlexibleNumericTextConverter>(binding!.Converter));
     }
 
-    private sealed class WpfTestHost
+    internal sealed class WpfTestHost
     {
         private Dispatcher _dispatcher = null!;
 
@@ -394,7 +394,7 @@ public sealed class MainWindowBindingTests
         public void Invoke(Action action) => _dispatcher.Invoke(action);
     }
 
-    private sealed class TestRuntime : IRadarBridgeRuntime
+    internal sealed class TestRuntime : IRadarBridgeRuntime
     {
         public event Action<RadarSensorRuntimeSnapshot>? SensorSnapshotUpdated;
         public event Action<RadarScreenRuntimeSnapshot>? ScreenSnapshotUpdated;

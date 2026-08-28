@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.IO.Pipes;
+using Yuexin.Radar.Bridge.Wpf.Controls;
 using Yuexin.Radar.Bridge.Wpf.Services;
 using Yuexin.Radar.Configuration;
 using Yuexin.Radar.Contracts;
@@ -10,6 +11,32 @@ namespace Yuexin.Radar.Bridge.Wpf.Tests;
 
 public sealed class RuntimeLoggingTests
 {
+    [Fact]
+    public void RecoverableRenderBoundary_LogsMetricsAndAllowsNextRender()
+    {
+        var failures = new List<(Exception Exception, RadarDisplayMetrics Metrics)>();
+        var shutdownCount = 0;
+        var rendered = 0;
+        var boundary = new RadarDisplayExceptionBoundary((exception, metrics) => failures.Add((exception, metrics)));
+        var metrics = new RadarDisplayMetrics("sensor-1", 100_000, 12_000, 6, 25, 975);
+
+        var failed = boundary.TryRender(() => throw new InvalidOperationException("display failed"), metrics);
+        var recovered = boundary.TryRender(() => rendered++, metrics with { RenderedCount = 26 });
+
+        Assert.False(failed);
+        Assert.True(recovered);
+        Assert.Equal(1, rendered);
+        Assert.Equal(0, shutdownCount);
+        var failure = Assert.Single(failures);
+        Assert.Equal("display failed", failure.Exception.Message);
+        Assert.Equal("sensor-1", failure.Metrics.SensorId);
+        Assert.Equal(100_000, failure.Metrics.InputPointCount);
+        Assert.Equal(12_000, failure.Metrics.DisplayedPointCount);
+        Assert.Equal(6, failure.Metrics.TrailLayerCount);
+        Assert.Equal(25, failure.Metrics.RenderedCount);
+        Assert.Equal(975, failure.Metrics.CoalescedCount);
+    }
+
     [Fact]
     public async Task RuntimeMetrics_AreSampledOncePerSecondInsteadOfWrittenForEveryFrame()
     {

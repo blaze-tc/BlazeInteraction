@@ -4,6 +4,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Yuexin.Radar.Bridge.Wpf.Controls;
 using Yuexin.Radar.Bridge.Wpf.Logging;
 using Yuexin.Radar.Bridge.Wpf.Services;
 using Yuexin.Radar.Bridge.Wpf.ViewModels;
@@ -16,6 +17,7 @@ public partial class App : Application
     private ServiceProvider? _services;
     private RadarAppConfiguration? _configuration;
     private string? _configurationPath;
+    private ILogger<App>? _logger;
 
     protected override async void OnStartup(StartupEventArgs eventArgs)
     {
@@ -23,6 +25,7 @@ public partial class App : Application
         base.OnStartup(eventArgs);
         DispatcherUnhandledException += (_, args) =>
         {
+            _logger?.LogCritical(args.Exception, "Unhandled RadarBridge dispatcher exception");
             MessageBox.Show(
                 $"RadarBridge 遇到未处理错误：\n\n{args.Exception.Message}",
                 "RadarBridge 错误",
@@ -55,6 +58,16 @@ public partial class App : Application
             services.AddSingleton<MainViewModel>();
             services.AddSingleton<MainWindow>();
             _services = services.BuildServiceProvider(validateScopes: true);
+            _logger = _services.GetRequiredService<ILogger<App>>();
+            RadarDisplayDiagnostics.Reporter = (exception, metrics) => _logger.LogError(
+                exception,
+                "Radar display render failed SensorId={SensorId} InputPoints={InputPoints} DisplayedPoints={DisplayedPoints} TrailLayers={TrailLayers} Rendered={Rendered} Coalesced={Coalesced}",
+                metrics.SensorId,
+                metrics.InputPointCount,
+                metrics.DisplayedPointCount,
+                metrics.TrailLayerCount,
+                metrics.RenderedCount,
+                metrics.CoalescedCount);
 
             var runtime = _services.GetRequiredService<IRadarBridgeRuntime>();
             await runtime.StartInfrastructureAsync();
@@ -93,6 +106,8 @@ public partial class App : Application
         }
         finally
         {
+            RadarDisplayDiagnostics.Reporter = null;
+            _logger = null;
             try
             {
                 _services?.DisposeAsync().AsTask().GetAwaiter().GetResult();

@@ -8,7 +8,7 @@ namespace Yuexin.Radar.Bridge.Wpf;
 public partial class MainWindow : Window
 {
     private readonly MainViewModel _viewModel;
-    private RadarRegionEditorWindow? _regionEditorWindow;
+    private readonly Dictionary<string, RadarRegionEditorWindow> _regionEditors = new(StringComparer.OrdinalIgnoreCase);
 
     public MainWindow(MainViewModel viewModel, IRadarBridgeRuntime runtime)
     {
@@ -24,21 +24,35 @@ public partial class MainWindow : Window
     private void OnOpenRegionEditor(object sender, RoutedEventArgs eventArgs)
     {
         var sensor = _viewModel.SelectedSensor;
-        if (sensor is null) return;
+        var screen = _viewModel.SelectedScreen;
+        if (sensor is null || screen is null) return;
+        var editorKey = string.Concat(screen.ScreenId, "\u001F", sensor.SensorId);
 
-        if (_regionEditorWindow is { IsVisible: true } editor && ReferenceEquals(editor.DataContext, sensor))
+        if (_regionEditors.TryGetValue(editorKey, out var editor) && editor.IsVisible)
         {
             editor.Activate();
             return;
         }
 
-        _regionEditorWindow?.Close();
         var newEditor = new RadarRegionEditorWindow(sensor) { Owner = this };
-        _regionEditorWindow = newEditor;
+        _regionEditors[editorKey] = newEditor;
         newEditor.Closed += (_, _) =>
         {
-            if (ReferenceEquals(_regionEditorWindow, newEditor)) _regionEditorWindow = null;
+            if (_regionEditors.TryGetValue(editorKey, out var current) && ReferenceEquals(current, newEditor))
+            {
+                _regionEditors.Remove(editorKey);
+            }
         };
         newEditor.Show();
+    }
+
+    protected override void OnClosed(EventArgs eventArgs)
+    {
+        foreach (var editor in _regionEditors.Values.ToArray())
+        {
+            editor.Close();
+        }
+        _regionEditors.Clear();
+        base.OnClosed(eventArgs);
     }
 }

@@ -37,12 +37,14 @@ public sealed class RadarPointCloudView : FrameworkElement
     private readonly DispatcherTimer _persistenceTimer;
     private readonly DispatcherTimer _interactionTimer;
     private readonly RadarRenderScheduler _renderScheduler;
+    private readonly RadarDisplayExceptionBoundary _renderExceptionBoundary = new(RadarDisplayDiagnostics.Report);
     private string? _snapshotSensorId;
     private int _draggedVertex = -1;
     private bool _isPanning;
     private Point _panStart;
     private Vector _panOrigin;
     private bool _displayInteractionActive;
+    private bool _displayResourcesDisposed;
 
     public static readonly DependencyProperty SnapshotProperty = DependencyProperty.Register(
         nameof(Snapshot), typeof(RadarSensorRuntimeSnapshot), typeof(RadarPointCloudView),
@@ -144,8 +146,32 @@ public sealed class RadarPointCloudView : FrameworkElement
     public bool IsPanEnabled { get => (bool)GetValue(IsPanEnabledProperty); set => SetValue(IsPanEnabledProperty, value); }
     public Vector PanOffset { get => (Vector)GetValue(PanOffsetProperty); set => SetValue(PanOffsetProperty, value); }
     public event EventHandler<RegionVertexMovedEventArgs>? RegionVertexMoved;
+    internal bool DisplayResourcesDisposed => _displayResourcesDisposed;
+
+    internal void DisposeDisplayResources()
+    {
+        if (_displayResourcesDisposed) return;
+        _displayResourcesDisposed = true;
+        _persistenceTimer.Stop();
+        _interactionTimer.Stop();
+        if (RegionVertices is INotifyCollectionChanged collection)
+        {
+            collection.CollectionChanged -= OnRegionCollectionChanged;
+        }
+        _renderScheduler.Dispose();
+        ClearPersistence();
+        _snapshotSensorId = null;
+    }
 
     protected override void OnRender(DrawingContext context)
+    {
+        if (!_renderExceptionBoundary.TryRender(() => RenderDisplay(context), CreateDisplayMetrics()))
+        {
+            ClearPersistence();
+        }
+    }
+
+    private void RenderDisplay(DrawingContext context)
     {
         context.DrawRectangle(BackgroundBrush, null, new Rect(RenderSize));
         if (ActualWidth <= 0d || ActualHeight <= 0d) return;
@@ -157,6 +183,21 @@ public sealed class RadarPointCloudView : FrameworkElement
         if (ShowRawPoints) DrawPointLayers(context, _rawPointFrames.GetLayers(DateTimeOffset.UtcNow, budget), RawPointBrush, 1.2d);
         if (ShowValidPoints) DrawPointLayers(context, _validPointFrames.GetLayers(DateTimeOffset.UtcNow, budget), ValidPointBrush, 1.8d);
         if (ShowClusters) DrawClusters(context, snapshot);
+    }
+
+    private RadarDisplayMetrics CreateDisplayMetrics()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var budget = CurrentDisplayBudget();
+        var rawLayers = ShowRawPoints ? _rawPointFrames.GetLayers(now, budget) : [];
+        var validLayers = ShowValidPoints ? _validPointFrames.GetLayers(now, budget) : [];
+        return new RadarDisplayMetrics(
+            Snapshot?.SensorId ?? _snapshotSensorId ?? string.Empty,
+            Snapshot?.RawPoints.Count ?? 0,
+            rawLayers.Sum(layer => layer.Points.Count) + validLayers.Sum(layer => layer.Points.Count),
+            Math.Max(rawLayers.Count, validLayers.Count),
+            _renderScheduler.RenderedCount,
+            _renderScheduler.CoalescedRequestCount);
     }
 
     protected override void OnMouseLeftButtonDown(MouseButtonEventArgs args)
@@ -378,6 +419,7 @@ public sealed class RadarPointCloudView : FrameworkElement
 
     private void BeginDisplayInteraction()
     {
+        if (_displayResourcesDisposed) return;
         _displayInteractionActive = true;
         _renderScheduler.BeginInteraction();
         _interactionTimer.Stop();
@@ -388,6 +430,7 @@ public sealed class RadarPointCloudView : FrameworkElement
     private void EndDisplayInteraction()
     {
         _interactionTimer.Stop();
+        if (_displayResourcesDisposed) return;
         if (!_displayInteractionActive) return;
         _displayInteractionActive = false;
         _renderScheduler.EndInteraction();
