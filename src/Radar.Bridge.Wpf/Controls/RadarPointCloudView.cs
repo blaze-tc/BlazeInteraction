@@ -99,7 +99,8 @@ public sealed class RadarPointCloudView : FrameworkElement
         _persistenceTimer = new DispatcherTimer(DispatcherPriority.Normal) { Interval = TimeSpan.FromMilliseconds(50) };
         _persistenceTimer.Tick += (_, _) =>
         {
-            if (_rawPointFrames.GetLayers(DateTimeOffset.UtcNow).Count > 0 || _validPointFrames.GetLayers(DateTimeOffset.UtcNow).Count > 0)
+            var budget = CurrentDisplayBudget();
+            if (_rawPointFrames.GetLayers(DateTimeOffset.UtcNow, budget).Count > 0 || _validPointFrames.GetLayers(DateTimeOffset.UtcNow, budget).Count > 0)
                 InvalidateVisual();
         };
         Loaded += (_, _) => _persistenceTimer.Start();
@@ -136,8 +137,9 @@ public sealed class RadarPointCloudView : FrameworkElement
         if (ShowFilterOverlay) { DrawEdgeDeadZones(context); DrawRegion(context); DrawMasks(context); }
         var snapshot = Snapshot;
         if (snapshot is null) { DrawText(context, "等待选中雷达数据", new Point(18d, 18d), Frozen(Color.FromRgb(147, 168, 188)), 12d); return; }
-        if (ShowRawPoints) DrawPointLayers(context, _rawPointFrames.GetLayers(DateTimeOffset.UtcNow), RawPointBrush, 1.2d);
-        if (ShowValidPoints) DrawPointLayers(context, _validPointFrames.GetLayers(DateTimeOffset.UtcNow), ValidPointBrush, 1.8d);
+        var budget = CurrentDisplayBudget();
+        if (ShowRawPoints) DrawPointLayers(context, _rawPointFrames.GetLayers(DateTimeOffset.UtcNow, budget), RawPointBrush, 1.2d);
+        if (ShowValidPoints) DrawPointLayers(context, _validPointFrames.GetLayers(DateTimeOffset.UtcNow, budget), ValidPointBrush, 1.8d);
         if (ShowClusters) DrawClusters(context, snapshot);
     }
 
@@ -228,7 +230,7 @@ public sealed class RadarPointCloudView : FrameworkElement
             context.DrawRectangle(null, ClusterPen, new Rect(center.X - size / 2d, center.Y - size / 2d, size, size));
         }
     }
-    private void DrawPointLayers(DrawingContext context, IReadOnlyList<RadarPointPersistenceLayer> layers, Brush brush, double radius)
+    private void DrawPointLayers(DrawingContext context, IReadOnlyList<RadarDisplayLayer> layers, Brush brush, double radius)
     {
         foreach (var layer in layers)
         {
@@ -266,6 +268,10 @@ public sealed class RadarPointCloudView : FrameworkElement
         }
     }
     private Point ToScreen(Point2 point) => RadarViewportTransform.WorldToScreen(point, ActualWidth, ActualHeight, Math.Max(.1f, MaximumRangeMeters), PanOffset);
+    private RadarDisplayBudget CurrentDisplayBudget() => RadarDisplayBudget.ForViewport(
+        ActualWidth,
+        ActualHeight,
+        _draggedVertex >= 0 || _isPanning);
     private void EndPointerInteraction()
     {
         _draggedVertex = -1;
