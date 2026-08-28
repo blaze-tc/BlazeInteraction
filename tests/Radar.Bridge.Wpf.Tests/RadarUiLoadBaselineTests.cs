@@ -7,6 +7,72 @@ namespace Yuexin.Radar.Bridge.Wpf.Tests;
 public sealed class RadarUiLoadBaselineTests
 {
     [Fact]
+    public void LatestDispatcher_TenThousandUpdatesForOneSensor_QueuesOneCallbackAndAppliesLatest()
+    {
+        var context = new ManualRadarUiDispatcher();
+        var applied = new List<long>();
+        using var subject = new LatestUiSnapshotDispatcher<string, long>(
+            context,
+            (_, sequence) => applied.Add(sequence));
+
+        for (var sequence = 1L; sequence <= 10_000; sequence++)
+        {
+            subject.Offer("radar-1", sequence);
+        }
+
+        Assert.Equal(1, context.PendingCount);
+        Assert.Equal(1, subject.PendingKeyCount);
+
+        context.Drain();
+
+        Assert.Equal([10_000L], applied);
+        Assert.Equal(9_999, subject.SupersededCount);
+        Assert.Equal(0, subject.PendingKeyCount);
+    }
+
+    [Fact]
+    public void LatestDispatcher_TwoSensors_AppliesNewestValueForBoth()
+    {
+        var context = new ManualRadarUiDispatcher();
+        var applied = new Dictionary<string, long>();
+        using var subject = new LatestUiSnapshotDispatcher<string, long>(
+            context,
+            (sensorId, sequence) => applied[sensorId] = sequence);
+
+        subject.Offer("radar-1", 1);
+        subject.Offer("radar-2", 2);
+        subject.Offer("radar-1", 3);
+        subject.Offer("radar-2", 4);
+
+        Assert.Equal(1, context.PendingCount);
+        Assert.Equal(2, subject.PendingKeyCount);
+
+        context.Drain();
+
+        Assert.Equal(3, applied["radar-1"]);
+        Assert.Equal(4, applied["radar-2"]);
+        Assert.Equal(2, subject.SupersededCount);
+    }
+
+    [Fact]
+    public void LatestDispatcher_DisposeBeforeDrain_AppliesNothing()
+    {
+        var context = new ManualRadarUiDispatcher();
+        var applied = new List<long>();
+        var subject = new LatestUiSnapshotDispatcher<string, long>(
+            context,
+            (_, sequence) => applied.Add(sequence));
+
+        subject.Offer("radar-1", 1);
+        subject.Dispose();
+        subject.Offer("radar-1", 2);
+        context.Drain();
+
+        Assert.Empty(applied);
+        Assert.Equal(0, subject.PendingKeyCount);
+    }
+
+    [Fact]
     public void CreateSnapshot_OneHundredThousandPoints_IsFiniteAndDeterministic()
     {
         var snapshot = RadarUiLoadFixture.CreateSnapshot(100_000, sequence: 42);

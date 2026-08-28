@@ -626,6 +626,36 @@ public sealed class MainViewModelTests
         }
     }
 
+    [Fact]
+    public void SensorSnapshots_AreCoalescedBeforeApplyingToViewModel()
+    {
+        var previous = SynchronizationContext.Current;
+        var context = new ManualRadarUiDispatcher();
+        SynchronizationContext.SetSynchronizationContext(context);
+        try
+        {
+            var runtime = new TestRuntime();
+            using var viewModel = new MainViewModel(ThreeScreenFourSensorConfiguration(), runtime);
+            viewModel.SelectedScreen = viewModel.Screens.Single(screen => screen.ScreenId == "front");
+            var first = Snapshot("front", "f1", 1, new Point2(1f, 2f));
+            var latest = Snapshot("front", "f1", 2, new Point2(3f, 4f));
+
+            runtime.PublishSensorSnapshot(first);
+            runtime.PublishSensorSnapshot(latest);
+
+            Assert.Equal(1, context.PendingCount);
+            Assert.Null(viewModel.SelectedSensor!.Snapshot);
+
+            context.Drain();
+
+            Assert.Same(latest, viewModel.SelectedSensor.Snapshot);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
+    }
+
     private static async Task ExecuteAsync(ICommand command)
     {
         command.Execute(null);

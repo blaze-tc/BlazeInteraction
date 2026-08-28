@@ -17,6 +17,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private readonly IRadarBridgeRuntime _runtime;
     private readonly IFileDialogService _fileDialogs;
     private readonly SynchronizationContext _uiContext;
+    private readonly LatestUiSnapshotDispatcher<string, RadarSensorRuntimeSnapshot> _sensorSnapshotDispatcher;
     private readonly Queue<string> _rawLogs = [];
     private readonly Dictionary<string, DateTimeOffset> _lastMoveLogAt = new(StringComparer.OrdinalIgnoreCase);
     private ScreenItemViewModel? _selectedScreen;
@@ -35,6 +36,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
         _fileDialogs = fileDialogs ?? new WpfFileDialogService();
         _uiContext = SynchronizationContext.Current ?? new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher);
+        _sensorSnapshotDispatcher = new LatestUiSnapshotDispatcher<string, RadarSensorRuntimeSnapshot>(
+            _uiContext,
+            ApplySensorSnapshot);
         _unityStatus = UnityClientStatus.Disconnected;
         Screens = new ObservableCollection<ScreenItemViewModel>(_configuration.Screens.Select(screen => new ScreenItemViewModel(screen)));
         SubscribeToScreens();
@@ -299,10 +303,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private Task WithSelectedReplaySensorAsync(Func<ScreenItemViewModel, SensorItemViewModel, Task> action) => HasSelectedReplaySensor() ? action(SelectedScreen!, SelectedSensor!) : Task.CompletedTask;
     private void WithSelectedReplaySensor(Action<ScreenItemViewModel, SensorItemViewModel> action) { if (HasSelectedReplaySensor()) action(SelectedScreen!, SelectedSensor!); }
 
-    private void OnSensorSnapshotUpdated(RadarSensorRuntimeSnapshot snapshot) => Dispatch(() =>
+    private void OnSensorSnapshotUpdated(RadarSensorRuntimeSnapshot snapshot) =>
+        _sensorSnapshotDispatcher.Offer(string.Concat(snapshot.ScreenId, "\u001F", snapshot.SensorId), snapshot);
+    private void ApplySensorSnapshot(string _, RadarSensorRuntimeSnapshot snapshot)
     {
         FindScreen(snapshot.ScreenId)?.Sensors.FirstOrDefault(sensor => string.Equals(sensor.SensorId, snapshot.SensorId, StringComparison.OrdinalIgnoreCase))?.ApplySnapshot(snapshot);
-    });
+    }
     private void OnScreenSnapshotUpdated(RadarScreenRuntimeSnapshot snapshot) => Dispatch(() => FindScreen(snapshot.Screen.ScreenId)?.ApplySnapshot(snapshot));
     private void SubscribeSensorStates()
     {
@@ -479,6 +485,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        _sensorSnapshotDispatcher.Dispose();
         _runtime.SensorSnapshotUpdated -= OnSensorSnapshotUpdated;
         _runtime.ScreenSnapshotUpdated -= OnScreenSnapshotUpdated;
         _runtime.ConfigurationChanged -= OnConfigurationChanged;
