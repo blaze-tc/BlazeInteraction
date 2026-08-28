@@ -69,6 +69,24 @@ public sealed class BridgeWindowCoordinatorTests
     }
 
     [Fact]
+    public void CameraReturnAndCancel_RestoresSameCameraSettingsWindow()
+    {
+        var fixture = Fixture.Create(
+            launchMinimized: false,
+            activeProviderId: "blaze.camera.vision");
+        fixture.Coordinator.Start(new BridgeSettings(1, "blaze.camera.vision"));
+        var original = fixture.CameraWindow;
+
+        Assert.Single(fixture.Windows.Headers).ReturnToSelectionCommand.Execute(null);
+        Assert.Single(fixture.Windows.SelectorWindows).ViewModel.CancelCommand.Execute(null);
+
+        Assert.Same(original, fixture.CameraWindow);
+        Assert.True(original.IsVisible);
+        Assert.False(original.IsClosed);
+        Assert.Equal(1, fixture.Host.CreateSettingsCalls);
+    }
+
+    [Fact]
     public async Task ConfirmedSwitch_ClosesOldWindowWithoutRequestingShutdown()
     {
         var fixture = Fixture.Create(

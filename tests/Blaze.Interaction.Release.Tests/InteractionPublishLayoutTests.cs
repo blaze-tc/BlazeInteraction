@@ -1,5 +1,10 @@
+using System.Buffers.Binary;
+using System.Collections;
 using System.Diagnostics;
 using System.IO.Pipes;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
+using System.Resources;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Blaze.Interaction.Contracts;
@@ -80,7 +85,11 @@ public sealed class InteractionPublishLayoutTests
             await File.ReadAllBytesAsync(Path.Combine(radarDirectory, "profiles", "radar-default.json")));
 
         var cameraDirectory = Path.Combine(output.Path, "Providers", "CameraVision");
-        Assert.True(File.Exists(Path.Combine(cameraDirectory, "Blaze.Provider.CameraVision.dll")));
+        var cameraAssemblyPath = Path.Combine(cameraDirectory, "Blaze.Provider.CameraVision.dll");
+        Assert.True(File.Exists(cameraAssemblyPath));
+        Assert.True(
+            ContainsWpfResource(cameraAssemblyPath, "resources/interactionconsoletheme.baml"),
+            "CameraVision publish must embed the shared Interaction console theme.");
         Assert.True(File.Exists(Path.Combine(cameraDirectory, "provider.json")));
         Assert.True(File.Exists(Path.Combine(
             cameraDirectory,
@@ -318,6 +327,39 @@ public sealed class InteractionPublishLayoutTests
 
     private static string Sha256(string path) =>
         Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant();
+
+    private static bool ContainsWpfResource(string assemblyPath, string resourcePath)
+    {
+        using var stream = File.OpenRead(assemblyPath);
+        using var peReader = new PEReader(stream);
+        var metadata = peReader.GetMetadataReader();
+        var resourceDirectory = peReader.PEHeaders.CorHeader?.ResourcesDirectory
+            ?? throw new InvalidDataException("Assembly has no managed resource directory.");
+        var resourceBlock = peReader.GetSectionData(resourceDirectory.RelativeVirtualAddress);
+        foreach (var handle in metadata.ManifestResources)
+        {
+            var manifestResource = metadata.GetManifestResource(handle);
+            if (!manifestResource.Implementation.IsNil ||
+                !metadata.GetString(manifestResource.Name)
+                    .EndsWith(".g.resources", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var offset = checked((int)manifestResource.Offset);
+            var lengthPrefix = resourceBlock.GetContent(offset, sizeof(int));
+            var length = BinaryPrimitives.ReadInt32LittleEndian(lengthPrefix.AsSpan());
+            var payload = resourceBlock.GetContent(offset + sizeof(int), length).ToArray();
+            using var payloadStream = new MemoryStream(payload, writable: false);
+            using var resources = new ResourceReader(payloadStream);
+            return resources.Cast<DictionaryEntry>().Any(entry => string.Equals(
+                entry.Key?.ToString(),
+                resourcePath,
+                StringComparison.OrdinalIgnoreCase));
+        }
+
+        return false;
+    }
 
     private static string FindRepositoryRoot()
     {
