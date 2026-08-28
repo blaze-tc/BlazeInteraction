@@ -105,7 +105,6 @@ public sealed class RadarPipeServer : IAsyncDisposable
                         () =>
                         {
                             authenticated = true;
-                            _activePipe = pipe;
                         }).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (linked.IsCancellationRequested)
@@ -261,10 +260,23 @@ public sealed class RadarPipeServer : IAsyncDisposable
             return;
         }
 
-        await WriteLockedAsync(
-            pipe,
-            IpcEnvelope.Create(IpcMessageType.HelloAck, NextSequence(), authentication.Ack!),
-            cancellationToken).ConfigureAwait(false);
+        _activePipe = pipe;
+        try
+        {
+            await WriteLockedAsync(
+                pipe,
+                IpcEnvelope.Create(IpcMessageType.HelloAck, NextSequence(), authentication.Ack!),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            if (ReferenceEquals(_activePipe, pipe))
+            {
+                _activePipe = null;
+            }
+            pipe.Dispose();
+            throw;
+        }
         authenticated();
         InvokeSafely(ClientConnected, hello);
 

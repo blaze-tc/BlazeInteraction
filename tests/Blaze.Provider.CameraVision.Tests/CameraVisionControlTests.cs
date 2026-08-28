@@ -22,6 +22,8 @@ public sealed class CameraVisionControlTests
         Assert.Equal(1, services.CameraBackendCreates);
 
         var capabilities = await control.GetCapabilitiesAsync(0, CancellationToken.None);
+        await WaitUntilAsync(() =>
+            control.CurrentStatus.CameraStatus == CameraCaptureStatus.Connected);
         var createsAfterProbe = services.CameraBackendCreates;
         var cachedCapabilities = await control.GetCapabilitiesAsync(0, CancellationToken.None);
 

@@ -486,6 +486,63 @@ public sealed class InteractionPipeServerTests
     }
 
     [Fact]
+    public async Task Server_AcceptsControlWhenHelloAckBytesAreAlreadyObservable()
+    {
+        var pipeName = NewPipeName();
+        var releaseAckWriter = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var server = new InteractionPipeServer(new InteractionPipeServerOptions
+        {
+            PipeName = pipeName,
+            CreateHelloAckAsync = (_, _) => ValueTask.FromResult(Ack()),
+            WriteHelloAckAsync = async (stream, acknowledgement, cancellationToken) =>
+            {
+                await InteractionIpcStream.WriteAsync(
+                    stream,
+                    acknowledgement,
+                    cancellationToken);
+                await releaseAckWriter.Task.WaitAsync(cancellationToken);
+            }
+        });
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var stopServer = new CancellationTokenSource();
+        var run = server.RunAsync(stopServer.Token);
+        try
+        {
+            await using var client = new NamedPipeClientStream(
+                ".",
+                pipeName,
+                PipeDirection.InOut,
+                PipeOptions.Asynchronous);
+            await client.ConnectAsync(timeout.Token);
+            await InteractionIpcStream.WriteAsync(
+                client,
+                InteractionEnvelope.Create(InteractionMessageType.Hello, 1, Hello()),
+                timeout.Token);
+            Assert.Equal(
+                InteractionMessageType.HelloAck,
+                (await InteractionIpcStream.ReadAsync(client, timeout.Token)).MessageType);
+            var status = InteractionEnvelope.Create(
+                InteractionMessageType.Status,
+                10,
+                new StatusPayload("running", "Running", "Ready.", null, 20));
+
+            Assert.True(await server.SendAsync(status, timeout.Token));
+            releaseAckWriter.TrySetResult();
+
+            Assert.Equal(
+                InteractionMessageType.Status,
+                (await InteractionIpcStream.ReadAsync(client, timeout.Token)).MessageType);
+        }
+        finally
+        {
+            releaseAckWriter.TrySetResult();
+            stopServer.Cancel();
+            await run.WaitAsync(timeout.Token);
+        }
+    }
+
+    [Fact]
     public async Task Server_ReliableCancelFramePrecedesProviderChangedOnWire()
     {
         await using var fixture = await ServerFixture.StartAsync();

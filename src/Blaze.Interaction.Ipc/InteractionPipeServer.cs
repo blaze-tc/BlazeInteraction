@@ -428,6 +428,11 @@ public sealed class InteractionPipeServer : IAsyncDisposable
                 return;
             }
 
+            if (!session.TryAcknowledge())
+            {
+                return;
+            }
+
             try
             {
                 await _options.WriteHelloAckAsync(
@@ -441,7 +446,7 @@ public sealed class InteractionPipeServer : IAsyncDisposable
                 return;
             }
 
-            if (!session.TryAcknowledge())
+            if (!session.IsActive)
             {
                 return;
             }

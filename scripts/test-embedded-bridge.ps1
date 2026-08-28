@@ -114,7 +114,22 @@ function Invoke-ProviderSmoke {
             $windowTitle.StartsWith($ExpectedWindowTitlePrefix, [System.StringComparison]::Ordinal) -and
             $clientCompleted) { break }
     }
-    if ($script:bridgeProcess.HasExited) { throw "Embedded BlazeInteractionBridge exited during startup with code $($script:bridgeProcess.ExitCode)." }
+    if ($script:bridgeProcess.HasExited) {
+        $script:parentProcess.Refresh()
+        $parentState = if ($script:parentProcess.HasExited) {
+            "exited with code $($script:parentProcess.ExitCode)"
+        }
+        else {
+            'still running'
+        }
+        $clientState = if (Test-Path -LiteralPath $clientResult -PathType Leaf) {
+            (Get-Content -LiteralPath $clientResult -Raw -Encoding UTF8).Trim()
+        }
+        else {
+            'no client result'
+        }
+        throw "Embedded BlazeInteractionBridge exited during startup with code $($script:bridgeProcess.ExitCode); smoke parent is $parentState; client result: $clientState."
+    }
     if ($windowHandle -eq [IntPtr]::Zero -or [string]::IsNullOrWhiteSpace($windowTitle)) { throw 'Embedded BlazeInteractionBridge did not create a top-level window.' }
     if (-not $windowTitle.StartsWith($ExpectedWindowTitlePrefix, [System.StringComparison]::Ordinal)) {
         throw "Embedded BlazeInteractionBridge window title mismatch. Expected prefix '$ExpectedWindowTitlePrefix', got '$windowTitle'."
