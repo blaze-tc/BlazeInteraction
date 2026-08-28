@@ -23,7 +23,6 @@ internal sealed class WpfCameraUiDispatcher(Dispatcher dispatcher) : ICameraUiDi
     public Task InvokeAsync(Action action)
     {
         ArgumentNullException.ThrowIfNull(action);
-        if (_dispatcher.CheckAccess()) { action(); return Task.CompletedTask; }
         return _dispatcher.InvokeAsync(action).Task;
     }
 }
@@ -116,7 +115,6 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
         ApplyStatus(control.CurrentStatus);
         _previewScheduler.Offer(control.CurrentStatus);
         _control.StatusChanged += OnStatusChanged;
-        StartCapabilityLoad(DeviceIndex);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

@@ -14,6 +14,7 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private readonly object _pointGate = new();
     private readonly Dictionary<long, InteractionPoint> _lastPoints = new();
+    private readonly Dictionary<int, CameraDeviceCapabilities> _capabilityCache = new();
     private IReadOnlyList<InteractionSurface> _surfaces = Array.Empty<InteractionSurface>();
     private InteractionSurface? _surface;
     private CameraVisionConfiguration? _configuration;
@@ -146,6 +147,10 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
                 throw new InvalidOperationException($"CameraVision cannot start from {Status}.");
             }
 
+            if (_configuration is null)
+            {
+                throw new InvalidOperationException("CameraVision is not initialized.");
+            }
             await StartRunAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
@@ -233,9 +238,26 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
         try
         {
             ThrowIfDisposed();
-            return await new CameraDeviceEnumerator(_captureFactory)
-                .EnumerateAsync(cancellationToken)
-                .ConfigureAwait(false);
+            var restartCapture = Status == ProviderRuntimeStatus.Running;
+            if (restartCapture)
+            {
+                await StopRunAsync().ConfigureAwait(false);
+                TransitionTo(ProviderRuntimeStatus.Stopped);
+            }
+
+            try
+            {
+                return await new CameraDeviceEnumerator(_captureFactory)
+                    .EnumerateAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                if (restartCapture && Volatile.Read(ref _disposed) == 0)
+                {
+                    await StartRunAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+            }
         }
         finally
         {
@@ -257,16 +279,53 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
         try
         {
             ThrowIfDisposed();
-            return await new CameraCapabilityEnumerator(_captureFactory)
-                .EnumerateAsync(
-                    new CameraDeviceDescriptor(deviceIndex, $"Camera {deviceIndex}"),
-                    cancellationToken)
-                .ConfigureAwait(false);
+            if (_capabilityCache.TryGetValue(deviceIndex, out var cached))
+            {
+                return cached;
+            }
+
+            var restartCapture = Status == ProviderRuntimeStatus.Running;
+            if (restartCapture)
+            {
+                await StopRunAsync().ConfigureAwait(false);
+                TransitionTo(ProviderRuntimeStatus.Stopped);
+            }
+
+            try
+            {
+                return await EnsureCapabilitiesCachedCoreAsync(deviceIndex, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                if (restartCapture && Volatile.Read(ref _disposed) == 0)
+                {
+                    await StartRunAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+            }
         }
         finally
         {
             _lifecycle.Release();
         }
+    }
+
+    private async Task<CameraDeviceCapabilities> EnsureCapabilitiesCachedCoreAsync(
+        int deviceIndex,
+        CancellationToken cancellationToken)
+    {
+        if (_capabilityCache.TryGetValue(deviceIndex, out var cached))
+        {
+            return cached;
+        }
+
+        var capabilities = await new CameraCapabilityEnumerator(_captureFactory)
+            .EnumerateAsync(
+                new CameraDeviceDescriptor(deviceIndex, $"Camera {deviceIndex}"),
+                cancellationToken)
+            .ConfigureAwait(false);
+        _capabilityCache[deviceIndex] = capabilities;
+        return capabilities;
     }
 
     private async Task ApplyConfigurationAsync(

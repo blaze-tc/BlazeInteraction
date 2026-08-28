@@ -1,5 +1,6 @@
 using System.Runtime.ExceptionServices;
 using System.Windows;
+using System.Windows.Threading;
 using Blaze.Interaction.Contracts;
 using Blaze.Interaction.Provider.Abstractions;
 
@@ -18,7 +19,7 @@ public sealed class CameraVisionSettingsViewFactoryTests
     }
 
     [Fact]
-    public async Task FactoryReturnsWindowAndDisposesViewModelOnClose()
+    public async Task FactoryReturnsLoadableWindowAndDisposesViewModelOnClose()
     {
         using var services = new Services();
         var provider = (CameraVisionProvider)new CameraVisionPlugin().CreateProvider(
@@ -32,14 +33,17 @@ public sealed class CameraVisionSettingsViewFactoryTests
         {
             try
             {
-                var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
                 var window = Assert.IsType<CameraVisionSettingsWindow>(
                     factory.CreateView(provider, EmptySettingsContext.Instance));
                 var viewModel = Assert.IsType<CameraVisionSettingsViewModel>(window.DataContext);
                 Assert.False(viewModel.IsDisposed);
+                window.Show();
+                window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                Assert.True(
+                    window.ActualHeight <= SystemParameters.WorkArea.Height,
+                    $"Camera window height {window.ActualHeight} exceeds work area height {SystemParameters.WorkArea.Height}.");
                 window.Close();
                 Assert.True(viewModel.IsDisposed);
-                application.Shutdown();
             }
             catch (Exception exception)
             {

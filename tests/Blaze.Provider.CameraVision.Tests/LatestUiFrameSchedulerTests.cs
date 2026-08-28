@@ -1,7 +1,42 @@
+using System.Runtime.ExceptionServices;
+using System.Windows.Threading;
+
 namespace Blaze.Provider.CameraVision.Tests;
 
 public sealed class LatestUiFrameSchedulerTests
 {
+    [Fact]
+    public void WpfDispatcher_QueuesWorkPostedFromDispatcherThread()
+    {
+        ExceptionDispatchInfo? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var dispatcher = Dispatcher.CurrentDispatcher;
+                var subject = new WpfCameraUiDispatcher(dispatcher);
+                var invoked = false;
+
+                var operation = subject.InvokeAsync(() => invoked = true);
+
+                Assert.False(invoked);
+                dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                Assert.True(operation.IsCompletedSuccessfully);
+                Assert.True(invoked);
+                dispatcher.InvokeShutdown();
+            }
+            catch (Exception exception)
+            {
+                failure = ExceptionDispatchInfo.Capture(exception);
+            }
+        }) { IsBackground = true };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+
+        Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "WPF dispatcher test timed out.");
+        failure?.Throw();
+    }
+
     [Fact]
     public async Task Offer_BurstBeforeDispatch_RendersOnlyLatestFrame()
     {

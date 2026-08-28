@@ -62,6 +62,8 @@ public sealed class CameraVisionSettingsViewModelTests
             new ImmediateDispatcher(),
             "main");
 
+        viewModel.RefreshDevicesCommand.Execute(null);
+        await WaitUntilAsync(() => control.EnumerateCalls == 1 && !viewModel.IsBusy);
         await viewModel.WaitForCapabilitiesAsync();
         viewModel.SelectedResolution = new CameraResolutionOption(1280, 720);
         viewModel.SelectedFrameRate = 60;
@@ -159,6 +161,21 @@ public sealed class CameraVisionSettingsViewModelTests
         var device = Assert.Single(viewModel.Devices);
         Assert.Equal(3, device.Index);
         Assert.Equal("Camera 3", device.DisplayName);
+    }
+
+    [Fact]
+    public void ConstructorUsesConfiguredModeWithoutProbingCameraCapabilities()
+    {
+        var control = new FakeControl(Configuration());
+
+        using var viewModel = new CameraVisionSettingsViewModel(
+            control,
+            new ImmediateDispatcher(),
+            "main");
+
+        Assert.Equal(0, control.CapabilityCalls);
+        Assert.Equal(new CameraResolutionOption(1280, 720), Assert.Single(viewModel.Resolutions));
+        Assert.Equal(30, Assert.Single(viewModel.FrameRates));
     }
 
     [Fact]
@@ -308,6 +325,7 @@ public sealed class CameraVisionSettingsViewModelTests
             [new CameraDeviceDescriptor(0, "Camera 0")];
         public Dictionary<int, CameraDeviceCapabilities> Capabilities { get; } = new();
         public int EnumerateCalls { get; private set; }
+        public int CapabilityCalls { get; private set; }
         public TaskCompletionSource ApplyStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         public event Action<CameraVisionStatusSnapshot>? StatusChanged
@@ -324,6 +342,7 @@ public sealed class CameraVisionSettingsViewModelTests
             int deviceIndex,
             CancellationToken cancellationToken)
         {
+            CapabilityCalls++;
             if (Capabilities.TryGetValue(deviceIndex, out var capabilities))
             {
                 return Task.FromResult(capabilities);

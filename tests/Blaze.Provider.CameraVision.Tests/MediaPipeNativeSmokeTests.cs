@@ -6,6 +6,46 @@ public sealed class MediaPipeNativeSmokeTests
 {
     [Fact]
     [Trait("Category", "MediaPipeNativeSmoke")]
+    public async Task MediaPipeNativeSmoke_ProcessesCameraSizedNonSquareFrame()
+    {
+        var imagePath = RepositoryPath(
+            "tests",
+            "Blaze.Provider.CameraVision.Tests",
+            "TestAssets",
+            "pointing_up.jpg");
+        var modelPath = Path.Combine(AppContext.BaseDirectory, "models", "hand_landmarker.task");
+        Assert.True(File.Exists(imagePath), $"Attributed hand test image was not found: {imagePath}");
+        Assert.True(File.Exists(modelPath), $"Hand landmarker model was not copied: {modelPath}");
+
+        using var source = Cv2.ImRead(imagePath, ImreadModes.Color);
+        Assert.False(source.Empty(), "Attributed hand test image could not be decoded.");
+        using var bgr = new Mat();
+        Cv2.Resize(source, bgr, new Size(1280, 720));
+        using var rgb = new Mat();
+        Cv2.CvtColor(bgr, rgb, ColorConversionCodes.BGR2RGB);
+
+        await using var backend = new MediaPipeHandBackend();
+        await backend.InitializeAsync(
+            new HandDetectionOptions(modelPath, 8, 0.5f, 0.5f),
+            CancellationToken.None);
+        var frame = new RgbFrameView(
+            rgb.Data,
+            rgb.Width,
+            rgb.Height,
+            checked((int)rgb.Step()));
+
+        for (var frameIndex = 0; frameIndex < 60; frameIndex++)
+        {
+            var result = await backend.DetectAsync(
+                frame,
+                1000 + frameIndex * 33L,
+                CancellationToken.None);
+            Assert.All(result.Hands, hand => Assert.Equal(21, hand.Landmarks.Count));
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "MediaPipeNativeSmoke")]
     public async Task MediaPipeNativeSmoke_DetectsAttributedHandImage()
     {
         var imagePath = RepositoryPath(

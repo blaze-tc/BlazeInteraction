@@ -3,7 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:Blaze.Provider.CameraVision"
         Title="CameraVision · 多人手部感应"
-        Width="1440" Height="900" MinWidth="1120" MinHeight="720">
+        Width="1440" Height="780" MinWidth="1120" MinHeight="680"
+        WindowStartupLocation="CenterScreen">
     <Window.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
@@ -196,7 +197,7 @@
                             <TextBlock x:Name="CameraStatusText" Text="{Binding CameraStatus}" />
                             <TextBlock Text="实际分辨率" />
                             <TextBlock>
-                                <Run Text="{Binding ActualWidth}" /><Run Text=" × " /><Run Text="{Binding ActualHeight}" />
+                                <Run Text="{Binding ActualWidth, Mode=OneWay}" /><Run Text=" × " /><Run Text="{Binding ActualHeight, Mode=OneWay}" />
                             </TextBlock>
                             <TextBlock Text="Camera FPS" />
                             <TextBlock x:Name="CameraFpsText"

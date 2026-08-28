@@ -6,10 +6,11 @@ namespace Blaze.Provider.CameraVision.Tests;
 public sealed class CameraVisionControlTests
 {
     [Fact]
-    public async Task GetCapabilities_UsesIndependentBackendsWithoutRestartingActiveCamera()
+    public async Task GetCapabilities_PausesActiveCameraAndCachesTheResult()
     {
+        var cameraLease = new ExclusiveCameraLease();
         using var services = new ControlServices(
-            cameraBackendFactory: static () => new SteadyCameraBackend());
+            cameraBackendFactory: () => new ExclusiveCameraBackend(cameraLease));
         await services.SaveAsync(Configuration(maxHands: 8));
         var provider = await CreateInitializedAsync(services);
         var control = (ICameraVisionControl)provider;
@@ -18,14 +19,45 @@ public sealed class CameraVisionControlTests
             control.CurrentStatus.CameraStatus == CameraCaptureStatus.Connected);
         var activeStatus = provider.Status;
         var completedRuns = provider.CompletedRunCount;
+        Assert.Equal(1, services.CameraBackendCreates);
 
         var capabilities = await control.GetCapabilitiesAsync(0, CancellationToken.None);
+        var createsAfterProbe = services.CameraBackendCreates;
+        var cachedCapabilities = await control.GetCapabilitiesAsync(0, CancellationToken.None);
 
         Assert.Equal(0, capabilities.Device.Index);
         Assert.NotEmpty(capabilities.Modes);
+        Assert.Same(capabilities, cachedCapabilities);
         Assert.Equal(activeStatus, provider.Status);
         Assert.Equal(CameraCaptureStatus.Connected, control.CurrentStatus.CameraStatus);
-        Assert.Equal(completedRuns, provider.CompletedRunCount);
+        Assert.Equal(completedRuns + 1, provider.CompletedRunCount);
+        Assert.Equal(createsAfterProbe, services.CameraBackendCreates);
+        Assert.Equal(0, cameraLease.ConcurrentOpenAttempts);
+        Assert.Equal(1, cameraLease.MaximumConcurrentOpenCount);
+        await provider.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task EnumerateDevices_PausesActiveCameraBeforeOpeningProbeBackends()
+    {
+        var cameraLease = new ExclusiveCameraLease();
+        using var services = new ControlServices(
+            cameraBackendFactory: () => new ExclusiveCameraBackend(cameraLease));
+        await services.SaveAsync(Configuration(maxHands: 8));
+        var provider = await CreateInitializedAsync(services);
+        var control = (ICameraVisionControl)provider;
+        await provider.StartAsync(CancellationToken.None);
+        await WaitUntilAsync(() =>
+            control.CurrentStatus.CameraStatus == CameraCaptureStatus.Connected);
+
+        var devices = await control.EnumerateDevicesAsync(CancellationToken.None);
+        await WaitUntilAsync(() =>
+            control.CurrentStatus.CameraStatus == CameraCaptureStatus.Connected);
+
+        Assert.NotEmpty(devices);
+        Assert.Equal(ProviderRuntimeStatus.Running, provider.Status);
+        Assert.Equal(0, cameraLease.ConcurrentOpenAttempts);
+        Assert.Equal(1, cameraLease.MaximumConcurrentOpenCount);
         await provider.DisposeAsync();
     }
 
@@ -390,6 +422,94 @@ public sealed class CameraVisionControlTests
         }
 
         public void Close() => IsOpen = false;
+
+        public ValueTask DisposeAsync()
+        {
+            Close();
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class ExclusiveCameraLease
+    {
+        private int _openCount;
+        private int _maximumConcurrentOpenCount;
+        private int _concurrentOpenAttempts;
+
+        public int MaximumConcurrentOpenCount => Volatile.Read(ref _maximumConcurrentOpenCount);
+        public int ConcurrentOpenAttempts => Volatile.Read(ref _concurrentOpenAttempts);
+
+        public bool TryAcquire()
+        {
+            var openCount = Interlocked.Increment(ref _openCount);
+            while (openCount > Volatile.Read(ref _maximumConcurrentOpenCount))
+            {
+                var observed = Volatile.Read(ref _maximumConcurrentOpenCount);
+                if (openCount <= observed ||
+                    Interlocked.CompareExchange(
+                        ref _maximumConcurrentOpenCount,
+                        openCount,
+                        observed) == observed)
+                {
+                    break;
+                }
+            }
+            if (openCount == 1) return true;
+            Interlocked.Increment(ref _concurrentOpenAttempts);
+            Interlocked.Decrement(ref _openCount);
+            return false;
+        }
+
+        public void Release() => Interlocked.Decrement(ref _openCount);
+    }
+
+    private sealed class ExclusiveCameraBackend(ExclusiveCameraLease lease) : ICameraCaptureBackend
+    {
+        private CameraCaptureMode? _mode;
+        private long _sequence;
+        public bool IsOpen { get; private set; }
+
+        public bool TryOpen(CameraCaptureOptions options)
+        {
+            if (!lease.TryAcquire()) return false;
+            IsOpen = true;
+            _mode = new CameraCaptureMode(options.Width, options.Height, options.FramesPerSecond);
+            return true;
+        }
+
+        public bool TryGetActiveMode(out CameraCaptureMode? mode)
+        {
+            mode = _mode;
+            return IsOpen && mode is not null;
+        }
+
+        public bool TryRead(out CameraFrame? frame)
+        {
+            if (!IsOpen)
+            {
+                frame = null;
+                return false;
+            }
+
+            Thread.Sleep(2);
+            frame = new CameraFrame(
+                Interlocked.Increment(ref _sequence),
+                DateTimeOffset.UtcNow,
+                new OpenCvSharp.Mat(
+                    100,
+                    100,
+                    OpenCvSharp.MatType.CV_8UC3,
+                    OpenCvSharp.Scalar.All(0)));
+            return true;
+        }
+
+        public void Close()
+        {
+            if (!IsOpen) return;
+            IsOpen = false;
+            _mode = null;
+            lease.Release();
+        }
 
         public ValueTask DisposeAsync()
         {
