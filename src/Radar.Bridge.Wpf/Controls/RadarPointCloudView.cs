@@ -35,18 +35,21 @@ public sealed class RadarPointCloudView : FrameworkElement
     private readonly RadarPointPersistenceBuffer _rawPointFrames = new(PointPersistenceDuration, 6);
     private readonly RadarPointPersistenceBuffer _validPointFrames = new(PointPersistenceDuration, 6);
     private readonly DispatcherTimer _persistenceTimer;
+    private readonly DispatcherTimer _interactionTimer;
+    private readonly RadarRenderScheduler _renderScheduler;
     private string? _snapshotSensorId;
     private int _draggedVertex = -1;
     private bool _isPanning;
     private Point _panStart;
     private Vector _panOrigin;
+    private bool _displayInteractionActive;
 
     public static readonly DependencyProperty SnapshotProperty = DependencyProperty.Register(
         nameof(Snapshot), typeof(RadarSensorRuntimeSnapshot), typeof(RadarPointCloudView),
         new FrameworkPropertyMetadata(null, OnSnapshotChanged));
     public static readonly DependencyProperty MaximumRangeMetersProperty = DependencyProperty.Register(
         nameof(MaximumRangeMeters), typeof(float), typeof(RadarPointCloudView),
-        new FrameworkPropertyMetadata(5f, FrameworkPropertyMetadataOptions.AffectsRender));
+        new FrameworkPropertyMetadata(5f, OnInteractiveVisualPropertyChanged));
     public static readonly DependencyProperty RegionVerticesProperty = DependencyProperty.Register(
         nameof(RegionVertices), typeof(IReadOnlyList<Point2>), typeof(RadarPointCloudView),
         new FrameworkPropertyMetadata(null, OnRegionVerticesChanged));
@@ -86,7 +89,7 @@ public sealed class RadarPointCloudView : FrameworkElement
         nameof(IsPanEnabled), typeof(bool), typeof(RadarPointCloudView), new FrameworkPropertyMetadata(false));
     public static readonly DependencyProperty PanOffsetProperty = DependencyProperty.Register(
         nameof(PanOffset), typeof(Vector), typeof(RadarPointCloudView),
-        new FrameworkPropertyMetadata(new Vector(), FrameworkPropertyMetadataOptions.AffectsRender));
+        new FrameworkPropertyMetadata(new Vector(), OnInteractiveVisualPropertyChanged));
 
     public RadarPointCloudView()
     {
@@ -96,17 +99,30 @@ public sealed class RadarPointCloudView : FrameworkElement
         UseLayoutRounding = true;
         TextOptions.SetTextFormattingMode(this, TextFormattingMode.Display);
         TextOptions.SetTextRenderingMode(this, TextRenderingMode.ClearType);
+        _renderScheduler = new RadarRenderScheduler(
+            new DispatcherSynchronizationContext(Dispatcher),
+            InvalidateVisual);
         _persistenceTimer = new DispatcherTimer(DispatcherPriority.Normal) { Interval = TimeSpan.FromMilliseconds(50) };
         _persistenceTimer.Tick += (_, _) =>
         {
             var budget = CurrentDisplayBudget();
             if (_rawPointFrames.GetLayers(DateTimeOffset.UtcNow, budget).Count > 0 || _validPointFrames.GetLayers(DateTimeOffset.UtcNow, budget).Count > 0)
-                InvalidateVisual();
+                _renderScheduler.RequestRender();
         };
-        Loaded += (_, _) => _persistenceTimer.Start();
+        _interactionTimer = new DispatcherTimer(DispatcherPriority.Normal) { Interval = TimeSpan.FromMilliseconds(150) };
+        _interactionTimer.Tick += (_, _) => EndDisplayInteraction();
+        SizeChanged += (_, _) => _renderScheduler.RequestRender();
+        Loaded += (_, _) =>
+        {
+            _persistenceTimer.Start();
+            _renderScheduler.RequestRender();
+        };
         Unloaded += (_, _) =>
         {
             _persistenceTimer.Stop();
+            _interactionTimer.Stop();
+            _displayInteractionActive = false;
+            _renderScheduler.EndInteraction();
             ClearPersistence();
         };
     }
@@ -155,6 +171,7 @@ public sealed class RadarPointCloudView : FrameworkElement
             {
                 if ((ToScreen(RegionVertices[index]) - mouse).Length > 14d) continue;
                 _draggedVertex = index;
+                BeginDisplayInteraction();
                 CaptureMouse();
                 args.Handled = true;
                 return;
@@ -163,6 +180,7 @@ public sealed class RadarPointCloudView : FrameworkElement
 
         if (!IsPanEnabled) return;
         _isPanning = true;
+        BeginDisplayInteraction();
         _panStart = mouse;
         _panOrigin = PanOffset;
         Cursor = Cursors.SizeAll;
@@ -183,7 +201,7 @@ public sealed class RadarPointCloudView : FrameworkElement
         {
             var world = RadarViewportTransform.ScreenToWorld(mouse, ActualWidth, ActualHeight, Math.Max(.1f, MaximumRangeMeters), PanOffset);
             RegionVertexMoved?.Invoke(this, new RegionVertexMovedEventArgs(_draggedVertex, world));
-            InvalidateVisual();
+            BeginDisplayInteraction();
             args.Handled = true;
             return;
         }
@@ -271,13 +289,14 @@ public sealed class RadarPointCloudView : FrameworkElement
     private RadarDisplayBudget CurrentDisplayBudget() => RadarDisplayBudget.ForViewport(
         ActualWidth,
         ActualHeight,
-        _draggedVertex >= 0 || _isPanning);
+        _displayInteractionActive);
     private void EndPointerInteraction()
     {
         _draggedVertex = -1;
         _isPanning = false;
         Cursor = null;
         if (IsMouseCaptured) ReleaseMouseCapture();
+        BeginDisplayInteraction();
     }
     private void DrawEdgeDeadZones(DrawingContext context)
     {
@@ -338,7 +357,7 @@ public sealed class RadarPointCloudView : FrameworkElement
             control.ClearPersistence();
             control._snapshotSensorId = null;
         }
-        control.InvalidateVisual();
+        control._renderScheduler.RequestRender();
     }
     private void ClearPersistence()
     {
@@ -350,7 +369,28 @@ public sealed class RadarPointCloudView : FrameworkElement
         var control = (RadarPointCloudView)dependencyObject;
         if (args.OldValue is INotifyCollectionChanged oldCollection) oldCollection.CollectionChanged -= control.OnRegionCollectionChanged;
         if (args.NewValue is INotifyCollectionChanged newCollection) newCollection.CollectionChanged += control.OnRegionCollectionChanged;
-        control.InvalidateVisual();
+        control.BeginDisplayInteraction();
     }
-    private void OnRegionCollectionChanged(object? sender, NotifyCollectionChangedEventArgs args) => InvalidateVisual();
+    private void OnRegionCollectionChanged(object? sender, NotifyCollectionChangedEventArgs args) => BeginDisplayInteraction();
+
+    private static void OnInteractiveVisualPropertyChanged(DependencyObject dependencyObject, DependencyPropertyChangedEventArgs args) =>
+        ((RadarPointCloudView)dependencyObject).BeginDisplayInteraction();
+
+    private void BeginDisplayInteraction()
+    {
+        _displayInteractionActive = true;
+        _renderScheduler.BeginInteraction();
+        _interactionTimer.Stop();
+        _interactionTimer.Start();
+        _renderScheduler.RequestRender();
+    }
+
+    private void EndDisplayInteraction()
+    {
+        _interactionTimer.Stop();
+        if (!_displayInteractionActive) return;
+        _displayInteractionActive = false;
+        _renderScheduler.EndInteraction();
+        _renderScheduler.RequestRender();
+    }
 }

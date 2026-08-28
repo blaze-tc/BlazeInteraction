@@ -72,6 +72,21 @@ public sealed class RadarVisualizationLayoutTests
     }
 
     [Fact]
+    public void PointAndFusionViews_RouteInvalidationThroughRenderSchedulers()
+    {
+        var root = FindRepositoryRoot();
+        var pointView = File.ReadAllText(Path.Combine(root, "src", "Radar.Bridge.Wpf", "Controls", "RadarPointCloudView.cs"));
+        var fusionView = File.ReadAllText(Path.Combine(root, "src", "Radar.Bridge.Wpf", "Controls", "RadarScreenFusionView.cs"));
+
+        Assert.Contains("_renderScheduler.RequestRender()", pointView);
+        Assert.Contains("_renderScheduler.BeginInteraction()", pointView);
+        Assert.Contains("_renderScheduler.EndInteraction()", pointView);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(pointView, "InvalidateVisual").Cast<System.Text.RegularExpressions.Match>());
+        Assert.Contains("_renderScheduler.RequestRender()", fusionView);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(fusionView, "InvalidateVisual").Cast<System.Text.RegularExpressions.Match>());
+    }
+
+    [Fact]
     public void MainViewModel_DoesNotExposeTemporaryFlatUiAdaptersOrLegacySnapshotDto()
     {
         var root = FindRepositoryRoot();

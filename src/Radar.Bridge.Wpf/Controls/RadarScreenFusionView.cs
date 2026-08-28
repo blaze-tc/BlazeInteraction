@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Specialized;
 using System.Windows;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Yuexin.Radar.Bridge.Wpf.Services;
 using Yuexin.Radar.Bridge.Wpf.ViewModels;
 using Yuexin.Radar.Contracts;
@@ -30,10 +31,11 @@ public sealed class RadarScreenFusionView : FrameworkElement
     private readonly Dictionary<string, FormattedText> _labelCache = [];
     private INotifyCollectionChanged? _sensorCollection;
     private readonly HashSet<SensorItemViewModel> _observedSensors = [];
+    private readonly RadarRenderScheduler _renderScheduler;
 
     public static readonly DependencyProperty SnapshotProperty = DependencyProperty.Register(
         nameof(Snapshot), typeof(RadarScreenRuntimeSnapshot), typeof(RadarScreenFusionView),
-        new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+        new FrameworkPropertyMetadata(null, OnVisualPropertyChanged));
 
     public static readonly DependencyProperty SensorsProperty = DependencyProperty.Register(
         nameof(Sensors), typeof(IEnumerable), typeof(RadarScreenFusionView),
@@ -41,7 +43,7 @@ public sealed class RadarScreenFusionView : FrameworkElement
 
     public static readonly DependencyProperty SelectedSensorIdProperty = DependencyProperty.Register(
         nameof(SelectedSensorId), typeof(string), typeof(RadarScreenFusionView),
-        new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+        new FrameworkPropertyMetadata(null, OnVisualPropertyChanged));
 
     public RadarScreenFusionView()
     {
@@ -51,7 +53,15 @@ public sealed class RadarScreenFusionView : FrameworkElement
         UseLayoutRounding = true;
         TextOptions.SetTextFormattingMode(this, TextFormattingMode.Display);
         TextOptions.SetTextRenderingMode(this, TextRenderingMode.ClearType);
-        Loaded += (_, _) => AttachSensors();
+        _renderScheduler = new RadarRenderScheduler(
+            new DispatcherSynchronizationContext(Dispatcher),
+            InvalidateVisual);
+        SizeChanged += (_, _) => _renderScheduler.RequestRender();
+        Loaded += (_, _) =>
+        {
+            AttachSensors();
+            _renderScheduler.RequestRender();
+        };
         Unloaded += (_, _) => DetachSensors();
     }
 
@@ -166,7 +176,7 @@ public sealed class RadarScreenFusionView : FrameworkElement
         var control = (RadarScreenFusionView)dependencyObject;
         control.DetachSensors();
         if (control.IsLoaded) control.AttachSensors();
-        control.InvalidateVisual();
+        control._renderScheduler.RequestRender();
     }
 
     private void AttachSensors()
@@ -194,10 +204,13 @@ public sealed class RadarScreenFusionView : FrameworkElement
     {
         DetachSensors();
         AttachSensors();
-        InvalidateVisual();
+        _renderScheduler.RequestRender();
     }
 
-    private void OnSensorSnapshotDisplayChanged(object? sender, EventArgs args) => InvalidateVisual();
+    private void OnSensorSnapshotDisplayChanged(object? sender, EventArgs args) => _renderScheduler.RequestRender();
+
+    private static void OnVisualPropertyChanged(DependencyObject dependencyObject, DependencyPropertyChangedEventArgs args) =>
+        ((RadarScreenFusionView)dependencyObject)._renderScheduler.RequestRender();
 
     private SensorItemViewModel? FindSensor(string sensorId) => Sensors?.Cast<object>()
         .OfType<SensorItemViewModel>()
