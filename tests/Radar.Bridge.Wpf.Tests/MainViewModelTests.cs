@@ -537,32 +537,39 @@ public sealed class MainViewModelTests
     }
 
     [Fact]
-    public void SelectedSensorEditsNotifyEveryAdapterCommand()
+    public void SelectedSensorEditsNotifyOnlyCommandsWhoseEligibilityChanged()
     {
         using var viewModel = new MainViewModel(ThreeScreenFourSensorConfiguration(), new TestRuntime());
         viewModel.SelectedScreen = viewModel.Screens.Single(screen => screen.ScreenId == "front");
-        var commands = new[]
+        var notifications = new Dictionary<ICommand, int>();
+        var commands = new ICommand[]
         {
             viewModel.ResetRegionCommand, viewModel.BeginCalibrationCommand, viewModel.CaptureCalibrationPointCommand,
             viewModel.UndoCalibrationPointCommand, viewModel.SaveCalibrationCommand, viewModel.ClearCalibrationCommand,
             viewModel.AddMaskedRegionCommand, viewModel.DeleteMaskedRegionCommand
         };
-        var notifications = 0;
-        foreach (var command in commands) command.CanExecuteChanged += (_, _) => notifications++;
+        foreach (var command in commands)
+        {
+            notifications[command] = 0;
+            command.CanExecuteChanged += (_, _) => notifications[command]++;
+        }
 
         var sensor = viewModel.SelectedSensor!;
         sensor.ApplySnapshot(Snapshot("front", sensor.SensorId, 2, new Point2(4f, 5f)));
-        var afterSnapshot = notifications;
-        viewModel.ResetRegionCommand.Execute(null);
-        var afterRegion = notifications;
-        viewModel.AddMaskedRegionCommand.Execute(null);
-        var afterMask = notifications;
-        viewModel.BeginCalibrationCommand.Execute(null);
 
-        Assert.True(afterSnapshot >= commands.Length);
-        Assert.True(afterRegion > afterSnapshot);
-        Assert.True(afterMask > afterRegion);
-        Assert.True(notifications > afterMask);
+        Assert.Equal(1, notifications[viewModel.CaptureCalibrationPointCommand]);
+        Assert.Equal(1, notifications[viewModel.AddMaskedRegionCommand]);
+        Assert.Equal(0, notifications[viewModel.ResetRegionCommand]);
+
+        viewModel.ResetRegionCommand.Execute(null);
+        Assert.Equal(0, notifications[viewModel.ResetRegionCommand]);
+
+        viewModel.AddMaskedRegionCommand.Execute(null);
+        Assert.Equal(1, notifications[viewModel.DeleteMaskedRegionCommand]);
+
+        viewModel.BeginCalibrationCommand.Execute(null);
+        Assert.Equal(0, notifications[viewModel.BeginCalibrationCommand]);
+        Assert.Equal(0, notifications[viewModel.SaveCalibrationCommand]);
     }
 
     [Fact]

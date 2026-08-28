@@ -61,6 +61,17 @@ public sealed class RadarVisualizationLayoutTests
     }
 
     [Fact]
+    public void FusionView_ObservesOnlyDedicatedSnapshotDisplayEvents()
+    {
+        var source = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "src", "Radar.Bridge.Wpf", "Controls", "RadarScreenFusionView.cs"));
+
+        Assert.Contains("SnapshotDisplayChanged += OnSensorSnapshotDisplayChanged", source);
+        Assert.Contains("SnapshotDisplayChanged -= OnSensorSnapshotDisplayChanged", source);
+        Assert.DoesNotContain("PropertyChanged += OnSensorPropertyChanged", source);
+        Assert.DoesNotContain("PropertyChanged -= OnSensorPropertyChanged", source);
+    }
+
+    [Fact]
     public void MainViewModel_DoesNotExposeTemporaryFlatUiAdaptersOrLegacySnapshotDto()
     {
         var root = FindRepositoryRoot();

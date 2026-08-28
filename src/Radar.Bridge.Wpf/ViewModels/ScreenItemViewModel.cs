@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Windows.Threading;
 using Yuexin.Radar.Bridge.Wpf.Services;
 using Yuexin.Radar.Configuration;
 using Yuexin.Radar.Contracts;
@@ -6,14 +7,35 @@ using Yuexin.Radar.Contracts;
 namespace Yuexin.Radar.Bridge.Wpf.ViewModels;
 
 /// <summary>Owns the editable configuration and derived state of one Unity screen.</summary>
-public sealed class ScreenItemViewModel : ObservableObject, System.ComponentModel.IDataErrorInfo
+public sealed class ScreenItemViewModel : ObservableObject, System.ComponentModel.IDataErrorInfo, IDisposable
 {
+    private static readonly TimeSpan ValidationDelay = TimeSpan.FromMilliseconds(250);
     private readonly RadarScreenConfiguration _configuration;
+    private readonly IValidationScheduler _validationScheduler;
+    private readonly Func<RadarScreenConfiguration, bool> _fullValidator;
     private RadarScreenRuntimeSnapshot? _latestSnapshot;
+    private bool _hasConfigurationValidationErrors;
+    private bool _disposed;
 
     public ScreenItemViewModel(RadarScreenConfiguration configuration)
+        : this(
+            configuration,
+            new DebouncedValidationScheduler(
+                ValidationDelay,
+                SynchronizationContext.Current ?? new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher)),
+            ValidateCopy)
+    {
+    }
+
+    internal ScreenItemViewModel(
+        RadarScreenConfiguration configuration,
+        IValidationScheduler validationScheduler,
+        Func<RadarScreenConfiguration, bool> fullValidator)
     {
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+        _validationScheduler = validationScheduler ?? throw new ArgumentNullException(nameof(validationScheduler));
+        _fullValidator = fullValidator ?? throw new ArgumentNullException(nameof(fullValidator));
+        _hasConfigurationValidationErrors = !_fullValidator(_configuration);
         Sensors = new ObservableCollection<SensorItemViewModel>(_configuration.Sensors.Select(sensor => new SensorItemViewModel(sensor)));
         foreach (var sensor in Sensors) sensor.PropertyChanged += OnSensorPropertyChanged;
     }
@@ -44,7 +66,7 @@ public sealed class ScreenItemViewModel : ObservableObject, System.ComponentMode
     public RadarScreenRuntimeSnapshot? LatestSnapshot { get => _latestSnapshot; private set => SetProperty(ref _latestSnapshot, value); }
     public int OnlineSensorCount => Sensors.Count(sensor => sensor.RuntimeState == Services.RadarSensorRuntimeState.Running);
     public int FusedTargetCount { get; private set; }
-    public bool HasValidationErrors => !ValidateCopy(_configuration);
+    public bool HasValidationErrors => _hasConfigurationValidationErrors || Sensors.Any(sensor => sensor.HasValidationErrors);
     public string Error => string.Empty;
     public string this[string columnName] => columnName switch
     {
@@ -74,6 +96,7 @@ public sealed class ScreenItemViewModel : ObservableObject, System.ComponentMode
         _configuration.Sensors.Remove(sensor.Configuration);
         sensor.PropertyChanged -= OnSensorPropertyChanged;
         Sensors.Remove(sensor);
+        sensor.Dispose();
         NotifySensorChanges();
     }
 
@@ -90,16 +113,20 @@ public sealed class ScreenItemViewModel : ObservableObject, System.ComponentMode
     }
     private void OnSensorPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(SensorItemViewModel.Enabled) or
-            nameof(SensorItemViewModel.RuntimeState) or
-            nameof(SensorItemViewModel.HasValidationErrors))
+        if (e.PropertyName is nameof(SensorItemViewModel.Enabled) or nameof(SensorItemViewModel.RuntimeState))
         {
-            NotifySensorChanges();
+            OnPropertyChanged(nameof(OnlineSensorCount));
+        }
+        if (e.PropertyName == nameof(SensorItemViewModel.HasValidationErrors))
+        {
+            OnPropertyChanged(nameof(HasValidationErrors));
         }
     }
     private static bool ValidateCopy(RadarScreenConfiguration configuration)
     {
-        var copy = new RadarAppConfiguration { Screens = [RadarConfigurationStore.CloneRuntime(configuration)] };
+        var screen = RadarConfigurationStore.CloneRuntime(configuration);
+        screen.Sensors.Clear();
+        var copy = new RadarAppConfiguration { Screens = [screen] };
         return ConfigurationValidator.ValidateAndNormalize(copy).IsValid;
     }
 
@@ -108,6 +135,39 @@ public sealed class ScreenItemViewModel : ObservableObject, System.ComponentMode
         if (EqualityComparer<T>.Default.Equals(get(), value)) return;
         assign(value);
         OnPropertyChanged(name);
-        OnPropertyChanged(nameof(EffectiveWidthPixels)); OnPropertyChanged(nameof(EffectiveHeightPixels)); OnPropertyChanged(nameof(EffectiveResolutionText)); OnPropertyChanged(nameof(HasValidationErrors));
+        if (name is nameof(ResolutionMode) or nameof(WidthPixels) or nameof(HeightPixels))
+        {
+            OnPropertyChanged(nameof(EffectiveWidthPixels));
+            OnPropertyChanged(nameof(EffectiveHeightPixels));
+            OnPropertyChanged(nameof(EffectiveResolutionText));
+        }
+        _validationScheduler.Schedule(ValidateConfiguration);
+    }
+
+    public void FlushValidation()
+    {
+        _validationScheduler.Flush();
+        foreach (var sensor in Sensors) sensor.FlushValidation();
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _validationScheduler.Dispose();
+        foreach (var sensor in Sensors)
+        {
+            sensor.PropertyChanged -= OnSensorPropertyChanged;
+            sensor.Dispose();
+        }
+    }
+
+    private void ValidateConfiguration()
+    {
+        if (_disposed) return;
+        var hasErrors = !_fullValidator(_configuration);
+        if (_hasConfigurationValidationErrors == hasErrors) return;
+        _hasConfigurationValidationErrors = hasErrors;
+        OnPropertyChanged(nameof(HasValidationErrors));
     }
 }

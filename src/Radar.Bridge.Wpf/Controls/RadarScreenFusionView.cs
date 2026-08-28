@@ -1,6 +1,5 @@
 using System.Collections;
 using System.Collections.Specialized;
-using System.ComponentModel;
 using System.Windows;
 using System.Windows.Media;
 using Yuexin.Radar.Bridge.Wpf.Services;
@@ -179,7 +178,7 @@ public sealed class RadarScreenFusionView : FrameworkElement
         }
         foreach (var sensor in Sensors?.Cast<object>().OfType<SensorItemViewModel>() ?? [])
         {
-            if (_observedSensors.Add(sensor)) sensor.PropertyChanged += OnSensorPropertyChanged;
+            if (_observedSensors.Add(sensor)) sensor.SnapshotDisplayChanged += OnSensorSnapshotDisplayChanged;
         }
     }
 
@@ -187,7 +186,7 @@ public sealed class RadarScreenFusionView : FrameworkElement
     {
         if (_sensorCollection is not null) _sensorCollection.CollectionChanged -= OnSensorsCollectionChanged;
         _sensorCollection = null;
-        foreach (var sensor in _observedSensors) sensor.PropertyChanged -= OnSensorPropertyChanged;
+        foreach (var sensor in _observedSensors) sensor.SnapshotDisplayChanged -= OnSensorSnapshotDisplayChanged;
         _observedSensors.Clear();
     }
 
@@ -198,7 +197,7 @@ public sealed class RadarScreenFusionView : FrameworkElement
         InvalidateVisual();
     }
 
-    private void OnSensorPropertyChanged(object? sender, PropertyChangedEventArgs args) => InvalidateVisual();
+    private void OnSensorSnapshotDisplayChanged(object? sender, EventArgs args) => InvalidateVisual();
 
     private SensorItemViewModel? FindSensor(string sensorId) => Sensors?.Cast<object>()
         .OfType<SensorItemViewModel>()

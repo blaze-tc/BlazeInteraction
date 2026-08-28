@@ -4,25 +4,49 @@ using Yuexin.Radar.Contracts;
 using RadarPixelRect = Yuexin.Radar.Configuration.RadarPixelRect;
 using Yuexin.Radar.Processing;
 using System.Collections.ObjectModel;
+using System.Windows.Threading;
 using Yuexin.Radar.Device;
 
 namespace Yuexin.Radar.Bridge.Wpf.ViewModels;
 
 /// <summary>Owns the editable configuration and live state of one sensor.</summary>
-public sealed class SensorItemViewModel : ObservableObject, System.ComponentModel.IDataErrorInfo
+public sealed class SensorItemViewModel : ObservableObject, System.ComponentModel.IDataErrorInfo, IDisposable
 {
+    private static readonly TimeSpan ValidationDelay = TimeSpan.FromMilliseconds(250);
     private readonly RadarSensorConfiguration _configuration;
+    private readonly IValidationScheduler _validationScheduler;
+    private readonly Func<RadarSensorConfiguration, bool> _fullValidator;
     private RadarSensorRuntimeSnapshot? _snapshot;
     private RadarSensorRuntimeState _runtimeState;
     private string _calibrationStatus = "Not calibrated";
     private string _calibrationStep = "Not started";
     private readonly List<Point2> _capturedCalibrationPoints = [];
+    private bool _hasConfigurationValidationErrors;
+    private bool _disposed;
 
     public SensorItemViewModel(RadarSensorConfiguration configuration)
+        : this(
+            configuration,
+            new DebouncedValidationScheduler(
+                ValidationDelay,
+                SynchronizationContext.Current ?? new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher)),
+            ValidateCopy)
+    {
+    }
+
+    internal SensorItemViewModel(
+        RadarSensorConfiguration configuration,
+        IValidationScheduler validationScheduler,
+        Func<RadarSensorConfiguration, bool> fullValidator)
     {
         _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+        _validationScheduler = validationScheduler ?? throw new ArgumentNullException(nameof(validationScheduler));
+        _fullValidator = fullValidator ?? throw new ArgumentNullException(nameof(fullValidator));
+        _hasConfigurationValidationErrors = !_fullValidator(_configuration);
         RegionVertices = new ObservableCollection<Point2>(_configuration.Range.ActivePolygon.Select(point => new Point2(point.X, point.Y)));
     }
+
+    public event EventHandler? SnapshotDisplayChanged;
 
     public RadarSensorConfiguration Configuration => _configuration;
     public IReadOnlyList<RadarModel> AvailableModels { get; } = [RadarModel.F10, RadarModel.F20];
@@ -74,7 +98,7 @@ public sealed class SensorItemViewModel : ObservableObject, System.ComponentMode
     public long DroppedInputFrameCount => Snapshot?.DroppedInputFrameCount ?? 0;
     public string CalibrationStatus { get => _calibrationStatus; set => SetProperty(ref _calibrationStatus, value); }
     public string CalibrationStep { get => _calibrationStep; set => SetProperty(ref _calibrationStep, value); }
-    public bool HasValidationErrors => !ValidateCopy(_configuration);
+    public bool HasValidationErrors => _hasConfigurationValidationErrors;
     public string Error => string.Empty;
     public string this[string columnName] => columnName switch
     {
@@ -103,6 +127,7 @@ public sealed class SensorItemViewModel : ObservableObject, System.ComponentMode
         OnPropertyChanged(nameof(CrcErrorCount));
         OnPropertyChanged(nameof(DroppedInputFrameCount));
         OnPropertyChanged(nameof(HasMatchedPhysicalTarget));
+        SnapshotDisplayChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public void ApplyRuntimeState(RadarSensorRuntimeState state) => RuntimeState = state;
@@ -138,7 +163,20 @@ public sealed class SensorItemViewModel : ObservableObject, System.ComponentMode
         CalibrationStatus = "Calibrated"; CalibrationStep = "Calibration complete"; return true;
     }
     public void ClearCalibration() { _capturedCalibrationPoints.Clear(); _configuration.Calibration = new RadarCalibrationConfiguration(); CalibrationStatus = "Not calibrated"; CalibrationStep = "Not started"; }
-    private void SyncRegion() { _configuration.Range.ActivePolygon = RegionVertices.Select(point => new RadarPoint2(point.X, point.Y)).ToList(); OnPropertyChanged(nameof(ActivePolygon)); }
+    public void FlushValidation() => _validationScheduler.Flush();
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _validationScheduler.Dispose();
+    }
+
+    private void SyncRegion() { _configuration.Range.ActivePolygon = RegionVertices.Select(point => new RadarPoint2(point.X, point.Y)).ToList(); OnPropertyChanged(nameof(ActivePolygon)); ScheduleFullValidation(); }
     private bool TryGetPhysicalTarget(out Point2 point)
     {
         point = default;
@@ -170,10 +208,29 @@ public sealed class SensorItemViewModel : ObservableObject, System.ComponentMode
         if (EqualityComparer<T>.Default.Equals(get(), value)) return;
         assign(value);
         OnPropertyChanged(name);
-        OnPropertyChanged(nameof(HasValidationErrors));
+        ScheduleFullValidation();
         if (name == nameof(OutputRectPixels))
         {
             OnPropertyChanged(nameof(OutputX)); OnPropertyChanged(nameof(OutputY)); OnPropertyChanged(nameof(OutputWidth)); OnPropertyChanged(nameof(OutputHeight));
         }
+    }
+
+    private void ScheduleFullValidation() => _validationScheduler.Schedule(ValidateConfiguration);
+
+    private void ValidateConfiguration()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        var hasErrors = !_fullValidator(_configuration);
+        if (_hasConfigurationValidationErrors == hasErrors)
+        {
+            return;
+        }
+
+        _hasConfigurationValidationErrors = hasErrors;
+        OnPropertyChanged(nameof(HasValidationErrors));
     }
 }

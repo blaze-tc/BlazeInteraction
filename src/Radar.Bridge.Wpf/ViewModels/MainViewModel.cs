@@ -281,6 +281,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             _configuration.Screens.Remove(screen.Configuration);
             UnsubscribeFromScreen(screen);
             Screens.Remove(screen);
+            screen.Dispose();
             ClearMoveLogStateForScreen(screen.ScreenId);
             SelectedScreen = Screens.FirstOrDefault();
             NotifyRadarConnectionStatus();
@@ -291,6 +292,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private async Task SaveConfigurationAsync(CancellationToken token)
     {
         if (!_configuration.CanPersist) { ReceiveLog("[GLOBAL/SYSTEM] Configuration save skipped: rejected load state."); return; }
+        foreach (var screen in Screens) screen.FlushValidation();
         var validation = ConfigurationValidator.ValidateAndNormalize(_configuration);
         if (!validation.IsValid) { ReceiveLog("[GLOBAL/SYSTEM] Configuration validation failed: " + string.Join(" | ", validation.Errors)); return; }
         await _runtime.ApplyConfigurationAsync(token).ConfigureAwait(true);
@@ -341,7 +343,21 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private void OnLogReceived(string entry) => Dispatch(() => ReceiveLog(entry));
     private void OnUnityStatusChanged(UnityClientStatus status) => Dispatch(() => UnityStatus = status);
     private ScreenItemViewModel? FindScreen(string screenId) => Screens.FirstOrDefault(screen => string.Equals(screen.ScreenId, screenId, StringComparison.OrdinalIgnoreCase));
-    private void OnSelectedSensorPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) { OnPropertyChanged(string.Empty); NotifyCommandState(); }
+    private void OnSelectedSensorPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(SensorItemViewModel.SourceMode))
+        {
+            NotifyCommands(StartReplayCommand, PauseReplayCommand, ResumeReplayCommand, StepReplayCommand, StopReplayCommand, SelectReplayFileCommand);
+        }
+        else if (e.PropertyName == nameof(SensorItemViewModel.HasMatchedPhysicalTarget))
+        {
+            NotifyCommands(CaptureCalibrationPointCommand, AddMaskedRegionCommand);
+        }
+        else if (e.PropertyName == nameof(SensorItemViewModel.MaskedPolygons))
+        {
+            NotifyCommands(DeleteMaskedRegionCommand);
+        }
+    }
     private void OnScreenPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(ScreenItemViewModel.OnlineSensorCount)) NotifyRadarConnectionStatus();
@@ -371,6 +387,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var selectedScreenId = SelectedScreen?.ScreenId;
         var selectedSensorId = SelectedSensor?.SensorId;
         UnsubscribeFromScreens();
+        foreach (var screen in Screens) screen.Dispose();
         Screens.Clear();
         foreach (var screen in _configuration.Screens)
         {
@@ -472,12 +489,17 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
     private void NotifyCommandState()
     {
-        foreach (var command in new ICommand[] { AddSensorCommand, DeleteSensorCommand, DeleteOrphanedScreenConfigurationCommand, RestoreUnityResolutionCommand, ApplyFastMotionPresetCommand, ConnectSensorCommand, DisconnectSensorCommand, ConnectScreenCommand, DisconnectScreenCommand, StartReplayCommand, PauseReplayCommand, ResumeReplayCommand, StepReplayCommand, StopReplayCommand, SaveConfigurationCommand, StartRecordingCommand, StopRecordingCommand, SelectReplayFileCommand, ResetRegionCommand, BeginCalibrationCommand, CaptureCalibrationPointCommand, UndoCalibrationPointCommand, SaveCalibrationCommand, ClearCalibrationCommand, AddMaskedRegionCommand, DeleteMaskedRegionCommand })
+        NotifyCommands(AddSensorCommand, DeleteSensorCommand, DeleteOrphanedScreenConfigurationCommand, RestoreUnityResolutionCommand, ApplyFastMotionPresetCommand, ConnectSensorCommand, DisconnectSensorCommand, ConnectScreenCommand, DisconnectScreenCommand, StartReplayCommand, PauseReplayCommand, ResumeReplayCommand, StepReplayCommand, StopReplayCommand, SaveConfigurationCommand, StartRecordingCommand, StopRecordingCommand, SelectReplayFileCommand, ResetRegionCommand, BeginCalibrationCommand, CaptureCalibrationPointCommand, UndoCalibrationPointCommand, SaveCalibrationCommand, ClearCalibrationCommand, AddMaskedRegionCommand, DeleteMaskedRegionCommand);
+        OnPropertyChanged(nameof(CanEditSelectedScreen));
+    }
+
+    private static void NotifyCommands(params ICommand[] commands)
+    {
+        foreach (var command in commands)
         {
             if (command is RelayCommand relay) relay.NotifyCanExecuteChanged();
             else if (command is AsyncRelayCommand asyncRelay) asyncRelay.NotifyCanExecuteChanged();
         }
-        OnPropertyChanged(nameof(CanEditSelectedScreen));
     }
     private string CurrentLogTag() => SelectedScreen is null ? "[GLOBAL/SYSTEM]" : SelectedSensor is null ? $"[{SelectedScreen.ScreenId}/FUSION]" : $"[{SelectedScreen.ScreenId}/{SelectedSensor.SensorId}]";
 
@@ -496,5 +518,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _sensorStateSubscription = null;
         if (_selectedSensor is not null) _selectedSensor.PropertyChanged -= OnSelectedSensorPropertyChanged;
         UnsubscribeFromScreens();
+        foreach (var screen in Screens) screen.Dispose();
     }
 }
