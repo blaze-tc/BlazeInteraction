@@ -13,6 +13,8 @@ internal sealed class CameraImageSurface : FrameworkElement
         new SolidColorBrush(Color.FromRgb(0, 212, 255)), 2));
     private static readonly Pen OutlinePen = Frozen(new Pen(
         new SolidColorBrush(Color.FromArgb(190, 0, 212, 255)), 1));
+    private static readonly Pen BonePen = Frozen(new Pen(
+        new SolidColorBrush(Color.FromArgb(220, 0, 212, 255)), 1.5));
     private WriteableBitmap? _bitmap;
     private CameraRawPreviewModel? _rawModel;
     private CameraCalibrationPreviewModel? _calibrationModel;
@@ -61,6 +63,8 @@ internal sealed class CameraImageSurface : FrameworkElement
             DrawClosedPath(drawingContext, _rawModel.CalibrationVertices, CalibrationPen);
             foreach (var outline in _rawModel.Outlines)
                 DrawClosedPath(drawingContext, outline.Points, OutlinePen);
+            foreach (var bone in _rawModel.Bones)
+                drawingContext.DrawLine(BonePen, Point(bone.From), Point(bone.To));
             foreach (var joint in _rawModel.Joints)
                 drawingContext.DrawEllipse(JointBrush, null, Point(joint.Position), 2.5, 2.5);
             foreach (var tracking in _rawModel.TrackingPoints)

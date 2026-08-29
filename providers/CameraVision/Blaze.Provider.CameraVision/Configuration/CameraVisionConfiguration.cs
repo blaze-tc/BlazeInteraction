@@ -10,7 +10,7 @@ internal sealed record CameraDeviceProfile(
 
 internal sealed class CameraVisionConfiguration
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     [JsonConstructor]
     public CameraVisionConfiguration(
@@ -24,7 +24,9 @@ internal sealed class CameraVisionConfiguration
         float maximumMatchDistance,
         int lostFrameTolerance,
         IReadOnlyDictionary<string, CameraCalibration>? calibrations,
-        IReadOnlyDictionary<int, CameraDeviceProfile>? deviceProfiles = null)
+        IReadOnlyDictionary<int, CameraDeviceProfile>? deviceProfiles = null,
+        bool flipX = false,
+        bool flipY = false)
     {
         if (schemaVersion is < 1 or > CurrentSchemaVersion)
         {
@@ -132,6 +134,8 @@ internal sealed class CameraVisionConfiguration
         SmoothingFactor = smoothingFactor;
         MaximumMatchDistance = maximumMatchDistance;
         LostFrameTolerance = lostFrameTolerance;
+        FlipX = flipX;
+        FlipY = flipY;
         Calibrations = new ReadOnlyDictionary<string, CameraCalibration>(calibrationSnapshot);
         DeviceProfiles = new ReadOnlyDictionary<int, CameraDeviceProfile>(profileSnapshot);
     }
@@ -145,6 +149,8 @@ internal sealed class CameraVisionConfiguration
     public float SmoothingFactor { get; }
     public float MaximumMatchDistance { get; }
     public int LostFrameTolerance { get; }
+    public bool FlipX { get; }
+    public bool FlipY { get; }
     public IReadOnlyDictionary<string, CameraCalibration> Calibrations { get; }
     public IReadOnlyDictionary<int, CameraDeviceProfile> DeviceProfiles { get; }
 

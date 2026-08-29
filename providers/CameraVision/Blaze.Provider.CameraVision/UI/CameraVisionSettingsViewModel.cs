@@ -69,6 +69,8 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
     private float _smoothingFactor;
     private float _maximumMatchDistance;
     private int _lostFrameTolerance;
+    private bool _flipX;
+    private bool _flipY;
     private CameraVisionStatusSnapshot? _visualSnapshot;
 
     internal CameraVisionSettingsViewModel(
@@ -210,6 +212,10 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
     public float SmoothingFactor { get => _smoothingFactor; set { ValidateUnit(value); Set(ref _smoothingFactor, value); } }
     public float MaximumMatchDistance { get => _maximumMatchDistance; set { if (!float.IsFinite(value) || value <= 0) throw new ArgumentOutOfRangeException(nameof(value)); Set(ref _maximumMatchDistance, value); } }
     public int LostFrameTolerance { get => _lostFrameTolerance; set { if (value <= 0) throw new ArgumentOutOfRangeException(nameof(value)); Set(ref _lostFrameTolerance, value); } }
+    public bool FlipX { get => _flipX; set => Set(ref _flipX, value); }
+    public bool FlipY { get => _flipY; set => Set(ref _flipY, value); }
+    public int UnityOutputWidth => _outputSurface.LogicalWidth;
+    public int UnityOutputHeight => _outputSurface.LogicalHeight;
     public bool IsBusy { get => _isBusy; private set { if (Set(ref _isBusy, value)) RaiseCommands(); } }
     public string? ErrorMessage { get => _errorMessage; private set => Set(ref _errorMessage, value); }
     public ProviderRuntimeStatus ProviderStatus { get; private set; }
@@ -237,17 +243,27 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
     public ICommand RefreshDevicesCommand => _refreshDevicesCommand;
     public ICommand ResetCalibrationCommand => _resetCalibrationCommand;
 
-    internal Task SetCalibrationPointAsync(
+    internal async Task<bool> SetCalibrationPointAsync(
         int pointIndex,
         Vector2Data previewPosition,
         Vector2Data previewSize,
-        CancellationToken cancellationToken) =>
-        _control.SetCalibrationPointAsync(
-            _surfaceId,
-            pointIndex,
-            previewPosition,
-            previewSize,
-            cancellationToken);
+        CancellationToken cancellationToken)
+    {
+        var saved = false;
+        await ExecuteOperationAsync(
+            async token =>
+            {
+                await _control.SetCalibrationPointAsync(
+                    _surfaceId,
+                    pointIndex,
+                    previewPosition,
+                    previewSize,
+                    token).ConfigureAwait(false);
+                saved = true;
+            },
+            cancellationToken).ConfigureAwait(false);
+        return saved;
+    }
 
     internal Task WaitForCapabilitiesAsync() => Volatile.Read(ref _capabilityLoadTask);
 
@@ -286,7 +302,9 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
             MaximumMatchDistance,
             LostFrameTolerance,
             current.Calibrations,
-            UpdateDeviceProfiles(current));
+            UpdateDeviceProfiles(current),
+            FlipX,
+            FlipY);
         return _control.ApplyAsync(next, cancellationToken);
     }
 
@@ -557,6 +575,8 @@ internal sealed class CameraVisionSettingsViewModel : INotifyPropertyChanged, ID
         _smoothingFactor = configuration.SmoothingFactor;
         _maximumMatchDistance = configuration.MaximumMatchDistance;
         _lostFrameTolerance = configuration.LostFrameTolerance;
+        _flipX = configuration.FlipX;
+        _flipY = configuration.FlipY;
     }
 
     private void ApplyStatus(CameraVisionStatusSnapshot status)

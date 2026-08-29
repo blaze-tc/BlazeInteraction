@@ -7,6 +7,38 @@ namespace Blaze.Provider.CameraVision.Tests;
 public sealed class CameraPreviewOverlayBuilderTests
 {
     [Fact]
+    public void WorkspaceBuilderProducesOnlyRawAndUnityModelsWithoutWarpedPreview()
+    {
+        var surface = new InteractionSurface
+        {
+            SurfaceId = "main",
+            Name = "Main",
+            LogicalWidth = 1920,
+            LogicalHeight = 1080,
+            IsPrimary = true,
+            Order = 0
+        };
+
+        var workspace = CameraPreviewModelBuilder.BuildWorkspace(
+            Status([Hand(1, 0.25f)]), surface,
+            800d, 450d, 800d, 250d);
+
+        var properties = workspace.GetType().GetProperties()
+            .Select(property => property.Name)
+            .ToArray();
+        Assert.Equal(new[] { "Raw", "Unity" }, properties);
+        Assert.Equal(21, workspace.Raw.Joints.Count);
+        Assert.Equal(21, workspace.Raw.Bones.Count);
+        Assert.All(workspace.Raw.Bones, bone =>
+        {
+            Assert.InRange(bone.From.X, 0, 800);
+            Assert.InRange(bone.From.Y, 0, 450);
+            Assert.InRange(bone.To.X, 0, 800);
+            Assert.InRange(bone.To.Y, 0, 450);
+        });
+    }
+
+    [Fact]
     public void PreviewModelsShareTimestampAndUnityUsesExactOutputPointsWithoutBones()
     {
         var hands = new[] { Hand(1, 0.25f), Hand(2, 0.75f) };

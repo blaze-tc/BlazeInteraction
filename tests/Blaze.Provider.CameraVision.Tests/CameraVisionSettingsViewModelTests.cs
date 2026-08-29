@@ -115,6 +115,36 @@ public sealed class CameraVisionSettingsViewModelTests
         Assert.Equal(0.8f, saved.MinTrackingConfidence);
     }
 
+    [Fact]
+    public async Task UnityOutputSettingsRoundTripThroughApplyAndUseSurfaceResolution()
+    {
+        var control = new FakeControl(Configuration());
+        var outputSurface = new InteractionSurface
+        {
+            SurfaceId = "main",
+            Name = "Main",
+            LogicalWidth = 2560,
+            LogicalHeight = 1440,
+            IsPrimary = true,
+            Order = 0
+        };
+        var viewModel = new CameraVisionSettingsViewModel(
+            control,
+            new ImmediateDispatcher(),
+            "main",
+            outputSurface);
+
+        viewModel.FlipX = true;
+        viewModel.FlipY = true;
+        viewModel.ApplyCommand.Execute(null);
+        await WaitUntilAsync(() => control.ApplyCalls == 1 && !viewModel.IsBusy);
+
+        Assert.True(control.AppliedConfiguration!.FlipX);
+        Assert.True(control.AppliedConfiguration.FlipY);
+        Assert.Equal(2560, viewModel.UnityOutputWidth);
+        Assert.Equal(1440, viewModel.UnityOutputHeight);
+    }
+
     [Theory]
     [InlineData(1)]
     [InlineData(8)]
@@ -216,6 +246,30 @@ public sealed class CameraVisionSettingsViewModelTests
         control.ReleaseApply();
         await WaitUntilAsync(() => !viewModel.IsBusy);
         Assert.Contains("apply failed", viewModel.ErrorMessage!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CalibrationFailureIsReportedAndReturnsFalseForOverlayRecovery()
+    {
+        var control = new FakeControl(Configuration())
+        {
+            CalibrationFailure = new InvalidOperationException("calibration rejected")
+        };
+        var viewModel = new CameraVisionSettingsViewModel(
+            control,
+            new ImmediateDispatcher(),
+            "main");
+
+        var saved = await viewModel.SetCalibrationPointAsync(
+            0,
+            new Vector2Data(10, 10),
+            new Vector2Data(1280, 720),
+            CancellationToken.None);
+
+        Assert.False(saved);
+        Assert.Equal(1, control.CalibrationCalls);
+        Assert.False(viewModel.IsBusy);
+        Assert.Contains("calibration rejected", viewModel.ErrorMessage!, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -321,6 +375,8 @@ public sealed class CameraVisionSettingsViewModelTests
         public int SubscriberCount { get; private set; }
         public CameraVisionConfiguration? AppliedConfiguration { get; private set; }
         public Exception? ApplyFailure { get; set; }
+        public Exception? CalibrationFailure { get; set; }
+        public int CalibrationCalls { get; private set; }
         public IReadOnlyList<CameraDeviceDescriptor> EnumeratedDevices { get; set; } =
             [new CameraDeviceDescriptor(0, "Camera 0")];
         public Dictionary<int, CameraDeviceCapabilities> Capabilities { get; } = new();
@@ -367,8 +423,13 @@ public sealed class CameraVisionSettingsViewModelTests
         }
         public Task ReconnectAsync(CancellationToken cancellationToken) => Task.CompletedTask;
         public Task SetCalibrationPointAsync(string surfaceId, int pointIndex,
-            Vector2Data previewPosition, Vector2Data previewSize, CancellationToken cancellationToken) =>
-            Task.CompletedTask;
+            Vector2Data previewPosition, Vector2Data previewSize, CancellationToken cancellationToken)
+        {
+            CalibrationCalls++;
+            return CalibrationFailure is null
+                ? Task.CompletedTask
+                : Task.FromException(CalibrationFailure);
+        }
         public Task ResetCalibrationAsync(string surfaceId, CancellationToken cancellationToken) =>
             Task.CompletedTask;
         internal void BlockApply() =>

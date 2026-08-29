@@ -1,5 +1,7 @@
 using Blaze.Interaction.Contracts;
 using Blaze.Interaction.Provider.Abstractions;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Blaze.Provider.CameraVision.Tests;
 
@@ -10,7 +12,7 @@ public sealed class CameraVisionConfigurationTests
     {
         var configuration = CameraVisionConfiguration.CreateDefault();
 
-        Assert.Equal(2, configuration.SchemaVersion);
+        Assert.Equal(3, configuration.SchemaVersion);
         Assert.Equal(1280, configuration.Capture.Width);
         Assert.Equal(720, configuration.Capture.Height);
         Assert.Equal(30d, configuration.Capture.FramesPerSecond);
@@ -21,6 +23,12 @@ public sealed class CameraVisionConfigurationTests
         Assert.Equal(0.35f, configuration.SmoothingFactor);
         Assert.True(configuration.MaximumMatchDistance > 0f);
         Assert.True(configuration.LostFrameTolerance > 0);
+        var serialized = JsonSerializer.SerializeToNode(
+            configuration,
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })!
+            .AsObject();
+        Assert.True(serialized["flipX"]?.GetValue<bool>() is false);
+        Assert.True(serialized["flipY"]?.GetValue<bool>() is false);
         Assert.Equal(
             new CameraCaptureMode(1280, 720, 30),
             configuration.DeviceProfiles[configuration.Capture.DeviceIndex].Mode);
@@ -135,11 +143,85 @@ public sealed class CameraVisionConfigurationTests
         var loaded = await store.LoadOrCreateAsync(CancellationToken.None);
 
         Assert.True(loaded.IsSuccess, loaded.Error);
-        Assert.Equal(2, loaded.Configuration!.SchemaVersion);
+        Assert.Equal(3, loaded.Configuration!.SchemaVersion);
         var profile = loaded.Configuration.DeviceProfiles[2];
         Assert.Equal(new CameraCaptureMode(1280, 720, 30), profile.Mode);
         Assert.True(profile.MirrorX);
         Assert.Equal(CameraRotation.Rotate90, profile.Rotation);
+    }
+
+    [Fact]
+    public async Task Load_Schema2WithoutOutputFlipsMigratesToFalseDefaults()
+    {
+        using var root = new TemporaryDirectory();
+        var store = new CameraVisionConfigurationStore(new Storage(root.Path));
+        Directory.CreateDirectory(Path.GetDirectoryName(store.ConfigurationPath)!);
+        await File.WriteAllTextAsync(store.ConfigurationPath,
+            """
+            {
+              "schemaVersion": 2,
+              "capture": {
+                "deviceIndex": 0,
+                "width": 1280,
+                "height": 720,
+                "framesPerSecond": 30,
+                "mirrorX": false,
+                "rotation": "rotate0",
+                "reconnectDelay": "00:00:01"
+              },
+              "maxHands": 8,
+              "minDetectionConfidence": 0.5,
+              "minTrackingConfidence": 0.5,
+              "trackingPoint": "indexTip",
+              "smoothingFactor": 0.35,
+              "maximumMatchDistance": 0.2,
+              "lostFrameTolerance": 2,
+              "calibrations": {},
+              "deviceProfiles": {}
+            }
+            """);
+
+        var loaded = await store.LoadOrCreateAsync(CancellationToken.None);
+        Assert.True(loaded.IsSuccess, loaded.Error);
+        await store.SaveAsync(loaded.Configuration!, CancellationToken.None);
+        var roundTripped = await store.LoadOrCreateAsync(CancellationToken.None);
+        var serialized = JsonSerializer.SerializeToNode(
+            roundTripped.Configuration,
+            new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase })!
+            .AsObject();
+
+        Assert.Equal(3, roundTripped.Configuration!.SchemaVersion);
+        Assert.True(serialized["flipX"]?.GetValue<bool>() is false);
+        Assert.True(serialized["flipY"]?.GetValue<bool>() is false);
+    }
+
+    [Fact]
+    public async Task SaveAndLoad_PreservesSchema3OutputFlips()
+    {
+        using var root = new TemporaryDirectory();
+        var store = new CameraVisionConfigurationStore(new Storage(root.Path));
+        var defaults = CameraVisionConfiguration.CreateDefault();
+        var configuration = new CameraVisionConfiguration(
+            CameraVisionConfiguration.CurrentSchemaVersion,
+            defaults.Capture,
+            defaults.MaxHands,
+            defaults.MinDetectionConfidence,
+            defaults.MinTrackingConfidence,
+            defaults.TrackingPoint,
+            defaults.SmoothingFactor,
+            defaults.MaximumMatchDistance,
+            defaults.LostFrameTolerance,
+            defaults.Calibrations,
+            defaults.DeviceProfiles,
+            flipX: true,
+            flipY: true);
+
+        await store.SaveAsync(configuration, CancellationToken.None);
+        var loaded = await store.LoadOrCreateAsync(CancellationToken.None);
+
+        Assert.True(loaded.IsSuccess, loaded.Error);
+        Assert.True(loaded.Configuration!.FlipX);
+        Assert.True(loaded.Configuration.FlipY);
     }
 
     [Fact]

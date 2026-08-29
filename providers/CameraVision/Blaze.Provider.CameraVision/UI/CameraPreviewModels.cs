@@ -11,6 +11,7 @@ internal sealed record CameraRawPreviewModel(
     AspectFitTransform Transform,
     IReadOnlyList<Vector2Data> CalibrationVertices,
     IReadOnlyList<CameraOverlayJoint> Joints,
+    IReadOnlyList<CameraOverlayBone> Bones,
     IReadOnlyList<CameraOverlayTrackingPoint> TrackingPoints,
     IReadOnlyList<CameraOverlayOutline> Outlines);
 
@@ -35,8 +36,98 @@ internal sealed record CameraPreviewModelSet(
     CameraCalibrationPreviewModel Calibration,
     CameraUnityPreviewModel Unity);
 
+internal sealed record CameraWorkspacePreviewModelSet(
+    CameraRawPreviewModel Raw,
+    CameraUnityPreviewModel Unity);
+
 internal static class CameraPreviewModelBuilder
 {
+    internal static CameraWorkspacePreviewModelSet BuildWorkspace(
+        CameraVisionStatusSnapshot snapshot,
+        InteractionSurface surface,
+        double rawWidth,
+        double rawHeight,
+        double unityWidth,
+        double unityHeight)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(surface);
+        var preview = snapshot.Preview
+            ?? throw new InvalidOperationException("Camera preview is not available.");
+        var rawTransform = AspectFitTransform.Create(
+            preview.Width, preview.Height, rawWidth, rawHeight);
+        var calibration = CalibrationVertices(snapshot, preview);
+        var rawVertices = calibration
+            .Select(rawTransform.SourceToViewport)
+            .ToArray();
+        var overlay = CameraPreviewOverlayBuilder.Build(
+            snapshot,
+            (float)rawTransform.ContentWidth,
+            (float)rawTransform.ContentHeight);
+        var joints = overlay.Joints
+            .Select(joint => joint with
+            {
+                Position = new Vector2Data(
+                    joint.Position.X + (float)rawTransform.OffsetX,
+                    joint.Position.Y + (float)rawTransform.OffsetY)
+            })
+            .ToArray();
+        var bones = overlay.Bones
+            .Select(bone => bone with
+            {
+                From = new Vector2Data(
+                    bone.From.X + (float)rawTransform.OffsetX,
+                    bone.From.Y + (float)rawTransform.OffsetY),
+                To = new Vector2Data(
+                    bone.To.X + (float)rawTransform.OffsetX,
+                    bone.To.Y + (float)rawTransform.OffsetY)
+            })
+            .ToArray();
+        var tracking = overlay.TrackingPoints
+            .Select(point => point with
+            {
+                Position = new Vector2Data(
+                    point.Position.X + (float)rawTransform.OffsetX,
+                    point.Position.Y + (float)rawTransform.OffsetY)
+            })
+            .ToArray();
+        var outlines = overlay.Outlines
+            .Select(outline => outline with
+            {
+                Points = outline.Points.Select(point => new Vector2Data(
+                    point.X + (float)rawTransform.OffsetX,
+                    point.Y + (float)rawTransform.OffsetY)).ToArray()
+            })
+            .ToArray();
+        var raw = new CameraRawPreviewModel(
+            snapshot.TimestampUnixMs,
+            preview,
+            rawTransform,
+            rawVertices,
+            joints,
+            bones,
+            tracking,
+            outlines);
+
+        var unityTransform = AspectFitTransform.Create(
+            surface.LogicalWidth,
+            surface.LogicalHeight,
+            unityWidth,
+            unityHeight);
+        var unityPoints = snapshot.OutputPoints
+            .Select(point => new CameraUnityPointModel(
+                point,
+                unityTransform.SourceToViewport(point.PixelPosition),
+                point.Fp.Select(unityTransform.SourceToViewport).ToArray()))
+            .ToArray();
+        var unity = new CameraUnityPreviewModel(
+            snapshot.TimestampUnixMs,
+            unityTransform,
+            unityPoints);
+
+        return new CameraWorkspacePreviewModelSet(raw, unity);
+    }
+
     internal static CameraPreviewModelSet Build(
         CameraVisionStatusSnapshot snapshot,
         InteractionSurface surface,
@@ -69,6 +160,17 @@ internal static class CameraPreviewModelBuilder
                     joint.Position.Y + (float)rawTransform.OffsetY)
             })
             .ToArray();
+        var bones = overlay.Bones
+            .Select(bone => bone with
+            {
+                From = new Vector2Data(
+                    bone.From.X + (float)rawTransform.OffsetX,
+                    bone.From.Y + (float)rawTransform.OffsetY),
+                To = new Vector2Data(
+                    bone.To.X + (float)rawTransform.OffsetX,
+                    bone.To.Y + (float)rawTransform.OffsetY)
+            })
+            .ToArray();
         var tracking = overlay.TrackingPoints
             .Select(point => point with
             {
@@ -91,6 +193,7 @@ internal static class CameraPreviewModelBuilder
             rawTransform,
             rawVertices,
             joints,
+            bones,
             tracking,
             outlines);
 

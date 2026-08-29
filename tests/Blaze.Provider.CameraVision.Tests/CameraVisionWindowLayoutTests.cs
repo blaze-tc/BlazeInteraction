@@ -5,7 +5,7 @@ namespace Blaze.Provider.CameraVision.Tests;
 public sealed class CameraVisionWindowLayoutTests
 {
     [Fact]
-    public void CameraWindow_ContainsThreeVerticalPreviewRowsAndLinkedDropdowns()
+    public void CameraWindow_ContainsTwoVerticalPreviewRowsAndLinkedDropdowns()
     {
         var xaml = File.ReadAllText(Path.Combine(
             FindRepositoryRoot(),
@@ -13,10 +13,11 @@ public sealed class CameraVisionWindowLayoutTests
             "CameraVisionSettingsWindow.xaml"));
 
         Assert.Contains("x:Name=\"RawCameraPreview\"", xaml);
-        Assert.Contains("x:Name=\"CalibrationPreview\"", xaml);
+        Assert.DoesNotContain("x:Name=\"CalibrationPreview\"", xaml);
+        Assert.Contains("x:Name=\"CalibrationOverlay\"", xaml);
         Assert.Contains("x:Name=\"UnityPointPreview\"", xaml);
         Assert.Contains("Height=\"3*\"", xaml);
-        Assert.Equal(2, Regex.Matches(xaml, "Height=\\\"1\\*\\\"").Count);
+        Assert.Single(Regex.Matches(xaml, "Height=\\\"1\\*\\\"").Cast<Match>());
         Assert.Contains("x:Name=\"ResolutionCombo\"", xaml);
         Assert.Contains("x:Name=\"FrameRateCombo\"", xaml);
         Assert.DoesNotContain("Stretch=\"Fill\"", xaml);

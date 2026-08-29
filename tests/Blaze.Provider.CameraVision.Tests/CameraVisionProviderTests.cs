@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Blaze.Interaction.Contracts;
 using Blaze.Interaction.Provider.Abstractions;
 using Blaze.Interaction.Runtime;
@@ -123,6 +124,52 @@ public sealed class CameraVisionProviderTests
         Assert.Equal(new long[] { 1, 2 }, received[0].Points.Select(point => point.Id));
         Assert.Equal(new long[] { 2, 1 }, received[1].Points.Select(point => point.Id));
         Assert.Equal("hand-track-1", received[1].Points[1].SourceId);
+        await provider.DisposeAsync();
+    }
+
+    [Theory]
+    [InlineData(false, false, 0.25f, 0.3f)]
+    [InlineData(true, false, 0.75f, 0.3f)]
+    [InlineData(false, true, 0.25f, 0.7f)]
+    [InlineData(true, true, 0.75f, 0.7f)]
+    public async Task OutputFlipsTransformCenterLandmarksAndExtensionBeforeUnityScaling(
+        bool flipX,
+        bool flipY,
+        float expectedX,
+        float expectedY)
+    {
+        using var services = new TestServices(
+            () => new UnavailableCameraBackend(),
+            () => new FakeHandBackend(HandDetectionResult.Empty));
+        await services.SeedConfigurationAsync();
+        await services.SetOutputFlipsAsync(flipX, flipY);
+        var provider = await InitializedProviderAsync(services);
+        await provider.StartAsync(CancellationToken.None);
+        var frameReady = NextInteractionFrame(provider);
+
+        provider.PublishHandFrame(ProcessingFrame([Snapshot(42, 0.25f, 0.3f)], [], 1));
+        var point = Assert.Single((await frameReady.WaitAsync(TimeSpan.FromSeconds(5))).Points);
+
+        Assert.Equal(expectedX, point.NormalizedPosition.X, 3);
+        Assert.Equal(expectedY, point.NormalizedPosition.Y, 3);
+        Assert.Equal(expectedX * 1920f, point.PixelPosition.X, 3);
+        Assert.Equal(expectedY * 1080f, point.PixelPosition.Y, 3);
+        Assert.All(point.Fp, landmark =>
+        {
+            Assert.Equal(expectedX * 1920f, landmark.X, 3);
+            Assert.Equal(expectedY * 1080f, landmark.Y, 3);
+        });
+        var extensionLandmark = point.Extensions!["hand"]
+            .GetProperty("landmarks")[0];
+        Assert.Equal(expectedX,
+            extensionLandmark.GetProperty("normalizedPosition").GetProperty("x").GetSingle(), 3);
+        Assert.Equal(expectedY,
+            extensionLandmark.GetProperty("normalizedPosition").GetProperty("y").GetSingle(), 3);
+        Assert.Equal(expectedX * 1920f,
+            extensionLandmark.GetProperty("pixelPosition").GetProperty("x").GetSingle(), 3);
+        Assert.Equal(expectedY * 1080f,
+            extensionLandmark.GetProperty("pixelPosition").GetProperty("y").GetSingle(), 3);
+
         await provider.DisposeAsync();
     }
 
@@ -288,17 +335,17 @@ public sealed class CameraVisionProviderTests
             detectedHandCount: active.Count,
             rejectedHandCount: 0);
 
-    private static CameraHandSnapshot Snapshot(long trackId, float position)
+    private static CameraHandSnapshot Snapshot(long trackId, float position, float y = 0.5f)
     {
-        var normalized = new Vector2Data(position, 0.5f);
+        var normalized = new Vector2Data(position, y);
         return new CameraHandSnapshot(
             trackId,
             0.9f,
-            new Vector2Data(position * 100f, 50f),
+            new Vector2Data(position * 100f, y * 100f),
             normalized,
             Enumerable.Range(0, 21).Select(index => new CameraMappedLandmark(
                 index,
-                new Vector2Data(position * 100f, 50f),
+                new Vector2Data(position * 100f, y * 100f),
                 normalized,
                 -index / 100f)));
     }
@@ -417,6 +464,18 @@ public sealed class CameraVisionProviderTests
                 });
             return new CameraVisionConfigurationStore(this)
                 .SaveAsync(configuration, CancellationToken.None);
+        }
+
+        public async Task SetOutputFlipsAsync(bool flipX, bool flipY)
+        {
+            var store = new CameraVisionConfigurationStore(this);
+            var document = JsonNode.Parse(await File.ReadAllTextAsync(store.ConfigurationPath))!
+                .AsObject();
+            document["flipX"] = flipX;
+            document["flipY"] = flipY;
+            await File.WriteAllTextAsync(
+                store.ConfigurationPath,
+                document.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         }
 
         public void Dispose() => _data.Dispose();

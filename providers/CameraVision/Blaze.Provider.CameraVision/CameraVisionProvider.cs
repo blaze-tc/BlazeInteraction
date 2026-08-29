@@ -683,11 +683,21 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
         var orderedLandmarks = hand.Landmarks
             .OrderBy(landmark => landmark.Index)
             .ToArray();
-        var mappedLandmarks = orderedLandmarks
-            .Select(landmark => new Vector2Data(
-                landmark.NormalizedPosition.X * surface.LogicalWidth,
-                landmark.NormalizedPosition.Y * surface.LogicalHeight))
+        var outputLandmarks = orderedLandmarks
+            .Select(landmark => ApplyOutputFlip(
+                landmark.NormalizedPosition,
+                configuration.FlipX,
+                configuration.FlipY))
             .ToArray();
+        var mappedLandmarks = outputLandmarks
+            .Select(position => new Vector2Data(
+                position.X * surface.LogicalWidth,
+                position.Y * surface.LogicalHeight))
+            .ToArray();
+        var outputCenter = ApplyOutputFlip(
+            hand.NormalizedPosition,
+            configuration.FlipX,
+            configuration.FlipY);
         var extension = JsonSerializer.SerializeToElement(
             new
             {
@@ -696,7 +706,7 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
                 landmarks = orderedLandmarks.Select((landmark, index) => new
                 {
                     index = landmark.Index,
-                    normalizedPosition = landmark.NormalizedPosition,
+                    normalizedPosition = outputLandmarks[index],
                     pixelPosition = mappedLandmarks[index],
                     z = landmark.Z
                 }).ToArray()
@@ -710,10 +720,10 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
             ProviderInstanceId = ProviderInstanceId,
             SourceId = $"hand-track-{hand.TrackId}",
             Phase = InteractionPhase.Hover,
-            NormalizedPosition = hand.NormalizedPosition,
+            NormalizedPosition = outputCenter,
             PixelPosition = new Vector2Data(
-                hand.NormalizedPosition.X * surface.LogicalWidth,
-                hand.NormalizedPosition.Y * surface.LogicalHeight),
+                outputCenter.X * surface.LogicalWidth,
+                outputCenter.Y * surface.LogicalHeight),
             Confidence = hand.Confidence,
             TimestampUnixMs = timestampUnixMs,
             Fp = mappedLandmarks,
@@ -721,6 +731,14 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
                 new Dictionary<string, JsonElement> { ["hand"] = extension })
         };
     }
+
+    private static Vector2Data ApplyOutputFlip(
+        Vector2Data normalized,
+        bool flipX,
+        bool flipY) =>
+        new(
+            flipX ? 1f - normalized.X : normalized.X,
+            flipY ? 1f - normalized.Y : normalized.Y);
 
     private async Task MonitorProcessingAsync(CameraHandProcessingService processing)
     {
@@ -1004,7 +1022,9 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
             configuration.MaximumMatchDistance,
             configuration.LostFrameTolerance,
             calibrations ?? configuration.Calibrations,
-            configuration.DeviceProfiles);
+            configuration.DeviceProfiles,
+            configuration.FlipX,
+            configuration.FlipY);
 
     private static bool ProcessingConfigurationEquals(
         CameraVisionConfiguration left,

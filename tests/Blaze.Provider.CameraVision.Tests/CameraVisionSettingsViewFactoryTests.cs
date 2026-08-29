@@ -1,5 +1,9 @@
 using System.Runtime.ExceptionServices;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Media;
+using Polygon = System.Windows.Shapes.Polygon;
 using System.Windows.Threading;
 using Blaze.Interaction.Contracts;
 using Blaze.Interaction.Provider.Abstractions;
@@ -39,6 +43,33 @@ public sealed class CameraVisionSettingsViewFactoryTests
                 Assert.False(viewModel.IsDisposed);
                 window.Show();
                 window.Dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                var title = Assert.IsType<TextBlock>(window.FindName("CameraConsoleTitle"));
+                var titleBrush = Assert.IsType<SolidColorBrush>(title.Foreground);
+                Assert.True(
+                    titleBrush.Color.R + titleBrush.Color.G + titleBrush.Color.B < 300,
+                    $"Camera title color {titleBrush.Color} is too light for its white background.");
+                var workspace = Assert.IsType<Grid>(window.FindName("PreviewWorkspace"));
+                Assert.Equal(3, workspace.RowDefinitions.Count);
+                Assert.NotNull(window.FindName("RawCameraPreview"));
+                Assert.Null(window.FindName("CalibrationPreview"));
+                Assert.NotNull(window.FindName("UnityPointPreview"));
+                var calibrationOverlay = Assert.IsType<Canvas>(window.FindName("CalibrationOverlay"));
+                Assert.False(calibrationOverlay.ClipToBounds);
+                Assert.IsType<Polygon>(window.FindName("CalibrationPolygon"));
+                foreach (var name in new[]
+                         {
+                             "CalibrationHandleP1", "CalibrationHandleP2",
+                             "CalibrationHandleP3", "CalibrationHandleP4"
+                         })
+                {
+                    Assert.IsType<Thumb>(window.FindName(name));
+                }
+                Assert.Equal("1920",
+                    Assert.IsType<TextBlock>(window.FindName("UnityOutputWidthText")).Text);
+                Assert.Equal("1080",
+                    Assert.IsType<TextBlock>(window.FindName("UnityOutputHeightText")).Text);
+                Assert.IsType<CheckBox>(window.FindName("FlipXCheck"));
+                Assert.IsType<CheckBox>(window.FindName("FlipYCheck"));
                 Assert.True(
                     window.ActualHeight <= SystemParameters.WorkArea.Height,
                     $"Camera window height {window.ActualHeight} exceeds work area height {SystemParameters.WorkArea.Height}.");
@@ -68,11 +99,13 @@ public sealed class CameraVisionSettingsViewFactoryTests
 
         foreach (var name in new[]
                  {
-                     "RawCameraPreview", "CalibrationPreview", "UnityPointPreview",
+                     "RawCameraPreview", "UnityPointPreview",
                      "DeviceCombo", "ResolutionCombo", "FrameRateCombo",
                      "MirrorCheck", "RotationCombo", "MaxHandsBox", "TrackingCombo",
                      "DetectionConfidenceBox", "TrackingConfidenceBox", "SmoothingBox",
-                     "CalibrationP1", "CalibrationP2", "CalibrationP3", "CalibrationP4",
+                     "CalibrationHandleP1", "CalibrationHandleP2",
+                     "CalibrationHandleP3", "CalibrationHandleP4",
+                     "FlipXCheck", "FlipYCheck", "UnityOutputWidthText", "UnityOutputHeightText",
                      "ResetCalibrationButton", "RefreshDevicesButton", "ApplyButton", "ReconnectButton",
                      "UnityStatusText", "CameraStatusText", "CameraFpsText", "InferenceFpsText",
                      "OutputFpsText", "LatencyText", "DetectedHandsText", "DroppedFramesText"

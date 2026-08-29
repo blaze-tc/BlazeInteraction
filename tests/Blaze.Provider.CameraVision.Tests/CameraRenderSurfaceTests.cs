@@ -84,6 +84,7 @@ public sealed class CameraRenderSurfaceTests
         AspectFitTransform.Create(frame.Width, frame.Height, 200, 100),
         Array.Empty<Vector2Data>(),
         Array.Empty<CameraOverlayJoint>(),
+        Array.Empty<CameraOverlayBone>(),
         Array.Empty<CameraOverlayTrackingPoint>(),
         Array.Empty<CameraOverlayOutline>());
 
