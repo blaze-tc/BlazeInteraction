@@ -284,7 +284,7 @@ internal sealed class WpfBridgeWindowFactory : IBridgeWindowFactory
         };
 
     public object CreateProviderHeader(ProviderHeaderViewModel viewModel) =>
-        new ProviderHeaderView { DataContext = viewModel };
+        new ProviderHeaderView(viewModel);
 
     public object WrapProviderContent(object header, object? originalContent)
     {
