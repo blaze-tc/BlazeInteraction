@@ -172,6 +172,28 @@ public sealed class CameraHandProcessingServiceTests
     }
 
     [Fact]
+    public async Task ProcessingFault_IsReportedByCompletionButDisposeDoesNotRepeatIt()
+    {
+        using var slot = new LatestFrameSlot<CameraFrame>();
+        var backend = new FakeHandDetectionBackend((_, _, _) =>
+            ValueTask.FromException<HandDetectionResult>(
+                new InvalidOperationException("invalid crop coordinates")));
+        var service = Service(slot, backend);
+        await service.StartAsync(CancellationToken.None);
+        var frame = Frame(1);
+        slot.Publish(frame);
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await service.Completion.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Contains("invalid crop coordinates", failure.Message, StringComparison.Ordinal);
+
+        await service.DisposeAsync();
+
+        Assert.Equal(1, backend.DisposeCount);
+        Assert.Throws<ObjectDisposedException>(() => _ = frame.Image);
+    }
+
+    [Fact]
     public async Task StartStop_FiftyTimes_ReleasesEveryBackendAndFrame()
     {
         for (var iteration = 0; iteration < 50; iteration++)

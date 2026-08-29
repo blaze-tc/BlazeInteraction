@@ -1,0 +1,40 @@
+diff --git a/mediapipe/calculators/tensor/image_to_tensor_converter_frame_buffer.cc b/mediapipe/calculators/tensor/image_to_tensor_converter_frame_buffer.cc
+index d22a8bb..253ba45 100644
+--- a/mediapipe/calculators/tensor/image_to_tensor_converter_frame_buffer.cc
++++ b/mediapipe/calculators/tensor/image_to_tensor_converter_frame_buffer.cc
+@@ -37,6 +37,18 @@ int RadiansToDegrees(float radians) {
+   return degrees;
+ }
+ 
++bool RoiExtendsBeyondInput(const RotatedRect& roi,
++                           const FrameBuffer::Dimension& input_dims) {
++  const float cosine = std::abs(std::cos(roi.rotation));
++  const float sine = std::abs(std::sin(roi.rotation));
++  const float extent_x = (cosine * roi.width + sine * roi.height) * 0.5f;
++  const float extent_y = (sine * roi.width + cosine * roi.height) * 0.5f;
++  return roi.center_x - extent_x < 0.0f ||
++         roi.center_y - extent_y < 0.0f ||
++         roi.center_x + extent_x > input_dims.width ||
++         roi.center_y + extent_y > input_dims.height;
++}
++
+ // FrameBuffer-based implementation of ImageToTensorConverter.
+ class ImageToTensorFrameBufferConverter : public ImageToTensorConverter {
+  public:
+@@ -85,6 +97,16 @@ absl::Status ImageToTensorFrameBufferConverter::Convert(
+   FrameBuffer::Dimension output_dimension{/*width=*/output_shape.dims[2],
+                                           /*height=*/output_shape.dims[1]};
+ 
++  // Hand tracking ROIs can legitimately extend beyond the image while a hand
++  // enters or leaves the frame. FrameBuffer::Crop rejects those coordinates,
++  // so route out-of-bounds float ROIs through the border-aware sampler while
++  // retaining the optimized FrameBuffer path for ordinary in-bounds frames.
++  if (tensor_type_ == Tensor::ElementType::kFloat32 &&
++      RoiExtendsBeyondInput(roi, input_frame->dimension())) {
++    return WarpRgbToTensor(input_frame, roi, range_min, range_max,
++                           output_tensor);
++  }
++
+   // Optimized path for multiples of 90°.
+   if (RadiansToDegrees(roi.rotation) % 90 == 0) {
+     if (tensor_type_ == Tensor::ElementType::kUInt8) {

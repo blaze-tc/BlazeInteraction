@@ -30,6 +30,32 @@ public sealed class NativeAbiContractTests
         }
     }
 
+    [Fact]
+    public void FrameBufferPatch_RoutesFloatRoisThroughBorderAwareWarp()
+    {
+        var patchPath = RepositoryPath(
+            "native",
+            "Blaze.HandTracking.Native",
+            "patches",
+            "mediapipe-frame-buffer-out-of-bounds-roi.patch");
+
+        Assert.True(File.Exists(patchPath), $"Out-of-bounds ROI patch was not found: {patchPath}");
+        var patch = File.ReadAllText(patchPath);
+
+        Assert.Contains(
+            "RoiExtendsBeyondInput",
+            patch,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "tensor_type_ == Tensor::ElementType::kFloat32 &&",
+            patch,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "route out-of-bounds float ROIs through the border-aware sampler",
+            patch,
+            StringComparison.Ordinal);
+    }
+
     private static string RepositoryPath(params string[] segments)
     {
         var current = new DirectoryInfo(AppContext.BaseDirectory);

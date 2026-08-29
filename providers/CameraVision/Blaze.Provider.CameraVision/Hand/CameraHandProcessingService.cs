@@ -136,7 +136,16 @@ internal sealed class CameraHandProcessingService : IAsyncDisposable
 
         try
         {
-            await StopAsync(CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                await StopAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Completion is the authoritative runtime-fault channel. Do not
+                // report that same frame-processing failure again as a cleanup
+                // failure when the provider is stopped or switched.
+            }
         }
         finally
         {

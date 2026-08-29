@@ -172,6 +172,31 @@ if (-not $rotationPatchAlreadyApplied) {
     }
 }
 
+$frameBufferRoiPatchPath = Join-Path $repositoryRoot 'native\Blaze.HandTracking.Native\patches\mediapipe-frame-buffer-out-of-bounds-roi.patch'
+try {
+    $ErrorActionPreference = 'Continue'
+    & git -C $sourceRoot apply --reverse --check $frameBufferRoiPatchPath 2>$null
+    $roiPatchAlreadyApplied = $LASTEXITCODE -eq 0
+} finally {
+    $ErrorActionPreference = $savedErrorActionPreference
+}
+if (-not $roiPatchAlreadyApplied) {
+    try {
+        $ErrorActionPreference = 'Continue'
+        & git -C $sourceRoot apply --check $frameBufferRoiPatchPath 2>$null
+        $roiPatchMatches = $LASTEXITCODE -eq 0
+    } finally {
+        $ErrorActionPreference = $savedErrorActionPreference
+    }
+    if (-not $roiPatchMatches) {
+        throw 'MediaPipe FrameBuffer out-of-bounds ROI patch does not match the pinned checkout.'
+    }
+    & git -C $sourceRoot apply $frameBufferRoiPatchPath
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Failed to apply the MediaPipe FrameBuffer out-of-bounds ROI patch.'
+    }
+}
+
 # MediaPipe's Halide rule puts GCC -Wno-* options in the platform-common list.
 # Bazel translates them to invalid /W... values for MSVC, so remove only those
 # warning-suppression entries in this Windows-only pinned build checkout.
