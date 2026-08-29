@@ -54,3 +54,20 @@ raw points, filtered points, and fused-screen output.
 The 100,000-point fixture is deliberately much larger than the 28-point live
 simulation frame so point-budget and pending-work bounds can be verified without
 depending on hardware or timing.
+
+## Post-change automated gate
+
+Captured on 2026-08-29 after the bounded rendering and expanded-editor lifecycle
+changes.
+
+- The deterministic 100,000-point UI fixture passes with bounded retained point
+  collections and coalesced dispatcher work.
+- The expanded editor lifecycle test passes for 100 consecutive open/close
+  cycles, including owner-close cleanup.
+- The complete RadarControl regression set passes: 484/484 tests.
+- The complete BlazeInteraction solution passes: 966/966 tests, including all
+  Radar provider and compatibility suites.
+
+Status: **AUTOMATED GATE PASS**. A 30-minute live Radar hardware soak with
+100,000 points per frame was not performed in this session and remains an
+explicit manual verification item; it is not represented as completed here.
