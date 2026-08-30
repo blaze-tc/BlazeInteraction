@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/google-ai-edge/mediapipe.git",
+  "tag": "v0.10.35",
+  "commit": "f8ef212d5c962c0e853db7e59d217056b187084b",
+  "modelUrl": "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+  "modelSha256": "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1",
+  "abiVersion": 1,
+  "nativeDllSha256": "cef013c2f2f555b12e5529ee21f0ddc05fd55178beaa600813259f262eb739b7"
+}

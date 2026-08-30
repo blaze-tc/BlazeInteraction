@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Radar.Contracts\Radar.Contracts.csproj" />
+    <ProjectReference Include="..\Radar.Configuration\Radar.Configuration.csproj" />
+    <ProjectReference Include="..\Radar.Device\Radar.Device.csproj" />
+    <ProjectReference Include="..\Radar.Protocol\Radar.Protocol.csproj" />
+    <ProjectReference Include="..\Radar.Processing\Radar.Processing.csproj" />
+    <ProjectReference Include="..\Radar.Ipc\Radar.Ipc.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Page Include="..\Blaze.Interaction.Bridge.Wpf\Resources\InteractionConsoleTheme.xaml"
+          Link="Resources\InteractionConsoleTheme.xaml" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <AssemblyName>RadarBridge</AssemblyName>
+    <Version>1.2.10</Version>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+</Project>

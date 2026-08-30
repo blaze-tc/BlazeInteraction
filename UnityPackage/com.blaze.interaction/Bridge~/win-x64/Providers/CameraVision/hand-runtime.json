@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "abiVersion": 1,
+  "nativeLibrary": {
+    "path": "runtimes/win-x64/native/Blaze.HandTracking.Native.dll",
+    "sha256": "cef013c2f2f555b12e5529ee21f0ddc05fd55178beaa600813259f262eb739b7"
+  },
+  "model": {
+    "path": "models/hand_landmarker.task",
+    "sha256": "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1"
+  }
+}

@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>Blaze.Provider.CameraVision</AssemblyName>
+    <Version>1.1.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="OpenCvSharp4" Version="4.13.0.20260627">
+      <ExcludeAssets>analyzers</ExcludeAssets>
+    </PackageReference>
+    <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.13.0.20260627" />
+    <ProjectReference Include="..\..\..\src\Blaze.Interaction.Contracts\Blaze.Interaction.Contracts.csproj" />
+    <ProjectReference Include="..\..\..\src\Blaze.Interaction.Provider.Abstractions\Blaze.Interaction.Provider.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Page Include="..\..\..\src\Blaze.Interaction.Bridge.Wpf\Resources\InteractionConsoleTheme.xaml"
+          Link="Resources\InteractionConsoleTheme.xaml" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Blaze.Provider.CameraVision.Tests" />
+    <None Include="provider.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="profiles\camera-vision-default.json"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Update="models\hand_landmarker.task"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+    <None Update="runtimes\win-x64\native\Blaze.HandTracking.Native.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

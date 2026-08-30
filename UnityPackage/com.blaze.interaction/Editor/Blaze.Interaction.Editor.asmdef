@@ -1,0 +1,19 @@
+{
+  "name": "Blaze.Interaction.Editor",
+  "rootNamespace": "Blaze.Interaction.Editor",
+  "references": [
+    "Blaze.Interaction.Runtime",
+    "Unity.ugui"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

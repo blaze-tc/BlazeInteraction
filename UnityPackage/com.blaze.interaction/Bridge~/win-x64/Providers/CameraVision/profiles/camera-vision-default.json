@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "capture": {
+    "deviceIndex": 0,
+    "width": 1280,
+    "height": 720,
+    "framesPerSecond": 30,
+    "mirrorX": false,
+    "rotation": "rotate0",
+    "reconnectDelay": "00:00:01"
+  },
+  "maxHands": 8,
+  "minDetectionConfidence": 0.5,
+  "minTrackingConfidence": 0.5,
+  "trackingPoint": "indexTip",
+  "smoothingFactor": 0.35,
+  "maximumMatchDistance": 0.2,
+  "lostFrameTolerance": 2,
+  "calibrations": {}
+}

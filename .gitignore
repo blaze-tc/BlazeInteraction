@@ -1,0 +1,15 @@
+bin/
+obj/
+.vs/
+.idea/
+.vscode/
+TestResults/
+artifacts/
+publish/
+tmp/
+*.user
+*.suo
+*.log
+UnityPackage/com.blaze.radar/Library/
+.superpowers/
+.worktrees/

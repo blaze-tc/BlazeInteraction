@@ -1,0 +1,1050 @@
+using Blaze.Interaction.Contracts;
+using Blaze.Interaction.Provider.Abstractions;
+using Microsoft.Extensions.Logging.Abstractions;
+using System.Diagnostics;
+using Yuexin.Radar.Bridge.Wpf.Services;
+using Yuexin.Radar.Configuration;
+using Yuexin.Radar.Contracts;
+
+namespace Blaze.Provider.Radar.Tests;
+
+[CollectionDefinition("Radar trace listener isolation", DisableParallelization = true)]
+public sealed class RadarTraceListenerIsolationCollection
+{
+}
+
+[Collection("Radar trace listener isolation")]
+public sealed class RadarInteractionProviderTests
+{
+    [Fact]
+    public async Task ProductionProvider_MapsHostConnectionStatusIntoProviderModeCoordinator()
+    {
+        using var providerDirectory = new TemporaryDirectory();
+        using var data = new TemporaryDirectory();
+        await WriteBundledDefaultAsync(providerDirectory.Path);
+        var hostStatus = new TestInteractionHostStatus();
+        var services = new DictionaryServiceProvider(new Dictionary<Type, object>
+        {
+            [typeof(IProviderStorageContext)] = new FakeProviderStorageContext(data.Path, null),
+            [typeof(IInteractionHostStatus)] = hostStatus,
+            [typeof(IRadarSensorPipelineFactory)] = new RadarSensorPipelineFactory(NullLoggerFactory.Instance)
+        });
+        var runtime = (RadarInteractionProvider.RadarCoordinatorRuntime)await RadarInteractionProvider.RadarCoordinatorRuntime.CreateAsync(
+            new ProviderCreateContext(providerDirectory.Path, services),
+            [Surface("front", true, 0, 1920, 1080)],
+            (_, _) => Task.FromResult(true),
+            CancellationToken.None);
+
+        hostStatus.Publish(new InteractionHostStatus(true, 42, "2021.3.45f1",
+            [Surface("front", true, 0, 1920, 1080)]));
+
+        try
+        {
+            Assert.True(runtime.Coordinator.UnityStatus.IsConnected);
+            Assert.Equal(42, runtime.Coordinator.UnityStatus.ProcessId);
+        }
+        finally
+        {
+            await runtime.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task ProductionProvider_SubscribeSnapshotRaceCannotOverwriteNewerConnectedStatus()
+    {
+        using var providerDirectory = new TemporaryDirectory();
+        using var data = new TemporaryDirectory();
+        await WriteBundledDefaultAsync(providerDirectory.Path);
+        var hostStatus = new TestInteractionHostStatus();
+        hostStatus.BeforeSubscribeReturns = () => hostStatus.Publish(new InteractionHostStatus(
+            true, 42, "2021.3.45f1", [Surface("front", true, 0, 1920, 1080)]));
+        var services = new DictionaryServiceProvider(new Dictionary<Type, object>
+        {
+            [typeof(IProviderStorageContext)] = new FakeProviderStorageContext(data.Path, null),
+            [typeof(IInteractionHostStatus)] = hostStatus,
+            [typeof(IRadarSensorPipelineFactory)] = new RadarSensorPipelineFactory(NullLoggerFactory.Instance)
+        });
+
+        var runtime = (RadarInteractionProvider.RadarCoordinatorRuntime)await RadarInteractionProvider.RadarCoordinatorRuntime.CreateAsync(
+            new ProviderCreateContext(providerDirectory.Path, services),
+            [Surface("front", true, 0, 1920, 1080)],
+            (_, _) => Task.FromResult(true),
+            CancellationToken.None);
+        try
+        {
+            Assert.True(runtime.Coordinator.UnityStatus.IsConnected);
+            Assert.Equal(42, runtime.Coordinator.UnityStatus.ProcessId);
+        }
+        finally
+        {
+            await runtime.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task ProductionProvider_QueuedHostStatusCallbacksCommitHighestVersionLast()
+    {
+        using var providerDirectory = new TemporaryDirectory();
+        using var data = new TemporaryDirectory();
+        await WriteBundledDefaultAsync(providerDirectory.Path);
+        var firstCallbackEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseFirstCallback = new ManualResetEventSlim();
+        var hostStatus = new TestInteractionHostStatus();
+        var services = new DictionaryServiceProvider(new Dictionary<Type, object>
+        {
+            [typeof(IProviderStorageContext)] = new FakeProviderStorageContext(data.Path, null),
+            [typeof(IInteractionHostStatus)] = hostStatus,
+            [typeof(IRadarSensorPipelineFactory)] = new RadarSensorPipelineFactory(NullLoggerFactory.Instance)
+        });
+        var runtime = (RadarInteractionProvider.RadarCoordinatorRuntime)await RadarInteractionProvider.RadarCoordinatorRuntime.CreateAsync(
+            new ProviderCreateContext(providerDirectory.Path, services),
+            [Surface("front", true, 0, 1920, 1080)],
+            (_, _) => Task.FromResult(true),
+            CancellationToken.None,
+            beforeApplyHostStatus: status =>
+            {
+                if (status.ProcessId != 1) return;
+                firstCallbackEntered.TrySetResult();
+                if (!releaseFirstCallback.Wait(TimeSpan.FromSeconds(5)))
+                {
+                    throw new TimeoutException("Timed out waiting to release the first host status callback.");
+                }
+            });
+        try
+        {
+            var first = Task.Run(() => hostStatus.Publish(new InteractionHostStatus(
+                true, 1, "v1", [Surface("front", true, 0, 1920, 1080)])));
+            await firstCallbackEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var second = Task.Run(() => hostStatus.Publish(new InteractionHostStatus(
+                true, 2, "v2", [Surface("front", true, 0, 1920, 1080)])));
+            await second.WaitAsync(TimeSpan.FromSeconds(5));
+            releaseFirstCallback.Set();
+            await first.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(2, runtime.Coordinator.UnityStatus.ProcessId);
+        }
+        finally
+        {
+            await runtime.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task ProductionProvider_FailedFirstStatusApplyContinuesDrainingLaterStatus()
+    {
+        using var providerDirectory = new TemporaryDirectory();
+        using var data = new TemporaryDirectory();
+        await WriteBundledDefaultAsync(providerDirectory.Path);
+        var firstApplyEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseFirstApply = new ManualResetEventSlim();
+        var hostStatus = new TestInteractionHostStatus();
+        var services = new DictionaryServiceProvider(new Dictionary<Type, object>
+        {
+            [typeof(IProviderStorageContext)] = new FakeProviderStorageContext(data.Path, null),
+            [typeof(IInteractionHostStatus)] = hostStatus,
+            [typeof(IRadarSensorPipelineFactory)] = new RadarSensorPipelineFactory(NullLoggerFactory.Instance)
+        });
+        var runtime = (RadarInteractionProvider.RadarCoordinatorRuntime)await RadarInteractionProvider.RadarCoordinatorRuntime.CreateAsync(
+            new ProviderCreateContext(providerDirectory.Path, services),
+            [Surface("front", true, 0, 1920, 1080)],
+            (_, _) => Task.FromResult(true),
+            CancellationToken.None,
+            beforeApplyHostStatus: status =>
+            {
+                if (status.ProcessId != 1) return;
+                firstApplyEntered.TrySetResult();
+                if (!releaseFirstApply.Wait(TimeSpan.FromSeconds(5)))
+                {
+                    throw new TimeoutException("Timed out waiting to release the first host status apply.");
+                }
+                throw new InvalidOperationException("mapping failed");
+            });
+        using var throwingListener = new ThrowingTraceListener();
+        var originalListeners = Trace.Listeners.Cast<TraceListener>().ToArray();
+        try
+        {
+            Trace.Listeners.Clear();
+            Trace.Listeners.Add(throwingListener);
+            var first = Task.Run(() => hostStatus.Publish(new InteractionHostStatus(
+                true, 1, "v1", [Surface("front", true, 0, 1920, 1080)])));
+            await firstApplyEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var second = Task.Run(() => hostStatus.Publish(new InteractionHostStatus(
+                true, 2, "v2", [Surface("front", true, 0, 1920, 1080)])));
+            await second.WaitAsync(TimeSpan.FromSeconds(5));
+            releaseFirstApply.Set();
+            await first.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(2, runtime.Coordinator.UnityStatus.ProcessId);
+        }
+        finally
+        {
+            releaseFirstApply.Set();
+            Trace.Listeners.Clear();
+            foreach (var listener in originalListeners)
+            {
+                Trace.Listeners.Add(listener);
+            }
+            await runtime.DisposeAsync();
+        }
+    }
+    [Fact]
+    public async Task FirstLoad_CopiesBundledDefaultThenSaveSurvivesReload()
+    {
+        using var provider = new TemporaryDirectory();
+        using var data = new TemporaryDirectory();
+        var bundledPath = Path.Combine(provider.Path, "profiles", "radar-default.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(bundledPath)!);
+        var bundled = RadarAppConfiguration.CreateDefault();
+        bundled.Screens[0].WidthPixels = 1111;
+        await RadarConfigurationStore.SaveAsync(bundledPath, bundled);
+        var storage = new FakeProviderStorageContext(data.Path, null);
+
+        var loaded = await RadarProviderConfiguration.LoadAsync(provider.Path, storage, CancellationToken.None);
+        loaded.Configuration.Screens[0].WidthPixels = 2222;
+        await RadarConfigurationStore.SaveAsync(loaded.ConfigurationPath, loaded.Configuration);
+        var reloaded = await RadarProviderConfiguration.LoadAsync(provider.Path, storage, CancellationToken.None);
+
+        Assert.Equal(2222, reloaded.Configuration.Screens[0].WidthPixels);
+        Assert.StartsWith(Path.GetFullPath(data.Path), reloaded.ConfigurationPath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Load_UsesDistinctProjectStorageRootsForDistinctProjects()
+    {
+        using var provider = new TemporaryDirectory();
+        using var firstData = new TemporaryDirectory();
+        using var secondData = new TemporaryDirectory();
+        await WriteBundledDefaultAsync(provider.Path);
+
+        var first = await RadarProviderConfiguration.LoadAsync(
+            provider.Path, new FakeProviderStorageContext(firstData.Path, null), CancellationToken.None);
+        var second = await RadarProviderConfiguration.LoadAsync(
+            provider.Path, new FakeProviderStorageContext(secondData.Path, null), CancellationToken.None);
+
+        Assert.False(string.Equals(first.ConfigurationPath, second.ConfigurationPath, StringComparison.OrdinalIgnoreCase));
+        Assert.StartsWith(Path.GetFullPath(firstData.Path), first.ConfigurationPath, StringComparison.OrdinalIgnoreCase);
+        Assert.StartsWith(Path.GetFullPath(secondData.Path), second.ConfigurationPath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Load_UsesExplicitProfileWithoutCreatingProjectDefault()
+    {
+        using var provider = new TemporaryDirectory();
+        using var data = new TemporaryDirectory();
+        using var custom = new TemporaryDirectory();
+        await WriteBundledDefaultAsync(provider.Path);
+        var profilePath = Path.Combine(custom.Path, "custom.json");
+        var customConfiguration = RadarAppConfiguration.CreateDefault();
+        customConfiguration.Screens[0].WidthPixels = 3333;
+        await RadarConfigurationStore.SaveAsync(profilePath, customConfiguration);
+        var storage = new FakeProviderStorageContext(data.Path, profilePath);
+
+        var loaded = await RadarProviderConfiguration.LoadAsync(provider.Path, storage, CancellationToken.None);
+
+        Assert.Equal(Path.GetFullPath(profilePath), loaded.ConfigurationPath);
+        Assert.Equal(3333, loaded.Configuration.Screens[0].WidthPixels);
+        Assert.False(File.Exists(Path.Combine(data.Path, "Providers", RadarFrameAdapter.ProviderId, "config.json")));
+    }
+
+    [Fact]
+    public async Task Load_ThrowsWhenProjectStorageRootCannotBeCreated()
+    {
+        using var provider = new TemporaryDirectory();
+        using var dataRootFile = new TemporaryFile();
+        await WriteBundledDefaultAsync(provider.Path);
+
+        await Assert.ThrowsAnyAsync<IOException>(() => RadarProviderConfiguration.LoadAsync(
+            provider.Path,
+            new FakeProviderStorageContext(dataRootFile.Path, null),
+            CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Load_PreservesMalformedExplicitProfileBytes()
+    {
+        using var provider = new TemporaryDirectory();
+        using var data = new TemporaryDirectory();
+        using var custom = new TemporaryDirectory();
+        var profilePath = Path.Combine(custom.Path, "malformed.json");
+        var malformed = new byte[] { 0x7B, 0x22, 0x73, 0x63, 0x68, 0x65, 0x6D, 0x61, 0x22, 0x3A, 0x7D };
+        await File.WriteAllBytesAsync(profilePath, malformed);
+
+        var loaded = await RadarProviderConfiguration.LoadAsync(
+            provider.Path, new FakeProviderStorageContext(data.Path, profilePath), CancellationToken.None);
+
+        Assert.False(loaded.Configuration.CanPersist);
+        Assert.Equal(malformed, await File.ReadAllBytesAsync(profilePath));
+    }
+
+    [Fact]
+    public async Task Load_RejectsExplicitProfileInsideTheProviderPackageWithoutModifyingIt()
+    {
+        using var provider = new TemporaryDirectory();
+        using var data = new TemporaryDirectory();
+        var bundledPath = await WriteBundledDefaultAsync(provider.Path);
+        var original = await File.ReadAllBytesAsync(bundledPath);
+
+        await Assert.ThrowsAsync<ArgumentException>(() => RadarProviderConfiguration.LoadAsync(
+            provider.Path,
+            new FakeProviderStorageContext(data.Path, bundledPath),
+            CancellationToken.None));
+
+        Assert.Equal(original, await File.ReadAllBytesAsync(bundledPath));
+    }
+
+    [Fact]
+    public async Task FirstLoad_ConcurrentBootstrapHandlesTheDeterministicPublicationLoser()
+    {
+        using var provider = new TemporaryDirectory();
+        using var data = new TemporaryDirectory();
+        await WriteBundledDefaultAsync(provider.Path);
+        var storage = new FakeProviderStorageContext(data.Path, null);
+        var bothPublishersEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var publisherCount = 0;
+
+        Task WaitForBothPublishersAsync(CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref publisherCount) == 2)
+            {
+                bothPublishersEntered.TrySetResult();
+            }
+
+            return bothPublishersEntered.Task.WaitAsync(cancellationToken);
+        }
+
+        var first = RadarProviderConfiguration.LoadAsync(
+            provider.Path, storage, CancellationToken.None, WaitForBothPublishersAsync);
+        var second = RadarProviderConfiguration.LoadAsync(
+            provider.Path, storage, CancellationToken.None, WaitForBothPublishersAsync);
+        var loads = await Task.WhenAll(first, second);
+
+        var path = Assert.Single(loads.Select(result => result.ConfigurationPath).Distinct(StringComparer.OrdinalIgnoreCase));
+        Assert.True(File.Exists(path));
+        Assert.Empty(Directory.EnumerateFiles(Path.GetDirectoryName(path)!, ".config.json.*.tmp"));
+    }
+
+    [Fact]
+    public async Task ProductionProvider_PersistsTopologyThroughTheCoordinatorConfigurationPath()
+    {
+        using var providerDirectory = new TemporaryDirectory();
+        using var data = new TemporaryDirectory();
+        await WriteBundledDefaultAsync(providerDirectory.Path);
+        var storage = new FakeProviderStorageContext(data.Path, null);
+        var services = new DictionaryServiceProvider(new Dictionary<Type, object>
+        {
+            [typeof(IProviderStorageContext)] = storage,
+            [typeof(IRadarSensorPipelineFactory)] = new RadarSensorPipelineFactory(NullLoggerFactory.Instance)
+        });
+        var provider = new RadarPlugin().CreateProvider(new ProviderCreateContext(providerDirectory.Path, services));
+
+        await provider.InitializeAsync(
+            InitializationContext(Surface("project-front", true, 0, 2468, 1357)),
+            CancellationToken.None);
+        await provider.DisposeAsync();
+
+        var reloaded = await RadarProviderConfiguration.LoadAsync(providerDirectory.Path, storage, CancellationToken.None);
+        var screen = Assert.Single(reloaded.Configuration.Screens.Where(value => value.ScreenId == "project-front"));
+        Assert.Equal("project-front", screen.ScreenId);
+        Assert.Equal(2468, screen.UnityDefaultWidthPixels);
+        Assert.Equal(1357, screen.UnityDefaultHeightPixels);
+    }
+
+    [Fact]
+    public void PluginDescriptorMatchesThePublishedRadarIdentityAndCapabilities()
+    {
+        var descriptor = new RadarPlugin().Descriptor;
+
+        Assert.Equal("blaze.radar.f10f20", descriptor.Id);
+        Assert.Equal("F10 / F20 激光雷达", descriptor.DisplayName);
+        Assert.Equal(new Version(1, 1, 0), descriptor.Version);
+        Assert.Equal("Radar", descriptor.Category);
+        Assert.Equal(
+            ["interaction-point", "preview", "multi-sensor", "calibration", "multi-surface"],
+            descriptor.Capabilities);
+    }
+
+    [Fact]
+    public void PluginCreatesAProviderWithTheStableRadarMainInstanceIdentity()
+    {
+        using var providerDirectory = new TemporaryDirectory();
+        var provider = new RadarPlugin().CreateProvider(
+            new ProviderCreateContext(providerDirectory.Path, EmptyServiceProvider.Instance));
+
+        Assert.IsType<RadarInteractionProvider>(provider);
+        Assert.Equal("radar-main", provider.ProviderInstanceId);
+        Assert.Equal(ProviderRuntimeStatus.Created, provider.Status);
+    }
+
+    [Fact]
+    public void PluginExposesTheRadarSettingsViewFactory()
+    {
+        var plugin = new RadarPlugin();
+
+        Assert.IsType<RadarSettingsViewFactory>(plugin.SettingsViewFactory);
+    }
+
+    [Fact]
+    public async Task LifecycleTransitionsInOrderAndStopsTheExistingRadarRuntimeExactlyOnce()
+    {
+        var runtime = new FakeRadarProviderRuntime();
+        var provider = CreateProvider(runtime);
+        var transitions = new List<(ProviderRuntimeStatus Previous, ProviderRuntimeStatus Current)>();
+        provider.StatusChanged += (_, change) => transitions.Add((change.PreviousStatus, change.Status));
+        var context = InitializationContext(Surface("front", true, 0));
+
+        await provider.InitializeAsync(context, CancellationToken.None);
+        await provider.StartAsync(CancellationToken.None);
+        await provider.StartAsync(CancellationToken.None);
+        await provider.StopAsync(CancellationToken.None);
+        await provider.StopAsync(CancellationToken.None);
+        await provider.DisposeAsync();
+        await provider.DisposeAsync();
+
+        Assert.Equal(1, runtime.StartCallCount);
+        Assert.Equal(1, runtime.StopCallCount);
+        Assert.Equal(1, runtime.DisposeCallCount);
+        Assert.Equal(ProviderRuntimeStatus.Stopped, provider.Status);
+        Assert.Equal(
+        [
+            (ProviderRuntimeStatus.Created, ProviderRuntimeStatus.Initializing),
+            (ProviderRuntimeStatus.Initializing, ProviderRuntimeStatus.Ready),
+            (ProviderRuntimeStatus.Ready, ProviderRuntimeStatus.Starting),
+            (ProviderRuntimeStatus.Starting, ProviderRuntimeStatus.Running),
+            (ProviderRuntimeStatus.Running, ProviderRuntimeStatus.Stopping),
+            (ProviderRuntimeStatus.Stopping, ProviderRuntimeStatus.Stopped)
+        ], transitions);
+    }
+
+    [Fact]
+    public async Task InitializeProductionRuntimeAppliesInteractionSurfacesToTheExistingRadarCoordinator()
+    {
+        using var providerDirectory = new TemporaryDirectory();
+        var configuration = new RadarAppConfiguration { Screens = [] };
+        var services = new DictionaryServiceProvider(new Dictionary<Type, object>
+        {
+            [typeof(RadarAppConfiguration)] = configuration,
+            [typeof(IRadarSensorPipelineFactory)] = new RadarSensorPipelineFactory(NullLoggerFactory.Instance)
+        });
+        var provider = new RadarPlugin().CreateProvider(new ProviderCreateContext(providerDirectory.Path, services));
+
+        await provider.InitializeAsync(
+            InitializationContext(
+                Surface("left", false, 0, 1600, 900),
+                Surface("front", true, 1, 4096, 1536)),
+            CancellationToken.None);
+
+        Assert.Equal(ProviderRuntimeStatus.Ready, provider.Status);
+        Assert.Equal(["left", "front"], configuration.Screens.OrderBy(screen => screen.UnityOrder).Select(screen => screen.ScreenId));
+        var front = configuration.Screens.Single(screen => screen.ScreenId == "front");
+        Assert.True(front.IsAssociated);
+        Assert.True(front.IsPrimary);
+        Assert.Equal(4096, front.UnityDefaultWidthPixels);
+        Assert.Equal(1536, front.UnityDefaultHeightPixels);
+        await provider.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task ExistingPointerBatchOutputIsPublishedOncePerSurfaceAndSubscriberFailuresAreIsolated()
+    {
+        var runtime = new FakeRadarProviderRuntime();
+        var provider = CreateProvider(runtime);
+        var received = new List<InteractionFrame>();
+        provider.FrameReceived += (_, _) => throw new InvalidOperationException("consumer fault");
+        provider.FrameReceived += (_, frame) => received.Add(frame.Frame);
+        provider.StatusChanged += (_, _) => throw new InvalidOperationException("status consumer fault");
+        await provider.InitializeAsync(InitializationContext(Surface("left", false, 0), Surface("front", true, 1)), CancellationToken.None);
+        await provider.StartAsync(CancellationToken.None);
+
+        var delivered = await runtime.PublishAsync(new PointerBatchPayload(
+        [
+            Frame("left", 10, RadarPointerPhase.Hover),
+            Frame("front", 10, RadarPointerPhase.Down)
+        ]));
+
+        Assert.True(delivered);
+        Assert.Equal(["left", "front"], received.Select(frame => frame.SurfaceId));
+        Assert.Equal(ProviderRuntimeStatus.Running, provider.Status);
+        await provider.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task StartFailureCleansUpRadarRuntimeAndMovesProviderToFaulted()
+    {
+        var runtime = new FakeRadarProviderRuntime { StartException = new IOException("start failed") };
+        var provider = CreateProvider(runtime);
+        await provider.InitializeAsync(InitializationContext(Surface("front", true, 0)), CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<IOException>(() => provider.StartAsync(CancellationToken.None));
+
+        Assert.Equal("start failed", exception.Message);
+        Assert.Equal(1, runtime.StopCallCount);
+        Assert.Equal(1, runtime.DisposeCallCount);
+        Assert.Equal(ProviderRuntimeStatus.Faulted, provider.Status);
+        await provider.DisposeAsync();
+        Assert.Equal(1, runtime.DisposeCallCount);
+    }
+
+    [Fact]
+    public async Task StartAndCleanupFailuresArePreservedInOrderAndSharedByLaterLifecycleCalls()
+    {
+        var startFailure = new IOException("start failed");
+        var stopFailure = new InvalidOperationException("cleanup stop failed");
+        var disposeFailure = new ApplicationException("cleanup dispose failed");
+        var runtime = new FakeRadarProviderRuntime
+        {
+            StartException = startFailure,
+            StopException = stopFailure,
+            DisposeException = disposeFailure
+        };
+        var provider = CreateProvider(runtime);
+        await provider.InitializeAsync(InitializationContext(Surface("front", true, 0)), CancellationToken.None);
+
+        var startException = await Record.ExceptionAsync(() => provider.StartAsync(CancellationToken.None));
+        var aggregate = Assert.IsType<AggregateException>(startException);
+        Assert.Equal([startFailure, stopFailure, disposeFailure], aggregate.InnerExceptions);
+        Assert.Equal(ProviderRuntimeStatus.Faulted, provider.Status);
+
+        var stopException = await Record.ExceptionAsync(() => provider.StopAsync(CancellationToken.None));
+        var disposeException = await Record.ExceptionAsync(() => provider.DisposeAsync().AsTask());
+
+        Assert.Same(startException, stopException);
+        Assert.Same(startException, disposeException);
+        Assert.Equal(ProviderRuntimeStatus.Faulted, provider.Status);
+        Assert.Equal(1, runtime.StopCallCount);
+        Assert.Equal(1, runtime.DisposeCallCount);
+    }
+
+    [Fact]
+    public async Task StartCancellationAndCleanupFailuresArePreservedInOrderAndSharedByLaterLifecycleCalls()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var cancellationFailure = new OperationCanceledException(cancellation.Token);
+        var stopFailure = new InvalidOperationException("cleanup stop failed");
+        var disposeFailure = new ApplicationException("cleanup dispose failed");
+        var runtime = new FakeRadarProviderRuntime
+        {
+            BeforeStart = cancellation.Cancel,
+            StartException = cancellationFailure,
+            StopException = stopFailure,
+            DisposeException = disposeFailure
+        };
+        var provider = CreateProvider(runtime);
+        await provider.InitializeAsync(InitializationContext(Surface("front", true, 0)), CancellationToken.None);
+
+        var startException = await Record.ExceptionAsync(() => provider.StartAsync(cancellation.Token));
+        var aggregate = Assert.IsType<AggregateException>(startException);
+        Assert.Equal([cancellationFailure, stopFailure, disposeFailure], aggregate.InnerExceptions);
+        Assert.Equal(ProviderRuntimeStatus.Faulted, provider.Status);
+
+        var stopException = await Record.ExceptionAsync(() => provider.StopAsync(CancellationToken.None));
+        var disposeException = await Record.ExceptionAsync(() => provider.DisposeAsync().AsTask());
+
+        Assert.Same(startException, stopException);
+        Assert.Same(startException, disposeException);
+        Assert.Equal(ProviderRuntimeStatus.Faulted, provider.Status);
+        Assert.Equal(1, runtime.StopCallCount);
+        Assert.Equal(1, runtime.DisposeCallCount);
+    }
+
+    [Fact]
+    public async Task StopAndDisposeFailuresArePreservedInOrderAndSharedByLaterLifecycleCalls()
+    {
+        var stopFailure = new IOException("stop failed");
+        var disposeFailure = new InvalidOperationException("cleanup dispose failed");
+        var runtime = new FakeRadarProviderRuntime
+        {
+            StopException = stopFailure,
+            DisposeException = disposeFailure
+        };
+        var provider = CreateProvider(runtime);
+        await provider.InitializeAsync(InitializationContext(Surface("front", true, 0)), CancellationToken.None);
+        await provider.StartAsync(CancellationToken.None);
+
+        var stopException = await Record.ExceptionAsync(() => provider.StopAsync(CancellationToken.None));
+        var aggregate = Assert.IsType<AggregateException>(stopException);
+        Assert.Equal([stopFailure, disposeFailure], aggregate.InnerExceptions);
+        Assert.Equal(ProviderRuntimeStatus.Faulted, provider.Status);
+
+        var repeatedStopException = await Record.ExceptionAsync(() => provider.StopAsync(CancellationToken.None));
+        var disposeException = await Record.ExceptionAsync(() => provider.DisposeAsync().AsTask());
+
+        Assert.Same(stopException, repeatedStopException);
+        Assert.Same(stopException, disposeException);
+        Assert.Equal(ProviderRuntimeStatus.Faulted, provider.Status);
+        Assert.Equal(1, runtime.StopCallCount);
+        Assert.Equal(1, runtime.DisposeCallCount);
+    }
+
+    [Fact]
+    public async Task InitializeCancellationIsForwardedAndLeavesNoLiveRadarRuntime()
+    {
+        CancellationToken observed = default;
+        var factoryEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new RadarInteractionProvider(
+            "radar-instance-a",
+            async (_, _, cancellationToken) =>
+            {
+                observed = cancellationToken;
+                factoryEntered.SetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return new FakeRadarProviderRuntime();
+            });
+        using var cancellation = new CancellationTokenSource();
+
+        var initializing = provider.InitializeAsync(
+            InitializationContext(Surface("front", true, 0)),
+            cancellation.Token);
+        await factoryEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => initializing);
+
+        Assert.Equal(cancellation.Token, observed);
+        Assert.Equal(ProviderRuntimeStatus.Stopped, provider.Status);
+        await provider.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task SimulationAndReplayCommandsDelegateToTheExistingCoordinatorRuntime()
+    {
+        var runtime = new FakeRadarProviderRuntime();
+        var provider = CreateProvider(runtime);
+        await provider.InitializeAsync(InitializationContext(Surface("front", true, 0)), CancellationToken.None);
+        await provider.StartAsync(CancellationToken.None);
+        using var cancellation = new CancellationTokenSource();
+
+        await provider.StartAllSimulationAsync(cancellation.Token);
+        await provider.StopAllSimulationAsync();
+        await provider.ReplaySensorAsync("front", "f1", "capture.radarrec", 2d, true, cancellation.Token);
+        provider.PauseReplay("front", "f1");
+        provider.ResumeReplay("front", "f1");
+        provider.StepReplay("front", "f1");
+        await provider.StopReplayAsync("front", "f1");
+
+        Assert.Equal(cancellation.Token, runtime.SimulationToken);
+        Assert.Equal(("front", "f1", "capture.radarrec", 2d, true, cancellation.Token), runtime.ReplayRequest);
+        Assert.Equal(["pause", "resume", "step", "stop"], runtime.ReplayOperations);
+        await provider.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task ConcurrentDisposeCallsWaitForTheSameSingleCleanup()
+    {
+        var runtime = new FakeRadarProviderRuntime();
+        runtime.BlockStop();
+        var provider = CreateProvider(runtime);
+        await provider.InitializeAsync(InitializationContext(Surface("front", true, 0)), CancellationToken.None);
+        await provider.StartAsync(CancellationToken.None);
+
+        var first = provider.DisposeAsync().AsTask();
+        await runtime.StopEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var second = provider.DisposeAsync().AsTask();
+
+        Assert.False(second.IsCompleted);
+        runtime.ReleaseStop();
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal(1, runtime.StopCallCount);
+        Assert.Equal(1, runtime.DisposeCallCount);
+        Assert.Equal(ProviderRuntimeStatus.Stopped, provider.Status);
+    }
+
+    [Fact]
+    public async Task ConcurrentDisposeCallsObserveTheSameCleanupFailure()
+    {
+        var cleanupFailure = new IOException("dispose failed");
+        var runtime = new FakeRadarProviderRuntime { DisposeException = cleanupFailure };
+        runtime.BlockStop();
+        var provider = CreateProvider(runtime);
+        await provider.InitializeAsync(InitializationContext(Surface("front", true, 0)), CancellationToken.None);
+        await provider.StartAsync(CancellationToken.None);
+
+        var first = provider.DisposeAsync().AsTask();
+        await runtime.StopEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var second = provider.DisposeAsync().AsTask();
+        Assert.False(second.IsCompleted);
+        runtime.ReleaseStop();
+
+        var firstFailure = await Record.ExceptionAsync(() => first);
+        var secondFailure = await Record.ExceptionAsync(() => second);
+        Assert.Same(cleanupFailure, firstFailure);
+        Assert.Same(firstFailure, secondFailure);
+        Assert.Equal(1, runtime.StopCallCount);
+        Assert.Equal(1, runtime.DisposeCallCount);
+        Assert.Equal(ProviderRuntimeStatus.Faulted, provider.Status);
+    }
+
+    [Fact]
+    public async Task ConcurrentDisposeCallsShareBothStopAndDisposeCleanupFailures()
+    {
+        var stopFailure = new IOException("stop failed");
+        var disposeFailure = new InvalidOperationException("dispose failed");
+        var runtime = new FakeRadarProviderRuntime
+        {
+            StopException = stopFailure,
+            DisposeException = disposeFailure
+        };
+        runtime.BlockStop();
+        var provider = CreateProvider(runtime);
+        await provider.InitializeAsync(InitializationContext(Surface("front", true, 0)), CancellationToken.None);
+        await provider.StartAsync(CancellationToken.None);
+
+        var first = provider.DisposeAsync().AsTask();
+        await runtime.StopEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var second = provider.DisposeAsync().AsTask();
+        runtime.ReleaseStop();
+
+        var firstFailure = await Record.ExceptionAsync(() => first);
+        var secondFailure = await Record.ExceptionAsync(() => second);
+        var aggregate = Assert.IsType<AggregateException>(firstFailure);
+        Assert.Equal([stopFailure, disposeFailure], aggregate.InnerExceptions);
+        Assert.Same(firstFailure, secondFailure);
+        Assert.Equal(1, runtime.StopCallCount);
+        Assert.Equal(1, runtime.DisposeCallCount);
+        Assert.Equal(ProviderRuntimeStatus.Faulted, provider.Status);
+    }
+
+    [Fact]
+    public async Task StopStartedAfterDisposeWaitsForAndSharesItsCleanupFailure()
+    {
+        var cleanupFailure = new IOException("stop failed");
+        var runtime = new FakeRadarProviderRuntime { StopException = cleanupFailure };
+        runtime.BlockStop();
+        var provider = CreateProvider(runtime);
+        await provider.InitializeAsync(InitializationContext(Surface("front", true, 0)), CancellationToken.None);
+        await provider.StartAsync(CancellationToken.None);
+
+        var dispose = provider.DisposeAsync().AsTask();
+        await runtime.StopEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var stop = provider.StopAsync(CancellationToken.None);
+
+        Assert.False(stop.IsCompleted);
+        runtime.ReleaseStop();
+        var disposeFailure = await Record.ExceptionAsync(() => dispose);
+        var stopFailure = await Record.ExceptionAsync(() => stop);
+        Assert.Same(cleanupFailure, disposeFailure);
+        Assert.Same(disposeFailure, stopFailure);
+        Assert.Equal(1, runtime.StopCallCount);
+        Assert.Equal(1, runtime.DisposeCallCount);
+        Assert.Equal(ProviderRuntimeStatus.Faulted, provider.Status);
+    }
+
+    [Fact]
+    public async Task SynchronousStatusHandlerDisposeReentryFailsFastWithoutPoisoningLaterContinuations()
+    {
+        var runtime = new FakeRadarProviderRuntime();
+        var provider = CreateProvider(runtime);
+        await provider.InitializeAsync(InitializationContext(Surface("front", true, 0)), CancellationToken.None);
+        await provider.StartAsync(CancellationToken.None);
+        var continueAfterHandler = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Exception? reentryFailure = null;
+        Task? continuation = null;
+        provider.StatusChanged += (_, change) =>
+        {
+            if (change.Status != ProviderRuntimeStatus.Stopping) return;
+#pragma warning disable xUnit1031 // This regression test intentionally exercises synchronous event-handler reentry.
+            reentryFailure = Record.Exception(() => provider.DisposeAsync().GetAwaiter().GetResult());
+#pragma warning restore xUnit1031
+            continuation = Task.Run(async () =>
+            {
+                await continueAfterHandler.Task;
+                await provider.DisposeAsync();
+                await provider.StopAsync(CancellationToken.None);
+            });
+        };
+
+        await provider.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(1));
+        var invalidOperation = Assert.IsType<InvalidOperationException>(reentryFailure);
+        Assert.Contains("StatusChanged", invalidOperation.Message, StringComparison.Ordinal);
+        continueAfterHandler.SetResult();
+        Assert.NotNull(continuation);
+        await continuation.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal(ProviderRuntimeStatus.Stopped, provider.Status);
+    }
+
+    [Fact]
+    public async Task SynchronousInitializingStatusHandlerInitializeReentryFailsFastWithoutDeadlocking()
+    {
+        var runtime = new FakeRadarProviderRuntime();
+        var provider = CreateProvider(runtime);
+        var context = InitializationContext(Surface("front", true, 0));
+        Exception? reentryFailure = null;
+        provider.StatusChanged += (_, change) =>
+        {
+            if (change.Status != ProviderRuntimeStatus.Initializing) return;
+#pragma warning disable xUnit1031 // This regression test intentionally exercises synchronous event-handler reentry.
+            reentryFailure = Record.Exception(() => provider.InitializeAsync(context, CancellationToken.None).GetAwaiter().GetResult());
+#pragma warning restore xUnit1031
+        };
+
+        await Task.Run(() => provider.InitializeAsync(context, CancellationToken.None))
+            .WaitAsync(TimeSpan.FromSeconds(1));
+
+        var invalidOperation = Assert.IsType<InvalidOperationException>(reentryFailure);
+        Assert.Contains("StatusChanged", invalidOperation.Message, StringComparison.Ordinal);
+        Assert.Equal(ProviderRuntimeStatus.Ready, provider.Status);
+        await provider.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task SynchronousStartingStatusHandlerStartReentryFailsFastWithoutDeadlocking()
+    {
+        var runtime = new FakeRadarProviderRuntime();
+        var provider = CreateProvider(runtime);
+        await provider.InitializeAsync(InitializationContext(Surface("front", true, 0)), CancellationToken.None);
+        Exception? reentryFailure = null;
+        provider.StatusChanged += (_, change) =>
+        {
+            if (change.Status != ProviderRuntimeStatus.Starting) return;
+#pragma warning disable xUnit1031 // This regression test intentionally exercises synchronous event-handler reentry.
+            reentryFailure = Record.Exception(() => provider.StartAsync(CancellationToken.None).GetAwaiter().GetResult());
+#pragma warning restore xUnit1031
+        };
+
+        await Task.Run(() => provider.StartAsync(CancellationToken.None))
+            .WaitAsync(TimeSpan.FromSeconds(1));
+
+        var invalidOperation = Assert.IsType<InvalidOperationException>(reentryFailure);
+        Assert.Contains("StatusChanged", invalidOperation.Message, StringComparison.Ordinal);
+        Assert.Equal(ProviderRuntimeStatus.Running, provider.Status);
+        await provider.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task StopRacingDisposeCompletesOneStopAndOneDisposeWithoutSemaphoreTeardownFaults()
+    {
+        var runtime = new FakeRadarProviderRuntime();
+        runtime.BlockStop();
+        var provider = CreateProvider(runtime);
+        await provider.InitializeAsync(InitializationContext(Surface("front", true, 0)), CancellationToken.None);
+        await provider.StartAsync(CancellationToken.None);
+
+        var stop = provider.StopAsync(CancellationToken.None);
+        await runtime.StopEntered.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        var dispose = provider.DisposeAsync().AsTask();
+        runtime.ReleaseStop();
+
+        await Task.WhenAll(stop, dispose).WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Equal(1, runtime.StopCallCount);
+        Assert.Equal(1, runtime.DisposeCallCount);
+        Assert.Equal(ProviderRuntimeStatus.Stopped, provider.Status);
+    }
+
+    private static RadarInteractionProvider CreateProvider(FakeRadarProviderRuntime runtime) => new(
+        "radar-instance-a",
+        (_, publish, _) =>
+        {
+            runtime.Publish = publish;
+            return Task.FromResult<IRadarProviderRuntime>(runtime);
+        });
+
+    private static ProviderInitializationContext InitializationContext(params InteractionSurface[] surfaces) =>
+        new(surfaces, EmptyServiceProvider.Instance);
+
+    private static async Task<string> WriteBundledDefaultAsync(string providerDirectory)
+    {
+        var path = Path.Combine(providerDirectory, "profiles", "radar-default.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await RadarConfigurationStore.SaveAsync(path, RadarAppConfiguration.CreateDefault());
+        return path;
+    }
+
+    private static InteractionSurface Surface(string id, bool primary, int order, int width = 1920, int height = 1080) => new()
+    {
+        SurfaceId = id,
+        Name = id,
+        LogicalWidth = width,
+        LogicalHeight = height,
+        IsPrimary = primary,
+        Order = order
+    };
+
+    private static RadarScreenPointerFrame Frame(string surfaceId, long sequence, RadarPointerPhase phase) => new(
+        new RadarScreenInfo(surfaceId, surfaceId, 1920, 1080, surfaceId == "front", surfaceId == "front" ? 1 : 0),
+        sequence,
+        1_000 + sequence,
+        [new RadarScreenPointer(1, phase, .5f, .5f, 960f, 540f, 1f, 999 + sequence)]);
+
+    private sealed class FakeRadarProviderRuntime : IRadarProviderRuntime
+    {
+        public Func<PointerBatchPayload, CancellationToken, Task<bool>> Publish { get; set; } = null!;
+        public Action? BeforeStart { get; init; }
+        public Exception? StartException { get; init; }
+        public Exception? StopException { get; init; }
+        public Exception? DisposeException { get; init; }
+        public int StartCallCount { get; private set; }
+        public int StopCallCount { get; private set; }
+        public int DisposeCallCount { get; private set; }
+        public TaskCompletionSource StopEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public CancellationToken SimulationToken { get; private set; }
+        public (string ScreenId, string SensorId, string Path, double Speed, bool Loop, CancellationToken Token) ReplayRequest { get; private set; }
+        public List<string> ReplayOperations { get; } = [];
+        private TaskCompletionSource? _stopRelease;
+
+        public Task<bool> PublishAsync(PointerBatchPayload batch) => Publish(batch, CancellationToken.None);
+
+        public Task StartAsync(CancellationToken cancellationToken)
+        {
+            StartCallCount++;
+            BeforeStart?.Invoke();
+            return StartException is null ? Task.CompletedTask : Task.FromException(StartException);
+        }
+
+        public async Task StopAsync(CancellationToken cancellationToken)
+        {
+            StopCallCount++;
+            StopEntered.TrySetResult();
+            if (_stopRelease is not null)
+                await _stopRelease.Task.WaitAsync(cancellationToken);
+            if (StopException is not null)
+                throw StopException;
+        }
+
+        public void BlockStop() => _stopRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void ReleaseStop() => _stopRelease?.TrySetResult();
+
+        public Task StartAllSimulationAsync(CancellationToken cancellationToken)
+        {
+            SimulationToken = cancellationToken;
+            return Task.CompletedTask;
+        }
+
+        public Task StopAllSimulationAsync() => Task.CompletedTask;
+
+        public Task ReplaySensorAsync(string screenId, string sensorId, string path, double speed, bool loop, CancellationToken cancellationToken)
+        {
+            ReplayRequest = (screenId, sensorId, path, speed, loop, cancellationToken);
+            return Task.CompletedTask;
+        }
+
+        public void PauseReplay(string screenId, string sensorId) => ReplayOperations.Add("pause");
+        public void ResumeReplay(string screenId, string sensorId) => ReplayOperations.Add("resume");
+        public void StepReplay(string screenId, string sensorId) => ReplayOperations.Add("step");
+
+        public Task StopReplayAsync(string screenId, string sensorId)
+        {
+            ReplayOperations.Add("stop");
+            return Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCallCount++;
+            return DisposeException is null
+                ? ValueTask.CompletedTask
+                : ValueTask.FromException(DisposeException);
+        }
+    }
+
+    private sealed class DictionaryServiceProvider(IReadOnlyDictionary<Type, object> services) : IServiceProvider
+    {
+        public object? GetService(Type serviceType) => services.TryGetValue(serviceType, out var service) ? service : null;
+    }
+
+    private sealed class EmptyServiceProvider : IServiceProvider
+    {
+        public static EmptyServiceProvider Instance { get; } = new();
+        public object? GetService(Type serviceType) => null;
+    }
+
+    private sealed class TemporaryDirectory : IDisposable
+    {
+        public TemporaryDirectory()
+        {
+            Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Blaze.Provider.Radar.Tests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Path);
+        }
+
+        public string Path { get; }
+
+        public void Dispose()
+        {
+            if (Directory.Exists(Path)) Directory.Delete(Path, recursive: true);
+        }
+    }
+
+    private sealed class TemporaryFile : IDisposable
+    {
+        public TemporaryFile()
+        {
+            Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Blaze.Provider.Radar.Tests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(Path)!);
+            File.WriteAllText(Path, "not a directory");
+        }
+
+        public string Path { get; }
+
+        public void Dispose()
+        {
+            if (File.Exists(Path)) File.Delete(Path);
+        }
+    }
+
+    private sealed record FakeProviderStorageContext(string DataRoot, string? ProfilePath) : IProviderStorageContext
+    {
+        public string GetProviderDataDirectory(string providerId) =>
+            Path.Combine(DataRoot, "Providers", providerId);
+    }
+
+    private sealed class ThrowingTraceListener : TraceListener
+    {
+        public override void Write(string? message) => throw new InvalidOperationException("trace listener failed");
+        public override void WriteLine(string? message) => throw new InvalidOperationException("trace listener failed");
+    }
+
+    private sealed class TestInteractionHostStatus : IInteractionHostStatus
+    {
+        private readonly object _gate = new();
+        private Action<InteractionHostStatus>? _changed;
+        private long _version;
+
+        public InteractionHostStatus Current { get; private set; } = InteractionHostStatus.Disconnected;
+        public Action? BeforeSubscribeReturns { get; set; }
+        public event Action<InteractionHostStatus>? Changed
+        {
+            add { lock (_gate) _changed += value; }
+            remove { lock (_gate) _changed -= value; }
+        }
+
+        public IInteractionHostStatusSubscription Subscribe(Action<InteractionHostStatus> changed)
+        {
+            ArgumentNullException.ThrowIfNull(changed);
+            lock (_gate)
+            {
+                _changed += changed;
+                var snapshot = Current;
+                BeforeSubscribeReturns?.Invoke();
+                return new TestSubscription(this, changed, snapshot);
+            }
+        }
+
+        public void Publish(InteractionHostStatus status)
+        {
+            Action<InteractionHostStatus>? handlers;
+            InteractionHostStatus published;
+            lock (_gate)
+            {
+                _version = checked(_version + 1);
+                published = status with { Version = _version };
+                Current = published;
+                handlers = _changed;
+            }
+
+            handlers?.Invoke(published);
+        }
+
+        private void Unsubscribe(Action<InteractionHostStatus> changed)
+        {
+            lock (_gate) _changed -= changed;
+        }
+
+        private sealed class TestSubscription(
+            TestInteractionHostStatus owner,
+            Action<InteractionHostStatus> changed,
+            InteractionHostStatus current) : IInteractionHostStatusSubscription
+        {
+            public InteractionHostStatus Current { get; } = current;
+            public void Dispose() => owner.Unsubscribe(changed);
+        }
+    }
+}

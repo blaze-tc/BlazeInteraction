@@ -1,0 +1,24 @@
+{
+  "name": "Blaze.Interaction.Editor.Tests",
+  "rootNamespace": "Blaze.Interaction.Editor.Tests",
+  "references": [
+    "Blaze.Interaction.Runtime",
+    "Blaze.Interaction.Editor"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": false,
+  "defineConstraints": [
+    "UNITY_INCLUDE_TESTS"
+  ],
+  "versionDefines": [],
+  "noEngineReferences": false,
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ]
+}

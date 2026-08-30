@@ -1,0 +1,596 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
+using Blaze.Interaction.Contracts;
+
+namespace Blaze.Interaction.Contracts.Tests;
+
+public sealed class InteractionContractTests
+{
+    [Fact]
+    public void SharedJsonOptionsAreReadOnlyBeforeFirstSerialization()
+    {
+        var options = InteractionJson.Options;
+
+        Assert.True(options.IsReadOnly);
+        Assert.Throws<InvalidOperationException>(() => options.PropertyNamingPolicy = null);
+        Assert.Throws<InvalidOperationException>(() => options.Converters.Add(new JsonStringEnumConverter()));
+    }
+
+    [Fact]
+    public void InteractionFrameSnapshotsItsPointCollection()
+    {
+        var original = new List<InteractionPoint> { CreatePoint(InteractionPhase.Move) };
+        var frame = CreateFrame(InteractionPhase.Move, points: original);
+
+        original.Clear();
+
+        Assert.Single(frame.Points);
+        var exposed = Assert.IsAssignableFrom<IList<InteractionPoint>>(frame.Points);
+        Assert.Throws<NotSupportedException>(() => exposed.Clear());
+        Assert.Single(frame.Points);
+    }
+
+    [Fact]
+    public void InteractionFrameRejectsNullPointDuringObjectInitialization()
+    {
+        Assert.ThrowsAny<ArgumentException>(() => CreateFrame(
+            InteractionPhase.Move,
+            points: new InteractionPoint[] { null! }));
+    }
+
+    [Fact]
+    public void Point_FootprintIsAnImmutableSnapshot()
+    {
+        var source = new List<Vector2Data> { new(10f, 20f), new(30f, 40f) };
+        var point = CreatePoint(InteractionPhase.Move) with { Fp = source };
+
+        source.Clear();
+
+        Assert.Equal([new Vector2Data(10f, 20f), new Vector2Data(30f, 40f)], point.Fp);
+        Assert.IsAssignableFrom<IReadOnlyList<Vector2Data>>(point.Fp);
+        var exposed = Assert.IsAssignableFrom<IList<Vector2Data>>(point.Fp);
+        Assert.Throws<NotSupportedException>(() => exposed.Clear());
+    }
+
+    [Fact]
+    public void Point_RejectsNullFootprintAndNullElements()
+    {
+        Assert.Throws<ArgumentNullException>(() => CreatePoint(InteractionPhase.Move) with { Fp = null! });
+        Assert.Throws<ArgumentException>(() => CreatePoint(InteractionPhase.Move) with
+        {
+            Fp = new Vector2Data[] { null! }
+        });
+    }
+
+    [Fact]
+    public void Json_MissingFootprintUsesEmptyList()
+    {
+        var json = InteractionJson.Serialize(CreatePoint(InteractionPhase.Move));
+        var oldJson = json.Replace(",\"fp\":[]", string.Empty, StringComparison.Ordinal);
+
+        var decoded = InteractionJson.Deserialize<InteractionPoint>(oldJson);
+
+        Assert.NotNull(decoded.Fp);
+        Assert.Empty(decoded.Fp);
+    }
+
+    [Fact]
+    public void InteractionFrameJsonRejectsNullPoint()
+    {
+        var validJson = InteractionJson.Serialize(CreateFrame(InteractionPhase.Move));
+        var nullPointJson = validJson.Replace(
+            "\"points\":[{",
+            "\"points\":[null,{",
+            StringComparison.Ordinal);
+
+        Assert.Throws<JsonException>(() => InteractionJson.Deserialize<InteractionFrame>(nullPointJson));
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("{\"x\":0}")]
+    [InlineData("{\"y\":0}")]
+    public void Vector2DataJsonRejectsMissingCoordinates(string json)
+    {
+        Assert.Throws<JsonException>(() => InteractionJson.Deserialize<Vector2Data>(json));
+    }
+
+    [Fact]
+    public void Vector2DataJsonAcceptsExplicitZeroCoordinates()
+    {
+        var position = InteractionJson.Deserialize<Vector2Data>("{\"x\":0,\"y\":0}");
+
+        Assert.Equal(0f, position.X);
+        Assert.Equal(0f, position.Y);
+    }
+
+    [Fact]
+    public void Vector2DataJsonAcceptsPascalCaseCoordinatesWhenCaseInsensitive()
+    {
+        var position = InteractionJson.Deserialize<Vector2Data>("{\"X\":1.25,\"Y\":2.5}");
+
+        Assert.Equal(1.25f, position.X);
+        Assert.Equal(2.5f, position.Y);
+    }
+
+    [Fact]
+    public void Vector2DataJsonAcceptsMixedCaseCoordinatesWhenCaseInsensitive()
+    {
+        var position = InteractionJson.Deserialize<Vector2Data>("{\"X\":3.5,\"y\":4.75}");
+
+        Assert.Equal(3.5f, position.X);
+        Assert.Equal(4.75f, position.Y);
+    }
+
+    [Theory]
+    [InlineData("{\"x\":1,\"X\":2,\"y\":3}")]
+    [InlineData("{\"x\":1,\"y\":2,\"Y\":3}")]
+    public void Vector2DataJsonRejectsCaseVariantDuplicatesWhenCaseInsensitive(string json)
+    {
+        Assert.Throws<JsonException>(() => InteractionJson.Deserialize<Vector2Data>(json));
+    }
+
+    [Fact]
+    public void Vector2DataJsonKeepsExactPropertyMatchingWhenCaseInsensitiveIsDisabled()
+    {
+        var options = new JsonSerializerOptions(InteractionJson.Options)
+        {
+            PropertyNameCaseInsensitive = false
+        };
+
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<Vector2Data>("{\"X\":1,\"Y\":2}", options));
+        var position = JsonSerializer.Deserialize<Vector2Data>("{\"x\":1,\"y\":2}", options);
+        Assert.NotNull(position);
+        Assert.Equal(1f, position.X);
+        Assert.Equal(2f, position.Y);
+    }
+
+    [Fact]
+    public void ObjectInitializationRejectsMissingScopedIdentities()
+    {
+        Assert.ThrowsAny<ArgumentException>(() => new ProviderIdentity
+        {
+            ProviderId = " ",
+            ProviderInstanceId = "radar-main"
+        });
+        Assert.ThrowsAny<ArgumentException>(() => CreateSurface() with { SurfaceId = "" });
+        Assert.ThrowsAny<ArgumentException>(() => CreatePoint(InteractionPhase.Move) with { ProviderId = null! });
+        Assert.ThrowsAny<ArgumentException>(() => CreatePoint(InteractionPhase.Move) with { ProviderInstanceId = "\t" });
+        Assert.ThrowsAny<ArgumentException>(() => CreatePoint(InteractionPhase.Move) with { SourceId = "" });
+        Assert.ThrowsAny<ArgumentException>(() => CreatePoint(InteractionPhase.Move) with { SurfaceId = " " });
+        Assert.ThrowsAny<ArgumentException>(() => CreateFrame(InteractionPhase.Move) with { ProviderId = "" });
+        Assert.ThrowsAny<ArgumentException>(() => CreateFrame(InteractionPhase.Move) with { ProviderInstanceId = null! });
+        Assert.ThrowsAny<ArgumentException>(() => CreateFrame(InteractionPhase.Move) with { SurfaceId = " " });
+    }
+
+    [Fact]
+    public void ObjectInitializationRejectsInvalidSurfacesPositionsAndMeasurements()
+    {
+        Assert.ThrowsAny<ArgumentException>(() => CreateSurface() with { Name = " " });
+        Assert.ThrowsAny<ArgumentException>(() => CreateSurface() with { LogicalWidth = 0 });
+        Assert.ThrowsAny<ArgumentException>(() => CreateSurface() with { LogicalHeight = -1 });
+        Assert.ThrowsAny<ArgumentException>(() => new Vector2Data(float.NaN, 0f));
+        Assert.ThrowsAny<ArgumentException>(() => new Vector2Data(0f, float.PositiveInfinity));
+        Assert.ThrowsAny<ArgumentException>(() => CreatePoint(InteractionPhase.Move) with { NormalizedPosition = null! });
+        Assert.ThrowsAny<ArgumentException>(() => CreatePoint(InteractionPhase.Move) with { PixelPosition = null! });
+        Assert.ThrowsAny<ArgumentException>(() => CreatePoint(InteractionPhase.Move) with
+        {
+            NormalizedPosition = new Vector2Data(-0.01f, 0.5f)
+        });
+        Assert.ThrowsAny<ArgumentException>(() => CreatePoint(InteractionPhase.Move) with
+        {
+            NormalizedPosition = new Vector2Data(0.5f, 1.01f)
+        });
+        Assert.ThrowsAny<ArgumentException>(() => CreatePoint(InteractionPhase.Move) with { Confidence = float.NaN });
+        Assert.ThrowsAny<ArgumentException>(() => CreatePoint(InteractionPhase.Move) with { Confidence = -0.01f });
+        Assert.ThrowsAny<ArgumentException>(() => CreatePoint(InteractionPhase.Move) with { Confidence = 1.01f });
+        Assert.ThrowsAny<ArgumentException>(() => CreateFrame(InteractionPhase.Move) with { Points = null! });
+    }
+
+    [Fact]
+    public void ObjectInitializationRejectsUndefinedEnumValues()
+    {
+        Assert.ThrowsAny<ArgumentException>(() => CreatePoint((InteractionPhase)99));
+    }
+
+    [Fact]
+    public void JsonDeserializationRejectsBlankIdentityAndNumericEnums()
+    {
+        var validJson = InteractionJson.Serialize(CreateFrame(InteractionPhase.Move));
+        var blankIdentityJson = validJson.Replace(
+            "\"sourceId\":\"F1\"",
+            "\"sourceId\":\" \"",
+            StringComparison.Ordinal);
+        var numericPhaseJson = validJson.Replace(
+            "\"phase\":\"Move\"",
+            "\"phase\":2",
+            StringComparison.Ordinal);
+
+        Assert.Throws<JsonException>(() => InteractionJson.Deserialize<InteractionFrame>(blankIdentityJson));
+        Assert.Throws<JsonException>(() => InteractionJson.Deserialize<InteractionFrame>(numericPhaseJson));
+    }
+
+    [Fact]
+    public void InteractionFrameJsonCarriesAllScopedIdentitiesAndCoordinates()
+    {
+        var frame = CreateFrame(
+            InteractionPhase.Move,
+            new InteractionExtensions(new Dictionary<string, JsonElement>
+            {
+                ["radar"] = JsonSerializer.SerializeToElement(new RadarInteractionExtension("F1"), InteractionJson.Options)
+            }));
+
+        var json = InteractionJson.Serialize(frame);
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        var point = root.GetProperty("points")[0];
+
+        Assert.Equal("blaze.radar.f10f20", root.GetProperty("providerId").GetString());
+        Assert.Equal("radar-main", root.GetProperty("providerInstanceId").GetString());
+        Assert.Equal("FRONT", root.GetProperty("surfaceId").GetString());
+        Assert.Equal("blaze.radar.f10f20", point.GetProperty("providerId").GetString());
+        Assert.Equal("radar-main", point.GetProperty("providerInstanceId").GetString());
+        Assert.Equal("F1", point.GetProperty("sourceId").GetString());
+        Assert.Equal("FRONT", point.GetProperty("surfaceId").GetString());
+        Assert.Equal(0.25f, point.GetProperty("normalizedPosition").GetProperty("x").GetSingle());
+        Assert.Equal(0.75f, point.GetProperty("normalizedPosition").GetProperty("y").GetSingle());
+        Assert.Equal(480f, point.GetProperty("pixelPosition").GetProperty("x").GetSingle());
+        Assert.Equal(810f, point.GetProperty("pixelPosition").GetProperty("y").GetSingle());
+    }
+
+    [Theory]
+    [InlineData(InteractionPhase.Hover, "Hover")]
+    [InlineData(InteractionPhase.Down, "Down")]
+    [InlineData(InteractionPhase.Move, "Move")]
+    [InlineData(InteractionPhase.Up, "Up")]
+    [InlineData(InteractionPhase.Cancel, "Cancel")]
+    public void InteractionPhaseUsesStableProtocolNames(InteractionPhase phase, string expectedName)
+    {
+        var json = InteractionJson.Serialize(CreateFrame(phase));
+        using var document = JsonDocument.Parse(json);
+
+        Assert.Equal(expectedName, document.RootElement.GetProperty("points")[0].GetProperty("phase").GetString());
+    }
+
+    [Fact]
+    public void InteractionContractsRoundTripToDeterministicJson()
+    {
+        var contract = new InteractionTopology
+        {
+            ActiveProvider = new ProviderIdentity
+            {
+                ProviderId = "blaze.radar.f10f20",
+                ProviderInstanceId = "radar-main"
+            },
+            Surfaces =
+            [
+                new InteractionSurface
+                {
+                    SurfaceId = "FRONT",
+                    Name = "Front",
+                    LogicalWidth = 1920,
+                    LogicalHeight = 1080,
+                    IsPrimary = true,
+                    Order = 0
+                }
+            ],
+            Frame = CreateFrame(
+                InteractionPhase.Hover,
+                new InteractionExtensions(new Dictionary<string, JsonElement>
+                {
+                    ["zeta"] = JsonSerializer.SerializeToElement(new { enabled = true }),
+                    ["radar"] = JsonSerializer.SerializeToElement(new RadarInteractionExtension("F1"), InteractionJson.Options)
+                }))
+        };
+
+        var firstJson = InteractionJson.Serialize(contract);
+        var roundTripped = InteractionJson.Deserialize<InteractionTopology>(firstJson);
+        var secondJson = InteractionJson.Serialize(roundTripped);
+
+        Assert.Equal(firstJson, secondJson);
+        Assert.True(firstJson.IndexOf("\"radar\"", StringComparison.Ordinal) < firstJson.IndexOf("\"zeta\"", StringComparison.Ordinal));
+        Assert.Equal("radar-main", roundTripped.ActiveProvider.ProviderInstanceId);
+        Assert.Equal(1920, roundTripped.Surfaces[0].LogicalWidth);
+    }
+
+    [Fact]
+    public void RadarTypedHelperReadsRadarExtensionWithoutDiscardingRawExtensions()
+    {
+        const string json = """
+            {
+              "providerId": "blaze.radar.f10f20",
+              "providerInstanceId": "radar-main",
+              "surfaceId": "FRONT",
+              "sequence": 42,
+              "timestampUnixMs": 1720000000000,
+              "points": [{
+                "id": 7,
+                "surfaceId": "FRONT",
+                "providerId": "blaze.radar.f10f20",
+                "providerInstanceId": "radar-main",
+                "sourceId": "F1",
+                "phase": "Move",
+                "normalizedPosition": { "x": 0.25, "y": 0.75 },
+                "pixelPosition": { "x": 480, "y": 810 },
+                "confidence": 0.9,
+                "timestampUnixMs": 1720000000000,
+                "extensions": {
+                  "radar": { "sensorId": "F1" },
+                  "vendor.future": { "mode": "experimental" }
+                }
+              }]
+            }
+            """;
+
+        var frame = InteractionJson.Deserialize<InteractionFrame>(json);
+        var point = Assert.Single(frame.Points);
+
+        Assert.True(point.TryGetRadarExtension(out var radar));
+        Assert.NotNull(radar);
+        Assert.Equal("F1", radar.SensorId);
+        Assert.NotNull(point.Extensions);
+        Assert.True(point.Extensions.ContainsKey("vendor.future"));
+        Assert.Equal("experimental", point.Extensions["vendor.future"].GetProperty("mode").GetString());
+    }
+
+    [Fact]
+    public void HandTypedHelperReadsTwentyOneOrderedLandmarks()
+    {
+        var expectedLandmarks = CreateHandLandmarks();
+        var point = CreateFrame(
+            InteractionPhase.Hover,
+            new InteractionExtensions(new Dictionary<string, JsonElement>
+            {
+                ["hand"] = JsonSerializer.SerializeToElement(
+                    new HandInteractionExtension(1, "PalmCenter", expectedLandmarks),
+                    InteractionJson.Options)
+            })).Points[0];
+
+        Assert.True(point.TryGetHandExtension(out var hand));
+        Assert.NotNull(hand);
+        Assert.Equal(1, hand.SchemaVersion);
+        Assert.Equal("PalmCenter", hand.TrackingPoint);
+        Assert.Equal(21, hand.Landmarks.Count);
+        Assert.Equal(Enumerable.Range(0, 21), hand.Landmarks.Select(landmark => landmark.Index));
+        Assert.Equal(expectedLandmarks[8].NormalizedPosition, hand.Landmarks[8].NormalizedPosition);
+        Assert.Equal(expectedLandmarks[8].PixelPosition, hand.Landmarks[8].PixelPosition);
+        Assert.Equal(expectedLandmarks[8].Z, hand.Landmarks[8].Z);
+    }
+
+    [Fact]
+    public void HandExtensionSnapshotsItsLandmarksAndExposesAReadOnlyCollection()
+    {
+        var source = CreateHandLandmarks().ToList();
+        var extension = new HandInteractionExtension(1, "IndexTip", source);
+
+        source.Clear();
+
+        Assert.Equal(21, extension.Landmarks.Count);
+        var exposed = Assert.IsAssignableFrom<IList<HandLandmarkExtension>>(extension.Landmarks);
+        Assert.Throws<NotSupportedException>(() => exposed.Clear());
+        Assert.Equal(21, extension.Landmarks.Count);
+    }
+
+    [Fact]
+    public void HandExtensionRejectsInvalidSchemaLandmarkShapeAndMeasurements()
+    {
+        var landmarks = CreateHandLandmarks();
+        var duplicateIndex = landmarks.ToArray();
+        duplicateIndex[8] = CreateHandLandmark(7);
+        var outOfOrder = landmarks.ToArray();
+        (outOfOrder[7], outOfOrder[8]) = (outOfOrder[8], outOfOrder[7]);
+
+        Assert.ThrowsAny<ArgumentException>(() => new HandInteractionExtension(2, "PalmCenter", landmarks));
+        Assert.ThrowsAny<ArgumentException>(() => new HandInteractionExtension(1, " ", landmarks));
+        Assert.ThrowsAny<ArgumentException>(() => new HandInteractionExtension(1, "PalmCenter", null!));
+        Assert.ThrowsAny<ArgumentException>(() => new HandInteractionExtension(1, "PalmCenter", landmarks.Take(20).ToArray()));
+        Assert.ThrowsAny<ArgumentException>(() => new HandInteractionExtension(1, "PalmCenter", landmarks.Append(CreateHandLandmark(20)).ToArray()));
+        Assert.ThrowsAny<ArgumentException>(() => new HandInteractionExtension(1, "PalmCenter", duplicateIndex));
+        Assert.ThrowsAny<ArgumentException>(() => new HandInteractionExtension(1, "PalmCenter", outOfOrder));
+        Assert.ThrowsAny<ArgumentException>(() => new HandLandmarkExtension(-1, new Vector2Data(0f, 0f), new Vector2Data(0f, 0f), 0f));
+        Assert.ThrowsAny<ArgumentException>(() => new HandLandmarkExtension(21, new Vector2Data(0f, 0f), new Vector2Data(0f, 0f), 0f));
+        Assert.ThrowsAny<ArgumentException>(() => new HandLandmarkExtension(0, null!, new Vector2Data(0f, 0f), 0f));
+        Assert.ThrowsAny<ArgumentException>(() => new HandLandmarkExtension(0, new Vector2Data(0f, 0f), null!, 0f));
+        Assert.ThrowsAny<ArgumentException>(() => new HandLandmarkExtension(0, new Vector2Data(0f, 0f), new Vector2Data(0f, 0f), float.NaN));
+        Assert.ThrowsAny<ArgumentException>(() => new HandLandmarkExtension(0, new Vector2Data(0f, 0f), new Vector2Data(0f, 0f), float.PositiveInfinity));
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("[]")]
+    [InlineData("null")]
+    [InlineData("{\"sensorId\":null}")]
+    [InlineData("{\"sensorId\":\" \"}")]
+    public void RadarTypedHelperRejectsMalformedRadarExtension(string rawJson)
+    {
+        var point = CreatePointWithRawExtension("radar", rawJson);
+
+        Assert.False(point.TryGetRadarExtension(out var radar));
+        Assert.Null(radar);
+    }
+
+    [Fact]
+    public void HandTypedHelperRejectsMalformedHandExtensionsWithoutDiscardingRawData()
+    {
+        var malformedCases = new[]
+        {
+            "{}",
+            "[]",
+            "null",
+            CreateRawHandExtension(schemaVersion: 2),
+            CreateRawHandExtension(landmarkCount: 20),
+            CreateRawHandExtension(landmarkCount: 22),
+            CreateRawHandExtension(replaceIndexAt: 8, replacementIndex: 7),
+            CreateRawHandExtension(swapIndices: true),
+            CreateRawHandExtension(removeNormalizedPosition: true),
+            CreateRawHandExtension(removePixelPosition: true),
+            CreateRawHandExtension(nonFiniteZ: true)
+        };
+
+        foreach (var rawJson in malformedCases)
+        {
+            var point = CreatePointWithRawExtension("hand", rawJson);
+
+            Assert.False(point.TryGetHandExtension(out var hand));
+            Assert.Null(hand);
+            Assert.NotNull(point.Extensions);
+            Assert.True(point.Extensions.ContainsKey("hand"));
+        }
+    }
+
+    [Fact]
+    public void ExtensionsRemainSerializableAfterSourceJsonDocumentIsDisposed()
+    {
+        InteractionExtensions extensions;
+        using (var document = JsonDocument.Parse("{\"radar\":{\"sensorId\":\"F1\"}}"))
+        {
+            extensions = new InteractionExtensions(new Dictionary<string, JsonElement>
+            {
+                ["radar"] = document.RootElement.GetProperty("radar")
+            });
+        }
+
+        var json = InteractionJson.Serialize(CreateFrame(InteractionPhase.Move, extensions));
+
+        Assert.Contains("\"radar\":{\"sensorId\":\"F1\"}", json, StringComparison.Ordinal);
+    }
+
+    private static InteractionFrame CreateFrame(
+        InteractionPhase phase,
+        InteractionExtensions? extensions = null,
+        IReadOnlyList<InteractionPoint>? points = null)
+    {
+        return new InteractionFrame
+        {
+            ProviderId = "blaze.radar.f10f20",
+            ProviderInstanceId = "radar-main",
+            SurfaceId = "FRONT",
+            Sequence = 42,
+            TimestampUnixMs = 1_720_000_000_000,
+            Points = points ?? [CreatePoint(phase, extensions)]
+        };
+    }
+
+    private static InteractionPoint CreatePoint(
+        InteractionPhase phase,
+        InteractionExtensions? extensions = null)
+    {
+        return new InteractionPoint
+        {
+            Id = 7,
+            SurfaceId = "FRONT",
+            ProviderId = "blaze.radar.f10f20",
+            ProviderInstanceId = "radar-main",
+            SourceId = "F1",
+            Phase = phase,
+            NormalizedPosition = new Vector2Data(0.25f, 0.75f),
+            PixelPosition = new Vector2Data(480f, 810f),
+            Confidence = 0.9f,
+            TimestampUnixMs = 1_720_000_000_000,
+            Extensions = extensions
+        };
+    }
+
+    private static InteractionSurface CreateSurface()
+    {
+        return new InteractionSurface
+        {
+            SurfaceId = "FRONT",
+            Name = "Front",
+            LogicalWidth = 1920,
+            LogicalHeight = 1080,
+            IsPrimary = true,
+            Order = 0
+        };
+    }
+
+    private static InteractionPoint CreatePointWithRawExtension(string key, string rawJson)
+    {
+        using var document = JsonDocument.Parse(rawJson);
+        return CreatePoint(
+            InteractionPhase.Hover,
+            new InteractionExtensions(new Dictionary<string, JsonElement>
+            {
+                [key] = document.RootElement
+            }));
+    }
+
+    private static IReadOnlyList<HandLandmarkExtension> CreateHandLandmarks()
+    {
+        return Enumerable.Range(0, 21).Select(CreateHandLandmark).ToArray();
+    }
+
+    private static HandLandmarkExtension CreateHandLandmark(int index)
+    {
+        return new HandLandmarkExtension(
+            index,
+            new Vector2Data(index / 20f, (20 - index) / 20f),
+            new Vector2Data(index * 10f, index * 5f),
+            index * -0.01f);
+    }
+
+    private static string CreateRawHandExtension(
+        int schemaVersion = 1,
+        int landmarkCount = 21,
+        int? replaceIndexAt = null,
+        int replacementIndex = 0,
+        bool swapIndices = false,
+        bool removeNormalizedPosition = false,
+        bool removePixelPosition = false,
+        bool nonFiniteZ = false)
+    {
+        var root = JsonNode.Parse(JsonSerializer.Serialize(
+            new
+            {
+                schemaVersion,
+                trackingPoint = "PalmCenter",
+                landmarks = Enumerable.Range(0, landmarkCount).Select(index => new
+                {
+                    index,
+                    normalizedPosition = new { x = index / 20f, y = (20 - index) / 20f },
+                    pixelPosition = new { x = index * 10f, y = index * 5f },
+                    z = index * -0.01f
+                })
+            },
+            InteractionJson.Options))!.AsObject();
+        var landmarks = root["landmarks"]!.AsArray();
+
+        if (replaceIndexAt is not null)
+        {
+            landmarks[replaceIndexAt.Value]!["index"] = replacementIndex;
+        }
+
+        if (swapIndices)
+        {
+            landmarks[7]!["index"] = 8;
+            landmarks[8]!["index"] = 7;
+        }
+
+        if (removeNormalizedPosition)
+        {
+            landmarks[0]!.AsObject().Remove("normalizedPosition");
+        }
+
+        if (removePixelPosition)
+        {
+            landmarks[0]!.AsObject().Remove("pixelPosition");
+        }
+
+        if (nonFiniteZ)
+        {
+            landmarks[0]!["z"] = "NaN";
+        }
+
+        return root.ToJsonString(InteractionJson.Options);
+    }
+
+    private sealed record InteractionTopology
+    {
+        public required ProviderIdentity ActiveProvider { get; init; }
+
+        public required IReadOnlyList<InteractionSurface> Surfaces { get; init; }
+
+        public required InteractionFrame Frame { get; init; }
+    }
+}

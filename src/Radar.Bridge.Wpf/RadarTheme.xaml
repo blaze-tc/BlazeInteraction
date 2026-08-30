@@ -1,0 +1,8 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:converters="clr-namespace:Yuexin.Radar.Bridge.Wpf.Converters">
+    <ResourceDictionary.MergedDictionaries>
+        <ResourceDictionary Source="/RadarBridge;component/Resources/InteractionConsoleTheme.xaml" />
+    </ResourceDictionary.MergedDictionaries>
+    <converters:FlexibleNumericTextConverter x:Key="FlexibleNumericTextConverter" />
+</ResourceDictionary>

@@ -1,0 +1,16 @@
+{
+  "id": "blaze.radar.f10f20",
+  "displayName": "F10 / F20 激光雷达",
+  "version": "1.1.0",
+  "providerApiVersion": 1,
+  "entryAssembly": "Blaze.Provider.Radar.dll",
+  "entryType": "Blaze.Provider.Radar.RadarPlugin",
+  "category": "Radar",
+  "capabilities": [
+    "interaction-point",
+    "preview",
+    "multi-sensor",
+    "calibration",
+    "multi-surface"
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "name": "com.blaze.interaction",
+  "version": "1.1.0",
+  "displayName": "Blaze Interaction SDK",
+  "description": "Unified external-sensor interaction runtime for Blaze Interaction providers.",
+  "documentationUrl": "https://github.com/blaze-tc/BlazeInteraction/blob/v1.1.0/docs/README.md",
+  "unity": "2021.3",
+  "keywords": [
+    "interaction",
+    "input",
+    "sensor",
+    "multipointer"
+  ],
+  "author": {
+    "name": "Blaze"
+  },
+  "dependencies": {
+    "com.unity.ugui": "1.0.0",
+    "com.unity.nuget.newtonsoft-json": "3.0.2"
+  },
+  "samples": [
+    {
+      "displayName": "Basic Interaction",
+      "description": "Provider-neutral UGUI, Physics2D and Physics3D interaction scene.",
+      "path": "Samples~/BasicInteraction"
+    },
+    {
+      "displayName": "Multi-Surface Routing",
+      "description": "Three-surface camera routing scene using one Interaction connection.",
+      "path": "Samples~/MultiSurfaceRouting"
+    }
+  ]
+}
