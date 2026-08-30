@@ -7,11 +7,17 @@ namespace Blaze.Provider.CameraVision;
 
 internal sealed class CameraHandProcessingService : IAsyncDisposable
 {
+    private const int MaximumConsecutiveFrameFailures = 3;
+    private const int PreviewMaximumWidth = 960;
+    private const int PreviewMaximumHeight = 540;
+    private const long PreviewIntervalMilliseconds = 100;
+
     private readonly LatestFrameSlot<CameraFrame> _latestFrames;
     private readonly IHandDetectionBackend _backend;
     private readonly HandDetectionOptions _backendOptions;
     private readonly HandTrackingPoint _trackingPoint;
-    private readonly HomographySurfaceMapper _mapper;
+    private HomographySurfaceMapper _mapper;
+    private readonly bool _useActualFrameDimensions;
     private readonly HandTrackAssigner _assigner;
     private readonly EmaPositionFilter _positionFilter;
     private readonly float _minimumHandConfidence;
@@ -21,6 +27,10 @@ internal sealed class CameraHandProcessingService : IAsyncDisposable
     private CameraHandFrame? _latestFrame;
     private long _processedFrameCount;
     private long _lastBackendTimestampUnixMs = long.MinValue;
+    private long _lastPreviewTimestampUnixMs = long.MinValue;
+    private CameraPreviewSnapshot? _latestPreview;
+    private int _mapperWidth;
+    private int _mapperHeight;
     private int _started;
     private int _disposed;
 
@@ -32,7 +42,8 @@ internal sealed class CameraHandProcessingService : IAsyncDisposable
         HomographySurfaceMapper mapper,
         HandTrackAssigner assigner,
         EmaPositionFilter positionFilter,
-        float minimumHandConfidence)
+        float minimumHandConfidence,
+        bool useActualFrameDimensions = false)
     {
         _latestFrames = latestFrames ?? throw new ArgumentNullException(nameof(latestFrames));
         _backend = backend ?? throw new ArgumentNullException(nameof(backend));
@@ -53,6 +64,7 @@ internal sealed class CameraHandProcessingService : IAsyncDisposable
         _assigner = assigner ?? throw new ArgumentNullException(nameof(assigner));
         _positionFilter = positionFilter ?? throw new ArgumentNullException(nameof(positionFilter));
         _minimumHandConfidence = minimumHandConfidence;
+        _useActualFrameDimensions = useActualFrameDimensions;
     }
 
     public event Action<CameraHandFrame>? FrameProcessed;
@@ -158,6 +170,7 @@ internal sealed class CameraHandProcessingService : IAsyncDisposable
 
     private async Task ProcessingLoopAsync(CancellationToken cancellationToken)
     {
+        var consecutiveFailures = 0;
         try
         {
             while (!cancellationToken.IsCancellationRequested)
@@ -169,11 +182,27 @@ internal sealed class CameraHandProcessingService : IAsyncDisposable
                 }
 
                 CameraHandFrame output;
-                using (frame)
+                try
                 {
-                    output = await ProcessFrameAsync(frame, cancellationToken).ConfigureAwait(false);
+                    using (frame)
+                    {
+                        output = await ProcessFrameAsync(frame, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    consecutiveFailures++;
+                    if (consecutiveFailures >= MaximumConsecutiveFrameFailures)
+                    {
+                        throw new InvalidOperationException(
+                            $"Camera hand processing failed for {consecutiveFailures} consecutive frames.",
+                            exception);
+                    }
+
+                    continue;
                 }
 
+                consecutiveFailures = 0;
                 Volatile.Write(ref _latestFrame, output);
                 InvokeFrameProcessed(output);
             }
@@ -192,7 +221,6 @@ internal sealed class CameraHandProcessingService : IAsyncDisposable
             throw new InvalidDataException("Camera hand processing requires a BGR 8-bit three-channel frame.");
         }
 
-        var preview = CreatePreview(frame.Image);
         using var rgb = new Mat();
         Cv2.CvtColor(frame.Image, rgb, ColorConversionCodes.BGR2RGB);
         var timestampUnixMs = NextBackendTimestamp(frame.Timestamp.ToUnixTimeMilliseconds());
@@ -208,6 +236,7 @@ internal sealed class CameraHandProcessingService : IAsyncDisposable
             .ConfigureAwait(false);
         stopwatch.Stop();
 
+        var mapper = MapperFor(frame.Width, frame.Height);
         var candidates = new List<HandCandidate>(result.Hands.Count);
         var rejectedHandCount = 0;
         foreach (var hand in result.Hands)
@@ -220,7 +249,7 @@ internal sealed class CameraHandProcessingService : IAsyncDisposable
 
             var trackingPoint = TrackingPointCalculator.Calculate(hand, _trackingPoint);
             var trackingPixel = ToCameraPixel(trackingPoint, frame.Width, frame.Height);
-            if (!_mapper.TryMapTrackingPoint(trackingPixel, out _))
+            if (!mapper.TryMapTrackingPoint(trackingPixel, out _))
             {
                 rejectedHandCount++;
                 continue;
@@ -241,7 +270,7 @@ internal sealed class CameraHandProcessingService : IAsyncDisposable
                 track.Candidate.TrackingPoint,
                 frame.Width,
                 frame.Height);
-            if (!_mapper.TryMapTrackingPoint(trackingPixel, out var mappedTrackingPoint))
+            if (!mapper.TryMapTrackingPoint(trackingPixel, out var mappedTrackingPoint))
             {
                 throw new InvalidDataException("A gated hand tracking point could not be remapped.");
             }
@@ -255,7 +284,7 @@ internal sealed class CameraHandProcessingService : IAsyncDisposable
                 return new CameraMappedLandmark(
                     index,
                     cameraPixel,
-                    _mapper.MapLandmark(cameraPixel),
+                    mapper.MapLandmark(cameraPixel),
                     landmark.Z);
             });
             return new CameraHandSnapshot(
@@ -266,6 +295,7 @@ internal sealed class CameraHandProcessingService : IAsyncDisposable
                 landmarks);
         }).ToArray();
 
+        var preview = PreviewFor(frame);
         var processedFrameCount = Interlocked.Increment(ref _processedFrameCount);
         var output = new CameraHandFrame(
             frame.Sequence,
@@ -293,21 +323,76 @@ internal sealed class CameraHandProcessingService : IAsyncDisposable
     private static Vector2Data ToCameraPixel(CameraPoint point, int width, int height) =>
         new(point.X * width, point.Y * height);
 
+    private HomographySurfaceMapper MapperFor(int width, int height)
+    {
+        if (!_useActualFrameDimensions || (_mapperWidth == width && _mapperHeight == height))
+        {
+            return _mapper;
+        }
+
+        var next = new HomographySurfaceMapper(new CameraCalibration(
+            new Vector2Data(0f, 0f),
+            new Vector2Data(width, 0f),
+            new Vector2Data(width, height),
+            new Vector2Data(0f, height)));
+        var previous = _mapper;
+        _mapper = next;
+        _mapperWidth = width;
+        _mapperHeight = height;
+        previous.Dispose();
+        return next;
+    }
+
+    private CameraPreviewSnapshot PreviewFor(CameraFrame frame)
+    {
+        var timestampUnixMs = frame.Timestamp.ToUnixTimeMilliseconds();
+        var latest = _latestPreview;
+        if (latest is not null && timestampUnixMs >= _lastPreviewTimestampUnixMs &&
+            timestampUnixMs - _lastPreviewTimestampUnixMs < PreviewIntervalMilliseconds)
+        {
+            return latest;
+        }
+
+        var preview = CreatePreview(frame.Image);
+        _latestPreview = preview;
+        _lastPreviewTimestampUnixMs = timestampUnixMs;
+        return preview;
+    }
+
     private static CameraPreviewSnapshot CreatePreview(Mat bgr)
     {
-        var stride = checked(bgr.Cols * 3);
-        var pixels = new byte[checked(stride * bgr.Rows)];
-        var sourceStride = checked((int)bgr.Step());
-        for (var row = 0; row < bgr.Rows; row++)
+        var scale = Math.Min(
+            1d,
+            Math.Min(
+                PreviewMaximumWidth / (double)bgr.Cols,
+                PreviewMaximumHeight / (double)bgr.Rows));
+        using var resized = scale < 1d
+            ? bgr.Resize(
+                new Size(
+                    Math.Max(1, (int)Math.Round(bgr.Cols * scale)),
+                    Math.Max(1, (int)Math.Round(bgr.Rows * scale))),
+                0,
+                0,
+                InterpolationFlags.Area)
+            : null;
+        var previewImage = resized ?? bgr;
+        var stride = checked(previewImage.Cols * 3);
+        var pixels = new byte[checked(stride * previewImage.Rows)];
+        var sourceStride = checked((int)previewImage.Step());
+        for (var row = 0; row < previewImage.Rows; row++)
         {
             Marshal.Copy(
-                IntPtr.Add(bgr.Data, checked(row * sourceStride)),
+                IntPtr.Add(previewImage.Data, checked(row * sourceStride)),
                 pixels,
                 checked(row * stride),
                 stride);
         }
 
-        return new CameraPreviewSnapshot(bgr.Cols, bgr.Rows, stride, pixels);
+        return new CameraPreviewSnapshot(
+            previewImage.Cols,
+            previewImage.Rows,
+            stride,
+            pixels);
     }
 
     private void InvokeFrameProcessed(CameraHandFrame frame)

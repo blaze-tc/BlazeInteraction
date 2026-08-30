@@ -154,7 +154,7 @@ public sealed class ReleaseScriptBehaviorTests
             "-StartupTimeoutSeconds", "20");
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Contains("Interaction IPC 1 Hello/HelloAck passed with Bridge version 1.0.0.", result.Output, StringComparison.Ordinal);
+        Assert.Contains("Interaction IPC 1 Hello/HelloAck passed with Bridge version 1.1.0.", result.Output, StringComparison.Ordinal);
         Assert.Contains("Radar standard InteractionFrame passed.", result.Output, StringComparison.Ordinal);
         Assert.Contains("CameraVision live provider HelloAck passed.", result.Output, StringComparison.Ordinal);
         Assert.Contains("Parent-process shutdown passed with exit code 0.", result.Output, StringComparison.Ordinal);
@@ -190,7 +190,7 @@ public sealed class ReleaseScriptBehaviorTests
             "-SetupDelaySeconds", "9");
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Contains("Interaction IPC 1 Hello/HelloAck passed with Bridge version 1.0.0.", result.Output, StringComparison.Ordinal);
+        Assert.Contains("Interaction IPC 1 Hello/HelloAck passed with Bridge version 1.1.0.", result.Output, StringComparison.Ordinal);
         Assert.Contains("CameraVision live provider HelloAck passed.", result.Output, StringComparison.Ordinal);
     }
 

@@ -1,94 +1,86 @@
-# Unity 集成：com.blaze.interaction 1.0.0
+# Unity 集成：com.blaze.interaction 1.1.0
 
 ## 安装
 
-Unity 要求 2021.3 LTS。开发环境可用 Package Manager 的 **Add package from disk...** 选择 `UnityPackage/com.blaze.interaction/package.json`；Git 安装使用：
+推荐从 GitHub Release 下载 `com.blaze.interaction-1.1.0.tgz`，在 Package Manager 中选择 **Add package from tarball...**。也可使用固定 Git URL：
 
 ```text
-https://github.com/blaze-tc/BlazeInteraction.git?path=/UnityPackage/com.blaze.interaction
+https://github.com/blaze-tc/BlazeInteraction.git?path=/UnityPackage/com.blaze.interaction#v1.1.0
 ```
 
-正式项目必须固定已审核 tag/commit。安装后 Package Manager 应显示 `Blaze Interaction SDK 1.0.0`。不要同时安装旧 `com.blaze.radar`，也不要在 `Assets/` 保留旧 Radar Runtime 副本。
-
-依赖为 UGUI 1.0.0 与 Newtonsoft Json 3.0.2。
+依赖为 UGUI `1.0.0` 与 Newtonsoft Json `3.0.2`。不要同时安装旧 `com.blaze.radar`。
 
 ## Surface topology
 
 在 **Project Settings > Blaze Interaction** 配置 Surface：
 
-- `Surface ID` 非空、唯一并长期稳定；
-- logical width/height 为正，描述 Provider 与 Unity 共用的逻辑像素空间；
-- 启用 Surface 的 `Order` 唯一；
-- 所有启用 Surface 中恰好一个 Primary；
-- 禁用 Surface 不进入 Hello。
+- ID 非空且唯一；
+- logical width/height 为正；
+- 启用 Surface 的 Order 唯一；
+- 所有启用项恰好一个 Primary。
 
-示例 LEFT、FRONT、RIGHT 是三个 Surface。Radar F1/F2 可以同属 FRONT，并在 Radar Provider 内先融合；Unity 只接收 FRONT 的一个融合 frame。
+Surface 是 Provider 与 Unity 的逻辑像素合同。Radar 可把多台雷达融合到一个 Surface；CameraVision 把标定后的手中心/骨骼点映射到当前 Primary Surface 分辨率。
 
 ## 创建 Runtime
 
-执行 **GameObject > Blaze Interaction > Create Runtime**。标准场景包含：
+执行 **GameObject > Blaze Interaction > Create Runtime**。标准对象包含：
 
-- `InteractionBridgeLauncher`：探测/启动 Bridge、发送 Hello、每帧调用 `InteractionManager.Tick()`；
-- `InteractionInputModule`：把 point lifecycle 映射为 UGUI、Physics2D、Physics3D 事件；
-- `InteractionCameraRouter`：按 Surface ID 选择 Camera，并把 logical pixel 映射到 Camera pixel area；
+- `InteractionBridgeLauncher`：解析项目级数据目录和 Pipe，探测/启动 Bridge，发送 Hello。
+- `InteractionInputModule`：映射 UGUI、Physics2D、Physics3D 事件。
+- `InteractionCameraRouter`：Surface → Camera/Display/pixelRect/RenderTexture。
 - 一个 EventSystem。
 
-场景只允许一个启用的 Interaction Input Module/EventSystem。Canvas 使用 `GraphicRaycaster`；需要 2D/3D 命中的 Camera 添加对应 raycaster/collider。
+场景只允许一个启用的 Interaction Input Module/EventSystem。
 
-## Bridge 生命周期
+## 项目级配置隔离
 
-默认 Pipe 为 `Blaze.InteractionBridge`。Launcher 先探测现有 Bridge：
+Editor 使用 `<Unity项目>/Library/BlazeInteraction`，Player 使用 `Application.persistentDataPath/BlazeInteraction`。Launcher 将该目录通过 `--data-root` 传给 Bridge，并由目录哈希生成项目专属 Pipe 名。
 
-- 可连接时复用，不重复启动；
-- 不可连接且 `Auto Start` 为真时，从当前 Resolved Package 的 `Bridge~/win-x64/BlazeInteractionBridge.exe` 启动；
-- 启动参数包含 Unity PID、Pipe Name 和 minimized；
-- `Exit Bridge With Unity` 只关闭本 Launcher 启动并拥有的进程。
-
-Editor 可显式配置 Bridge executable；Player 则从构建输出的 `BlazeInteractionBridge/` 解析。不要把旧 `RadarBridge.exe` 路径填入 Interaction 设置。
+因此不同 Unity 项目、不同打包 Player 的 Provider 选择和配置不会相互覆盖。`InteractionRuntimeSettings.ProfilePath` 为空时使用 Provider 项目级默认配置；相对路径按当前环境根解析。
 
 ## Runtime API
 
 `InteractionManager.Instance` 提供：
 
-- `Connect(HelloPayload)` / `DisconnectAsync()`；
-- `Tick()` 主线程排空；
 - `Surfaces`、`Points`、`ActiveProvider`、`IsConnected`、`DroppedFrameCount`；
-- `FrameReceived`、`PointAdded`、`PointUpdated`、`PointRemoved`；
+- `FrameReceived`；
+- `PointAdded`、`PointUpdated`、`PointRemoved`；
 - `ProviderChanged`、`ConnectionChanged`、`ErrorReceived`。
 
-Manager 的 `Surfaces` 来自本次 Hello，Camera/兼容层应使用它获取名称、逻辑分辨率、Primary 和 Order，不能从 point 坐标反推 topology。
+所有事件在 `Tick()` 所在 Unity 主线程触发。不要从后台 Pipe 线程访问 UnityEngine 对象。
 
-Unity client 会保留 Down/Up/Cancel 的 FIFO 顺序，只合并相邻 Hover/Move/空视觉帧。不要假设每次后台读都对应一次 `Update`，也不要从 `DroppedFrameCount` 推断生命周期边被丢弃。
+### 通用点位
+
+```csharp
+void OnPointUpdated(InteractionPoint point)
+{
+    Vector2Data center = point.PixelPosition;
+    IReadOnlyList<Vector2Data> detail = point.Fp;
+}
+```
+
+- Radar：center 为聚类/交互中心；`Fp` 为该目标实际扫描点。
+- CameraVision：center 为手中心；`Fp` 为 21 个手部骨骼点。
+
+`Fp` 与 `PixelPosition` 使用同一个 Surface logical pixel 空间。不要把 `Fp` 当成独立 Pointer 生命周期。
+
+### Camera 手部扩展
+
+需要关节索引/结构化信息时使用 Runtime 的 hand extension helpers；通用业务只消费 center/`Fp` 即可。当前不区分左右手，一个检测到的手对应一个 `InteractionPoint`。
 
 ## Camera 路由
 
-每个 Surface ID 绑定一个 Camera：
-
-- 多物理 Display：设置 Camera `targetDisplay`，Player 启用对应 Display；
-- 同一 Display 拼接：设置 Camera `pixelRect`；
-- 投影映射或后处理：使用独立 RenderTexture，纹理尺寸/比例匹配 Surface。
-
-`InteractionCameraRouter` 先按 logical resolution 归一化 pixel，再映射到 Camera pixel rect 或 RenderTexture。LayerMask 与最大射线距离由绑定项控制。多个 Camera 不应消费同一个 Surface，除非项目明确处理重复命中。
+每个 Surface ID 可绑定一个 Camera：物理 Display、同屏 `pixelRect` 或 RenderTexture。Router 先用 Surface logical resolution 归一化，再映射到目标区域。多个 Camera 不应重复消费同一 Surface，除非项目有意镜像。
 
 ## Samples
 
-**Basic Interaction**：单 Surface 的 UGUI/2D/3D 基础交互。先用 Radar Simulation 检查 Hover、Down、Move、Up、Cancel 和断线清理。
+- **Basic Interaction**：Provider-neutral 的 UGUI/2D/3D 交互、中心光标、`Fp` 粒子和 Camera 手骨骼演示。
+- **Multi-Surface Routing**：一个 IPC 连接驱动多个 Surface/Camera。
 
-**Multi-Surface Routing**：一个 Interaction 连接驱动三个 Surface/Camera，验证 `pixelRect`/RenderTexture 路由。示例从 `InteractionManager.Surfaces` 读取逻辑分辨率，不从点坐标构造屏幕。
-
-两个 Sample 各自只包含一个 Runtime/EventSystem。导入 Sample 时不要同时保留旧 Radar Sample 的 EventSystem。
+导入 Sample 后得到的是 `Assets/Samples/` 副本；包升级不会自动覆盖，需重新导入。
 
 ## Player Build
 
-构建处理器从当前 Package Manager Resolved Path 校验并复制完整 `Bridge~/win-x64`：
+Build Processor 从当前 Package Manager Resolved Path 校验 `Bridge~/win-x64` 并复制完整目录。它会检查 package/SDK/Bridge/Provider 版本、manifest、入口、Camera 模型/原生库和 SHA-256。
 
-1. 删除 Player 目标内旧 `BlazeInteractionBridge/`；
-2. 校验 package/Bridge/Provider 版本、manifest、入口类型和恰好一个 EXE；
-3. 复制全部依赖与 `Providers/Radar/`；
-4. 重新计算并验证 SHA-256。
-
-只复制 `BlazeInteractionBridge.exe` 会导致运行失败。发布后使用 `scripts/test-embedded-bridge.ps1` 做真实 Hello/HelloAck 和父进程退出冒烟。
-
-## Radar 兼容层
-
-`Blaze.Radar` namespace 中保留有限 Obsolete wrapper：Launcher/InputModule 继承唯一 Interaction 实现，FrameDispatcher 订阅 `InteractionManager.FrameReceived` 并按一帧一帧批量映射。兼容层没有 `RadarPipeClient`、没有第二个进程启动器，也不提供旧 Radar Editor 配置面板。迁移清单见 [radar-migration.md](radar-migration.md)。
+构建输出必须整体包含 `BlazeInteractionBridge/`。只移动 Player EXE 或只复制 Bridge EXE 都不是完整发布。

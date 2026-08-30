@@ -172,25 +172,70 @@ public sealed class CameraHandProcessingServiceTests
     }
 
     [Fact]
-    public async Task ProcessingFault_IsReportedByCompletionButDisposeDoesNotRepeatIt()
+    public async Task TransientProcessingFault_DropsOnlyThatFrameAndProcessesTheNextFrame()
     {
         using var slot = new LatestFrameSlot<CameraFrame>();
+        var attempts = 0;
         var backend = new FakeHandDetectionBackend((_, _, _) =>
-            ValueTask.FromException<HandDetectionResult>(
-                new InvalidOperationException("invalid crop coordinates")));
+            Interlocked.Increment(ref attempts) == 1
+                ? ValueTask.FromException<HandDetectionResult>(
+                    new InvalidOperationException("invalid crop coordinates"))
+                : ValueTask.FromResult(Result()));
         var service = Service(slot, backend);
         await service.StartAsync(CancellationToken.None);
-        var frame = Frame(1);
-        slot.Publish(frame);
+        var failedFrame = Frame(1);
+        slot.Publish(failedFrame);
 
-        var failure = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await service.Completion.WaitAsync(TimeSpan.FromSeconds(5)));
-        Assert.Contains("invalid crop coordinates", failure.Message, StringComparison.Ordinal);
+        await WaitUntilAsync(() => backend.DetectCount == 1);
+        Assert.False(service.Completion.IsCompleted);
+
+        var recoveredFrame = Frame(2);
+        slot.Publish(recoveredFrame);
+        var output = await NextFrameAfterAsync(service, sourceSequence: 2);
+
+        Assert.Equal(2, output.SourceSequence);
+        Assert.Equal(2, backend.DetectCount);
+        Assert.False(service.Completion.IsCompleted);
 
         await service.DisposeAsync();
 
         Assert.Equal(1, backend.DisposeCount);
-        Assert.Throws<ObjectDisposedException>(() => _ = frame.Image);
+        Assert.Throws<ObjectDisposedException>(() => _ = failedFrame.Image);
+        Assert.Throws<ObjectDisposedException>(() => _ = recoveredFrame.Image);
+    }
+
+    [Fact]
+    public async Task LargeFramePreview_IsDownsampledToBoundPerFrameAllocation()
+    {
+        using var slot = new LatestFrameSlot<CameraFrame>();
+        await using var service = Service(
+            slot,
+            new FakeHandDetectionBackend(Result()),
+            width: 1920,
+            height: 1080);
+        await service.StartAsync(CancellationToken.None);
+
+        slot.Publish(Frame(1, width: 1920, height: 1080));
+        var output = await NextFrameAsync(service);
+
+        Assert.Equal(960, output.Preview.Width);
+        Assert.Equal(540, output.Preview.Height);
+        Assert.Equal(960 * 540 * 3, output.Preview.Bgr24.Count);
+    }
+
+    [Fact]
+    public async Task FramesInsidePreviewInterval_ReuseTheLastPreviewSnapshot()
+    {
+        using var slot = new LatestFrameSlot<CameraFrame>();
+        await using var service = Service(slot, new FakeHandDetectionBackend(Result()));
+        await service.StartAsync(CancellationToken.None);
+
+        slot.Publish(Frame(1));
+        var first = await NextFrameAfterAsync(service, sourceSequence: 1);
+        slot.Publish(Frame(2));
+        var second = await NextFrameAfterAsync(service, sourceSequence: 2);
+
+        Assert.Same(first.Preview, second.Preview);
     }
 
     [Fact]
@@ -279,6 +324,50 @@ public sealed class CameraHandProcessingServiceTests
         finally
         {
             service.FrameProcessed -= Handler;
+        }
+    }
+
+    private static async Task<CameraHandFrame> NextFrameAfterAsync(
+        CameraHandProcessingService service,
+        long sourceSequence)
+    {
+        if (service.LatestFrame is { } current && current.SourceSequence >= sourceSequence)
+        {
+            return current;
+        }
+
+        var source = new TaskCompletionSource<CameraHandFrame>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        void Handler(CameraHandFrame frame)
+        {
+            if (frame.SourceSequence >= sourceSequence)
+            {
+                source.TrySetResult(frame);
+            }
+        }
+
+        service.FrameProcessed += Handler;
+        try
+        {
+            if (service.LatestFrame is { } raced && raced.SourceSequence >= sourceSequence)
+            {
+                return raced;
+            }
+
+            return await source.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            service.FrameProcessed -= Handler;
+        }
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> predicate)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!predicate())
+        {
+            await Task.Delay(5, timeout.Token);
         }
     }
 

@@ -1,11 +1,13 @@
-# Gate A 架构与所有权
+# BlazeInteraction 1.1.0 架构与所有权
 
 ## 唯一生产数据链
 
 ```mermaid
 flowchart LR
     R["F10/F20 / Simulation / Replay"] --> RP["Radar Provider\nblaze.radar.f10f20"]
+    C["Camera / MediaPipe Hand"] --> CP["CameraVision Provider\nblaze.camera.vision"]
     RP --> PM["Interaction Core\nProviderManager"]
+    CP --> PM
     PM --> BH["BlazeInteractionBridge.exe"]
     BH --> IPC["Interaction IPC 1\nBlaze.InteractionBridge"]
     IPC --> UM["InteractionManager\nmain-thread dispatch"]
@@ -13,9 +15,7 @@ flowchart LR
     UM --> CR["InteractionCameraRouter\nSurface -> Camera"]
 ```
 
-Gate A 只有一个 Windows Bridge、一个 Interaction IPC server、一个 Unity Pipe Client 和一个 EventSystem 输入实现。Radar 是 Bridge 外置 Provider，不拥有第二条生产 IPC。`Blaze.Radar` 兼容程序集只做类型/事件适配，不能启动进程或创建管道。
-
-CameraHand 是后续 Gate，当前架构只预留 Provider API 和 `InteractionExtensions` 扩展边界，没有 CameraHand 生产模块。
+生产链只有一个 Windows Bridge、一个 Interaction IPC server、一个 Unity Pipe Client 和一个 EventSystem 输入实现。Radar 与 CameraVision 都是 Bridge 外置 Provider，不拥有第二条生产 IPC。`Blaze.Radar` 兼容程序集只做类型/事件适配，不能启动进程或创建管道。
 
 ## 模块职责
 
@@ -25,6 +25,7 @@ CameraHand 是后续 Gate，当前架构只预留 Provider API 和 `InteractionE
 | `Blaze.Interaction.Provider.Abstractions` | Provider API 1、插件/实例生命周期、状态和设置视图接口 | Provider 发现和加载 |
 | `Blaze.Interaction.Runtime` | 安全目录发现、隔离加载、ProviderManager、切换/停止/取消 | Named Pipe、Unity |
 | `Blaze.Provider.Radar` | 复用 RadarControl coordinator，把每屏融合输出映射为 `InteractionFrame` | 复制 Radar 算法、创建 Interaction IPC |
+| `Blaze.Provider.CameraVision` | 摄像头捕获、原生手部推理、四角标定、项目级配置、中心点/骨骼点映射和控制台 | 创建第二条 IPC、在 Unity 内运行 MediaPipe |
 | `Blaze.Interaction.Ipc` | IPC 1 framing、握手、身份、心跳、背压和单客户端 session | Provider 选择策略、Unity 事件 |
 | `Blaze.Interaction.Bridge.Wpf` | 发现/托管 Provider、创建 HelloAck、Provider 切换、向 IPC 转发状态/帧 | 直接解码雷达协议 |
 | `com.blaze.interaction` | Bridge 启动/复用、Unity client、主线程状态、InputModule、Camera 路由、构建复制 | 雷达 TCP、雷达配置算法 |
@@ -72,4 +73,4 @@ Unity 端使用同样的 `LifecycleFrameBuffer`：Down/Up/Cancel FIFO 保留，�
 
 Unity Launcher 先探测配置的 Pipe；已有 Bridge 时复用，否则从当前 Package Manager Resolved Path 启动 `BlazeInteractionBridge.exe`，参数为 `--parent-pid`、`--pipe-name`、`--minimized`。Bridge 验证 Named Pipe 的真实客户端 PID/Windows Session 与 Hello 声明；自动启动时还必须等于 `--parent-pid`。
 
-发布 payload 根目录恰好一个 EXE，Provider 位于 `Providers/Radar/`。Player 构建处理器先删除目标中的旧 Bridge 目录，再复制完整 payload，并校验 Bridge 版本、Provider manifest/入口 DLL 和文件 SHA-256。
+发布 payload 根目录恰好一个 EXE，Provider 分别位于 `Providers/Radar/` 与 `Providers/CameraVision/`。Player 构建处理器先删除目标中的旧 Bridge 目录，再复制完整 payload，并校验 Bridge 版本、Provider manifest/入口 DLL、Camera 模型/原生库和文件 SHA-256。

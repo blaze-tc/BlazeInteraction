@@ -356,7 +356,7 @@ public sealed class RadarInteractionProviderTests
 
         Assert.Equal("blaze.radar.f10f20", descriptor.Id);
         Assert.Equal("F10 / F20 激光雷达", descriptor.DisplayName);
-        Assert.Equal(new Version(1, 0, 0), descriptor.Version);
+        Assert.Equal(new Version(1, 1, 0), descriptor.Version);
         Assert.Equal("Radar", descriptor.Category);
         Assert.Equal(
             ["interaction-point", "preview", "multi-sensor", "calibration", "multi-surface"],

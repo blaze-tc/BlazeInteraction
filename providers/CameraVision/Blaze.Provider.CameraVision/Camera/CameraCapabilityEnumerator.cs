@@ -21,45 +21,47 @@ public sealed class CameraCapabilityEnumerator
         _candidates = (candidates ?? DefaultCandidates).ToArray();
     }
 
-    public async Task<CameraDeviceCapabilities> EnumerateAsync(
+    public Task<CameraDeviceCapabilities> EnumerateAsync(
         CameraDeviceDescriptor device,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(device);
-        var verifiedModes = new HashSet<CameraCaptureMode>();
-
-        foreach (var candidate in _candidates)
+        return Task.Run(async () =>
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            await using var backend = _factory.Create();
-            var opened = backend.TryOpen(new CameraCaptureOptions
+            var verifiedModes = new HashSet<CameraCaptureMode>();
+            foreach (var candidate in _candidates)
             {
-                DeviceIndex = device.Index,
-                Width = candidate.Width,
-                Height = candidate.Height,
-                FramesPerSecond = candidate.FramesPerSecond
-            });
+                cancellationToken.ThrowIfCancellationRequested();
+                await using var backend = _factory.Create();
+                var opened = backend.TryOpen(new CameraCaptureOptions
+                {
+                    DeviceIndex = device.Index,
+                    Width = candidate.Width,
+                    Height = candidate.Height,
+                    FramesPerSecond = candidate.FramesPerSecond
+                });
 
-            if (opened && backend.TryGetActiveMode(out var activeMode) &&
-                activeMode is not null && Matches(candidate, activeMode))
-            {
-                verifiedModes.Add(candidate);
+                if (opened && backend.TryGetActiveMode(out var activeMode) &&
+                    activeMode is not null && Matches(candidate, activeMode))
+                {
+                    verifiedModes.Add(candidate);
+                }
+
+                backend.Close();
             }
 
-            backend.Close();
-        }
+            var orderedModes = Sort(verifiedModes);
+            if (orderedModes.Count > 0)
+            {
+                return new CameraDeviceCapabilities(device, orderedModes, false, null);
+            }
 
-        var orderedModes = Sort(verifiedModes);
-        if (orderedModes.Count > 0)
-        {
-            return new CameraDeviceCapabilities(device, orderedModes, false, null);
-        }
-
-        return new CameraDeviceCapabilities(
-            device,
-            Sort(_candidates.Count > 0 ? _candidates : DefaultCandidates),
-            true,
-            FallbackWarning);
+            return new CameraDeviceCapabilities(
+                device,
+                Sort(_candidates.Count > 0 ? _candidates : DefaultCandidates),
+                true,
+                FallbackWarning);
+        }, cancellationToken);
     }
 
     private static bool Matches(CameraCaptureMode requested, CameraCaptureMode actual) =>

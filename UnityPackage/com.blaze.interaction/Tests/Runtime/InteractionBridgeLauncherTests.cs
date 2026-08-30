@@ -101,7 +101,7 @@ namespace Blaze.Interaction.Tests
                 var hello = launcher.CreateHelloPayloadForTests();
 
                 Assert.That(hello.UnityPid, Is.EqualTo(Process.GetCurrentProcess().Id));
-                Assert.That(hello.SdkVersion, Is.EqualTo("1.0.0"));
+                Assert.That(hello.SdkVersion, Is.EqualTo("1.1.0"));
                 Assert.That(hello.UnityVersion, Is.EqualTo(Application.unityVersion));
                 Assert.That(hello.Surfaces, Has.Count.EqualTo(2));
                 Assert.That(hello.Surfaces[0].SurfaceId, Is.EqualTo("front"));

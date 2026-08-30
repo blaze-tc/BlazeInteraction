@@ -18,29 +18,30 @@ public sealed class CameraDeviceEnumerator
         _maximumDeviceCount = maximumDeviceCount;
     }
 
-    public async Task<IReadOnlyList<CameraDeviceDescriptor>> EnumerateAsync(
-        CancellationToken cancellationToken)
-    {
-        var devices = new List<CameraDeviceDescriptor>();
-        for (var index = 0; index < _maximumDeviceCount; index++)
+    public Task<IReadOnlyList<CameraDeviceDescriptor>> EnumerateAsync(
+        CancellationToken cancellationToken) =>
+        Task.Run<IReadOnlyList<CameraDeviceDescriptor>>(async () =>
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            await using var backend = _factory.Create();
-            var options = new CameraCaptureOptions
+            var devices = new List<CameraDeviceDescriptor>();
+            for (var index = 0; index < _maximumDeviceCount; index++)
             {
-                DeviceIndex = index,
-                Width = 640,
-                Height = 480,
-                FramesPerSecond = 30
-            };
-            if (backend.TryOpen(options))
-            {
-                devices.Add(new CameraDeviceDescriptor(index, $"Camera {index}"));
+                cancellationToken.ThrowIfCancellationRequested();
+                await using var backend = _factory.Create();
+                var options = new CameraCaptureOptions
+                {
+                    DeviceIndex = index,
+                    Width = 640,
+                    Height = 480,
+                    FramesPerSecond = 30
+                };
+                if (backend.TryOpen(options))
+                {
+                    devices.Add(new CameraDeviceDescriptor(index, $"Camera {index}"));
+                }
+
+                backend.Close();
             }
 
-            backend.Close();
-        }
-
-        return Array.AsReadOnly(devices.ToArray());
-    }
+            return Array.AsReadOnly(devices.ToArray());
+        }, cancellationToken);
 }

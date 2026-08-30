@@ -6,7 +6,7 @@ Gate A 的目标不是同时维护两套 Unity SDK，而是把 Radar 作为统�
 
 | 旧项 | Gate A |
 | --- | --- |
-| `com.blaze.radar` | `com.blaze.interaction` 1.0.0 |
+| `com.blaze.radar` | `com.blaze.interaction` 1.1.0 |
 | `RadarBridge.exe` | `BlazeInteractionBridge.exe` |
 | `Yuexin.RadarBridge` / Radar IPC 2 | `Blaze.InteractionBridge` / Interaction IPC 1 |
 | 内嵌 Radar 专用 Runtime | Provider-neutral Runtime + 外置 `Providers/Radar` |

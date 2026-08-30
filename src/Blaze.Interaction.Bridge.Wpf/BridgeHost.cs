@@ -358,7 +358,7 @@ public sealed class BridgeHost : IAsyncDisposable, IBridgeWindowHost
                 ? descriptor.Capabilities
                 : [];
             return new HelloAckPayload(
-                "1.0.0",
+                "1.1.0",
                 active is null
                     ? null
                     : new ProviderReferencePayload(active.ProviderId, active.ProviderInstanceId),

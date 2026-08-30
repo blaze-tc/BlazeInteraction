@@ -1,56 +1,65 @@
-# 1.2.10 故障排查与现场证据
+# BlazeInteraction 1.1.0 故障排查
 
-## 包版本或 Bridge 不是 1.2.10
+## 先收集这些信息
 
-Package Manager 应解析：
+- Package Manager 中的版本和 Resolved Path。
+- Bridge 顶部 Unity/设备连接状态、活动 Provider。
+- Unity Console/Editor Log 或 Player.log。
+- 当前项目 `Library/BlazeInteraction`（Player 为 persistent data）中的配置备份。
+- 复现时间、摄像头/雷达型号、分辨率、Windows 缩放和操作步骤。
 
-```text
-https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.10
-```
+## Unity 连接一直 False
 
-移除旧 URL、本地覆盖和已导入的旧 Sample。确认 Version `1.2.10` 和 Resolved Path 指向本项目新 `Library/PackageCache/com.blaze.radar@...`。仍陈旧时关闭 Unity，只清除该包缓存与 lock 条目后重开。Player 构建后比较 `RadarBridge/bridge-version.txt` 和包内/已审核 EXE SHA-256；不要用单个旧 EXE 覆盖完整目录。
+1. 确认处于 Play Mode，场景中存在启用的 `InteractionBridgeLauncher`。
+2. 确认 Project Settings 的 Surface 校验通过。
+3. 场景只能有一个 Runtime/EventSystem；移除旧 Radar Runtime/Package。
+4. 确认 Package、`InteractionSdkVersion` 和 `bridge-version.txt` 都是 `1.1.0`，IPC 是 Interaction IPC 1。
+5. 关闭残留 Bridge 后重进 Play Mode。不同 Unity 项目使用不同带哈希后缀的 Pipe，不能拿另一个项目启动的 Bridge 状态判断当前项目。
 
-## IPC protocol mismatch 或一直 DISCONNECTED
+## 重新运行后参数丢失
 
-IPC v1 PointerFrame 与 IPC v2 PointerBatch 不兼容。关闭所有旧 RadarBridge/Player，确认 package、SDK、Bridge 都为 `1.2.10`，日志显示 IPC 2，Pipe Name 两侧一致，再重连。HelloAck 必须包含 protocol 2、Bridge 1.2.10 和当前 screen summaries；不能忽略 Error 强行继续。
+Editor 配置应在 `<项目>/Library/BlazeInteraction/`，Player 配置应在 `Application.persistentDataPath/BlazeInteraction/`。检查目录是否可写、是否每次删除 Library/persistent data、是否用绝对 `ProfilePath` 覆盖了默认路径。
 
-## 某屏无输入、串屏或重叠区双点
+点击 Provider 页面中的保存/应用按钮后再退出。Camera 每个 device index 有独立 profile；切换到另一摄像头时看到默认值不等于原设备配置丢失。
 
-- Project Settings 中 Screen ID/Order 唯一，所有启用屏幕恰好一个 Primary，逻辑分辨率有效。
-- Bridge 选择正确屏幕；检查每个 Sensor 的 enabled/source、连接、本机 NIC、transform/calibration 和 OutputRect。
-- FRONT F1/F2 必须属于同一 FRONT；输出矩形覆盖真实交叠区，并调节 FRONT 的 data max age、fusion distance、association distance/confirm/lost。
-- Camera 的 Display、`pixelRect` 或 RenderTexture 绑定必须对应 screenId；检查对应 Graphic/Physics/Physics2D Raycaster。
-- 改拓扑、分辨率或 OutputRect 会触发 Pointer Up/reset，只在操作员预期时更改。
+## Camera 已连接但检测点为 0
 
-## 三面墙边线噪点进入 Unity
+- 左上原始画面是否有实时帧、比例是否正常。
+- 手是否位于四角有效区域内，光照、距离、遮挡是否满足检测。
+- 检测/跟踪置信度是否过高。
+- 左下 Unity 输出分辨率是否来自预期 Surface。
+- Output FPS 为 0 且错误区有 native 错误时，点击重连；保留完整错误和相机模式。
 
-不要缩小有效拉框来躲避墙角或地面边线。选择对应雷达，在“雷达参数 > 边线过滤（优先）”分别设置左、右、上、下向内死区；从 `0.05–0.15 m` 开始，观察 1B/放大编辑器的橙色带覆盖静态边线，而 1A 保留原始点用于诊断。1.2.10 按绿色拉框的真实斜边计算距离，不受拉框旋转或梯形透视影响。设置后必须保存并应用。
+`Invalid crop coordinates` 已在帧边界做防护；如果 1.1.0 仍复现，记录分辨率、翻转、四角坐标和出错前操作，不要只截异常弹窗。
 
-## 快速挥动点位稀疏或 Pointer ID 跳变
+## Camera 参数操作卡顿
 
-- 先过滤边线噪点，再点“载入快速移动预设”并“保存并应用配置”。预设把确认帧设为 1、丢失帧设为 5、平滑设为 0.8、数据年龄设为 220 ms、最少聚类点数设为 1，并按屏幕宽度计算 240–480 px 的最大关联距离。
-- 1A 稀疏说明真实雷达帧/回波就稀疏；输出频率不能增加设备实际扫描点。检查 scan Hz、CRC、input dropped 和目标反射。
-- 1A 连续而 1B 稀疏，检查范围、边线/屏蔽过滤和聚类；1B 连续而区域 2 跳 ID，增加最大关联距离。
-- 区域 2 连续而 Unity 稀疏，检查 Unity FPS 与 `DroppedBatchCount`/日志 `dropped=`。Unity SDK 会合并积压的纯 Move 可视帧以保护主线程，但保留 Down/Up 顺序。
+分辨率/帧率通过下拉框选择并在应用时重建管线。连续拖四角只更新预览草稿，不应反复重启摄像头。若仍卡顿，记录 Camera/Inference/Output FPS、UI 已渲染/替换帧计数、CPU 和 Windows DPI，并确认不是缓存旧版。
 
-## 雷达连接失败
+## Radar 连接失败或无原始点
 
-电脑可设 `192.168.0.10/24`，雷达常用 `192.168.0.100:8487`；两者不能相同。Bridge 每个 Sensor 选择实际 F10/F20 与正确本机 NIC。逐个断开/恢复雷达和 NIC，其他屏幕应持续；检查 `[SCREEN/SENSOR]` tagged reconnect/timeout 日志。
+检查雷达 IP/端口、本机网卡 IP、型号和数据源。电脑与雷达需同网段且 IP 不相同。先用 Simulation 验证 Unity 链路，再在原始点区验证真机 TCP/解析。
 
-## WPF 控件消失或变模糊
+原始点有、过滤点无：检查距离/角度、变换、有效区域、边缘死区和屏蔽区。过滤点有、Unity 无：检查标定、OutputRect、融合/跟踪、Surface 和 IPC 状态。
 
-Bridge 在窗口创建前强制 WPF 软件渲染，路径不依赖 GPU。仍需记录 Windows 缩放、投影分辨率、GPU/驱动和精确操作；测试 click、drag、scroll、resize、minimize/restore、跨 DPI 屏移动和 projector focus change。若能复现，保存同一时间段日志与截图，确认运行的是包内 1.2.10 完整 payload，而非缓存旧版。
+## Radar 放大编辑/点数多时卡顿
 
-## 小数参数无法输入
+1.1.0 使用有界保留点数、合并 UI 快照和自绘画布。若仍复现，记录窗口大小、DPI、点数、操作顺序和内存/CPU；确认未使用旧 `RadarBridge.exe` 或旧 PackageCache。不要通过无限增加显示点上限处理设备噪声。
 
-1.2.10 右侧所有浮点参数同时接受点和逗号小数，例如 `0.15` 与 `0,15`。输入过程中的 `0.` 或 `0,` 会保留在文本框中，继续输入数字后才更新配置；整数参数仍只接受整数。若分隔符仍被立即删除，请检查窗口页眉与 Package Manager 是否确认为 1.2.10。
+## 点位方向/位置错误
 
-## 区域 2 或 Unity Pointer 闪烁
+Radar：按原始点 → 变换/有效区 → 标定 → OutputRect → Unity 顺序定位。
 
-1.2.10 会在“丢失帧”容忍期内保持目标最后位置，并继续向区域 2 与 Unity 输出 Move/Hover；只有达到丢失阈值才发送 Up 并清除。输出频率不会增加真实雷达扫描率，而且“丢失帧”按输出 Tick 计数：30 Hz 配置 5 帧约为 167 ms，60 Hz 应配置 10–12 帧以保持相近的 167–200 ms 容忍时间。若持续闪烁，再对比 1A、1B 和区域 2，检查真实空帧、聚类过滤与 `DroppedBatchCount`。
+Camera：左上四角区域定义透视换算，X/Y 翻转在标定后应用，左下是最终 Unity 预览。若左下正确但 Unity 错，检查 Surface logical resolution 和 Camera Router；若左下已经错误，修改 Camera 配置而非业务 Camera。
 
-## 日志关联
+## Bridge/Provider 版本不匹配
 
-Bridge 日志：`%LOCALAPPDATA%/RadarControl/logs/RadarBridge-YYYYMMDD.log`；配置默认在 `%LOCALAPPDATA%/Yuexin/RadarBridge/config.json`，也可 `--profile` 指定。用 `[SCREEN/SENSOR]`、sequence 和 timestamp 对齐 `Player.log` 的 SDK/Bridge/IPC、screenId、batch/frame sequence、pointer/dropped count、latency 和 EventSystem target。
+移除旧包和旧 Sample，关闭 Unity，只清理当前项目中该包的 PackageCache/lock 解析，再安装固定 `v1.1.0` 或 Release `.tgz`。不要手工把新 EXE 覆盖到旧 payload；重新安装完整包。
 
-现场问题至少提供：最终 Schema 2 配置、Bridge tagged logs、`Player.log`、Package Manager Resolved Path、Player/包内 EXE SHA、拓扑/Camera 绑定与操作时间线。8 小时门禁见 [INSTALL.md](../INSTALL.md#10-现场-8-小时验收三投影四雷达)。
+## Player 换机启动失败
+
+确认 Player 旁有完整 `BlazeInteractionBridge/`，包括 hostfxr、hostpolicy、两个 Providers、Camera 模型和原生 DLL。Windows x64 Release 自包含，不需安装 .NET；缺文件时重新复制整个构建输出。
+
+## 日志与隐私
+
+提交问题时可附配置和日志，但先删除客户名称、IP、目录用户名等敏感信息。Camera 截图可能包含人物/环境，只有在获得授权后提供，优先截错误状态和控制面板。

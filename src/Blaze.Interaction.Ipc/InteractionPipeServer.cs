@@ -32,7 +32,7 @@ public sealed class InteractionPipeServerOptions
         InteractionIpcStream.WriteAsync;
 
     public Func<HelloPayload, CancellationToken, ValueTask<HelloAckPayload>> CreateHelloAckAsync { get; init; } =
-        static (_, _) => ValueTask.FromResult(new HelloAckPayload("1.0.0", null, []));
+        static (_, _) => ValueTask.FromResult(new HelloAckPayload("1.1.0", null, []));
 }
 
 public sealed record InteractionPipeClientIdentity(int ProcessId, int SessionId);

@@ -421,6 +421,57 @@ public sealed class RadarPipeServerTests
         await runTask;
     }
 
+    [Fact]
+    public async Task Server_DoesNotExposeAuthenticatedClientUntilHelloAckIsWritten()
+    {
+        var pipeName = "RadarControl.Tests." + Guid.NewGuid().ToString("N");
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var authenticationCompleted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var server = new RadarPipeServer(new RadarPipeServerOptions
+        {
+            PipeName = pipeName,
+            AuthenticateHelloAsync = (_, _, _) =>
+            {
+                authenticationCompleted.TrySetResult();
+                return Accept();
+            }
+        });
+        var runTask = server.RunAsync(cancellation.Token);
+        var writeLock = (SemaphoreSlim)typeof(RadarPipeServer)
+            .GetField("_writeLock", System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(server)!;
+
+        await writeLock.WaitAsync(cancellation.Token);
+        bool exposedBeforeAcknowledgement;
+        await using var client = new NamedPipeClientStream(
+            ".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        try
+        {
+            await client.ConnectAsync(cancellation.Token);
+            await IpcStream.WriteAsync(
+                client,
+                IpcEnvelope.Create(IpcMessageType.Hello, 1, Hello()),
+                cancellation.Token);
+            await authenticationCompleted.Task.WaitAsync(cancellation.Token);
+            await Task.Delay(50, cancellation.Token);
+            exposedBeforeAcknowledgement = server.IsClientConnected;
+        }
+        finally
+        {
+            writeLock.Release();
+        }
+
+        var acknowledgement = await IpcStream.ReadAsync(client, cancellation.Token);
+        Assert.Equal(IpcMessageType.HelloAck, acknowledgement.MessageType);
+        Assert.False(exposedBeforeAcknowledgement);
+        Assert.True(server.IsClientConnected);
+
+        cancellation.Cancel();
+        await runTask;
+    }
+
     private static NamedPipeClientStream Client(string pipeName) =>
         new(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
 

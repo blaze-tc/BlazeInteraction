@@ -162,6 +162,39 @@ public sealed class CameraVisionControlTests
     }
 
     [Fact]
+    public async Task CalibrationClick_UsesActualCaptureDimensionsWhenPreviewIsDownsampled()
+    {
+        using var services = new ControlServices(
+            cameraBackendFactory: static () => new SteadyCameraBackend(1920, 1080));
+        await services.SaveAsync(Configuration(
+            maxHands: 8,
+            calibrations: new Dictionary<string, CameraCalibration>(),
+            capture: new CameraCaptureOptions
+            {
+                Width = 1920,
+                Height = 1080,
+                FramesPerSecond = 30,
+                ReconnectDelay = TimeSpan.FromMilliseconds(20)
+            }));
+        var provider = await CreateInitializedAsync(services);
+        var control = (ICameraVisionControl)provider;
+        await provider.StartAsync(CancellationToken.None);
+        await WaitUntilAsync(() => control.CurrentStatus.Preview?.Width == 960);
+
+        await control.SetCalibrationPointAsync(
+            "main",
+            pointIndex: 0,
+            previewPosition: new Vector2Data(240, 135),
+            previewSize: new Vector2Data(960, 540),
+            CancellationToken.None);
+
+        var loaded = (await services.Store.LoadOrCreateAsync(CancellationToken.None)).Configuration!;
+        Assert.Equal(480f, loaded.Calibrations["main"].P1.X, 3);
+        Assert.Equal(270f, loaded.Calibrations["main"].P1.Y, 3);
+        await provider.DisposeAsync();
+    }
+
+    [Fact]
     public async Task ResetCalibration_RemovesOnlySelectedSurface()
     {
         using var services = new ControlServices();
@@ -180,6 +213,45 @@ public sealed class CameraVisionControlTests
         var loaded = (await services.Store.LoadOrCreateAsync(CancellationToken.None)).Configuration!;
         Assert.False(loaded.Calibrations.ContainsKey("main"));
         Assert.True(loaded.Calibrations.ContainsKey("other"));
+        await provider.DisposeAsync();
+    }
+
+    [Theory]
+    [InlineData(1, 100, 100, CameraRotation.Rotate0, false)]
+    [InlineData(0, 200, 100, CameraRotation.Rotate0, false)]
+    [InlineData(0, 100, 100, CameraRotation.Rotate90, false)]
+    [InlineData(0, 100, 100, CameraRotation.Rotate0, true)]
+    public async Task Apply_CaptureGeometryChangeInvalidatesStaleCalibration(
+        int deviceIndex,
+        int width,
+        int height,
+        CameraRotation rotation,
+        bool mirrorX)
+    {
+        using var services = new ControlServices();
+        await services.SaveAsync(Configuration(maxHands: 8));
+        var provider = await CreateInitializedAsync(services);
+        var control = (ICameraVisionControl)provider;
+        var next = Configuration(
+            maxHands: 8,
+            calibrations: control.CurrentConfiguration!.Calibrations,
+            capture: new CameraCaptureOptions
+            {
+                DeviceIndex = deviceIndex,
+                Width = width,
+                Height = height,
+                FramesPerSecond = 30,
+                Rotation = rotation,
+                MirrorX = mirrorX,
+                ReconnectDelay = TimeSpan.FromMilliseconds(20)
+            });
+
+        await control.ApplyAsync(next, CancellationToken.None);
+
+        Assert.Empty(control.CurrentConfiguration!.Calibrations);
+        var persisted = (await services.Store.LoadOrCreateAsync(CancellationToken.None))
+            .Configuration!;
+        Assert.Empty(persisted.Calibrations);
         await provider.DisposeAsync();
     }
 
@@ -250,10 +322,11 @@ public sealed class CameraVisionControlTests
 
     private static CameraVisionConfiguration Configuration(
         int maxHands,
-        IReadOnlyDictionary<string, CameraCalibration>? calibrations = null) =>
+        IReadOnlyDictionary<string, CameraCalibration>? calibrations = null,
+        CameraCaptureOptions? capture = null) =>
         new(
             1,
-            new CameraCaptureOptions
+            capture ?? new CameraCaptureOptions
             {
                 Width = 100,
                 Height = 100,
@@ -392,7 +465,9 @@ public sealed class CameraVisionControlTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private sealed class SteadyCameraBackend : ICameraCaptureBackend
+    private sealed class SteadyCameraBackend(
+        int width = 100,
+        int height = 100) : ICameraCaptureBackend
     {
         private long _sequence;
         public bool IsOpen { get; private set; }
@@ -416,8 +491,8 @@ public sealed class CameraVisionControlTests
                 Interlocked.Increment(ref _sequence),
                 DateTimeOffset.UtcNow,
                 new OpenCvSharp.Mat(
-                    100,
-                    100,
+                    height,
+                    width,
                     OpenCvSharp.MatType.CV_8UC3,
                     OpenCvSharp.Scalar.All(0)));
             return true;

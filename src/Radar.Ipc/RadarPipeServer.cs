@@ -260,13 +260,13 @@ public sealed class RadarPipeServer : IAsyncDisposable
             return;
         }
 
-        _activePipe = pipe;
         try
         {
             await WriteLockedAsync(
                 pipe,
                 IpcEnvelope.Create(IpcMessageType.HelloAck, NextSequence(), authentication.Ack!),
                 cancellationToken).ConfigureAwait(false);
+            _activePipe = pipe;
         }
         catch
         {

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using OpenCvSharp;
 
 namespace Blaze.Provider.CameraVision.Tests;
@@ -19,6 +20,22 @@ public sealed class CameraCaptureTests
         Assert.Equal(1, device.Index);
         Assert.Equal("Camera 1", device.DisplayName);
         Assert.All(factory.Created, backend => Assert.True(backend.IsDisposed));
+    }
+
+    [Fact]
+    public async Task Enumerator_ReturnsControlBeforeBlockingDeviceProbeCompletes()
+    {
+        var factory = new DelayedProbeFactory(TimeSpan.FromMilliseconds(300));
+        var enumerator = new CameraDeviceEnumerator(factory, maximumDeviceCount: 1);
+        var stopwatch = Stopwatch.StartNew();
+
+        var enumeration = enumerator.EnumerateAsync(CancellationToken.None);
+
+        stopwatch.Stop();
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromMilliseconds(100),
+            $"Enumeration blocked its caller for {stopwatch.Elapsed.TotalMilliseconds:F1} ms.");
+        await enumeration;
     }
 
     [Fact]
@@ -171,5 +188,23 @@ public sealed class CameraCaptureTests
             IsDisposed = true;
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class DelayedProbeFactory(TimeSpan delay) : ICameraCaptureBackendFactory
+    {
+        public ICameraCaptureBackend Create() => new DelayedProbeBackend(delay);
+    }
+
+    private sealed class DelayedProbeBackend(TimeSpan delay) : ICameraCaptureBackend
+    {
+        public bool IsOpen => false;
+        public bool TryOpen(CameraCaptureOptions options)
+        {
+            Thread.Sleep(delay);
+            return false;
+        }
+        public bool TryRead(out CameraFrame? frame) { frame = null; return false; }
+        public void Close() { }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

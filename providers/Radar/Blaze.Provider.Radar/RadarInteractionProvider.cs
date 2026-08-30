@@ -575,7 +575,7 @@ public sealed class RadarInteractionProvider : IInteractionProvider
                 await coordinator.ApplyUnityTopologyAsync(
                     new HelloPayload(
                         Environment.ProcessId,
-                        "Blaze.Interaction.Provider/1.0.0",
+                        "Blaze.Interaction.Provider/1.1.0",
                         surfaces.Select(surface => new RadarScreenDefinitionPayload(
                             surface.SurfaceId,
                             surface.Name,

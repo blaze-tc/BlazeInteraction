@@ -1,84 +1,110 @@
 # BlazeInteraction
 
-BlazeInteraction 是统一外部感应设备交互平台。Gate A 已完成以下唯一生产链路：
+BlazeInteraction 是面向 Unity 的统一外部感应设备平台。一个 Windows Bridge 负责加载不同 Sensor Provider，通过同一条 Interaction IPC 把点位发送给 Unity；当前发布版同时包含 Radar 和 CameraVision 两种模式。
 
 ```text
-RadarControl 既有算法
-  -> Interaction Core / Provider API 1
-  -> Radar Provider (blaze.radar.f10f20)
-  -> BlazeInteractionBridge.exe
-  -> Interaction IPC 1
-  -> com.blaze.interaction 1.0.0
-  -> Unity UGUI / Physics2D / Physics3D
+Radar F10/F20 / Simulation       Camera + MediaPipe Hand Landmarker
+               \                 /
+                Provider API 1
+                      |
+          BlazeInteractionBridge.exe
+                      |
+              Interaction IPC 1
+                      |
+        com.blaze.interaction 1.1.0
+                      |
+       UGUI / Physics2D / Physics3D
 ```
 
-Gate A 保留 FaseLase F10/F20 的连接、配置、标定、过滤、同屏融合、跟踪、Touch 与 Dwell 行为，并把它们封装为外置 Radar Provider。Unity 不再拥有 Radar 专用 Pipe Client 或第二套 Launcher。CameraHand 不属于 Gate A，仓库当前没有 CameraHand 生产实现。
+## 当前能力
 
-## 安装 Unity 包
+- **Radar**：FaseLase F10/F20、Simulation/Replay、点云过滤、四点标定、同屏多雷达融合、Touch/Dwell、实际扫描点 `Fp` 输出。
+- **CameraVision**：摄像头分辨率/帧率选择、不限制手数量的检测、每只手 21 个骨骼点、四角有效区、Unity 坐标换算、X/Y 翻转、设备级配置持久化。
+- **统一数据**：`InteractionPoint.PixelPosition` 是交互中心点；`InteractionPoint.Fp` 是 Radar 实际扫描点或 Camera 手部骨骼点。
+- **项目隔离**：Editor 配置写入当前 Unity 项目的 `Library/BlazeInteraction/`；Player 配置写入该 Player 的 `Application.persistentDataPath/BlazeInteraction/`，不同项目互不覆盖。
+- **Unity 集成**：自动启动/复用 Bridge，支持 UGUI、2D/3D Physics、Surface → Camera 路由、Basic Interaction 与 Multi-Surface Routing Samples。
 
-开发时可在 Unity Package Manager 使用 `Add package from disk...` 选择：
+![Radar 控制台](docs/images/radarbridge-overview.png)
+
+## 最快安装
+
+从 [GitHub Releases](https://github.com/blaze-tc/BlazeInteraction/releases/latest) 下载：
 
 ```text
-E:\Project\BlazeInteraction\UnityPackage\com.blaze.interaction\package.json
+com.blaze.interaction-1.1.0.tgz
 ```
 
-也可使用 Git URL：
+Unity 中打开 **Window > Package Manager**，点击左上角 `+`，选择 **Add package from tarball...**，选中下载的 `.tgz`。随后：
+
+1. 在 **Project Settings > Blaze Interaction** 创建至少一个 Surface；启用项必须恰好一个 Primary。
+2. 执行 **GameObject > Blaze Interaction > Create Runtime**。
+3. 在 Package Manager 的 **Samples** 中导入 **Basic Interaction**。
+4. 进入 Play Mode；首次打开选择 Radar 或 CameraVision，后续会记住当前项目的选择。
+
+完整步骤、Git/本地磁盘安装和升级说明见 [INSTALL.md](INSTALL.md)。
+
+## Unity 安装地址
+
+固定发布标签：
 
 ```text
-https://github.com/blaze-tc/BlazeInteraction.git?path=/UnityPackage/com.blaze.interaction
+https://github.com/blaze-tc/BlazeInteraction.git?path=/UnityPackage/com.blaze.interaction#v1.1.0
 ```
 
-正式部署必须在 URL 尾部固定已审核 tag 或 commit。Package Manager 应显示 `Blaze Interaction SDK 1.0.0`，仓库只发布 `com.blaze.interaction` 这一套 UPM 包。
+本仓库开发：
 
-安装后：
+```text
+UnityPackage/com.blaze.interaction/package.json
+```
 
-1. 在 **Project Settings > Blaze Interaction** 创建并校验 Surface topology；所有启用 Surface 的 ID、Order 必须唯一，且恰好一个 Primary。
-2. 执行 **GameObject > Blaze Interaction > Create Runtime**，场景只保留一个启用的 Interaction Input Module/EventSystem。
-3. 先导入 **Basic Interaction** 用 Simulation 验证，再用 **Multi-Surface Routing** 验证多 Camera、`pixelRect` 与 RenderTexture 路由。
+正式项目应固定 tag，不要使用无 tag 的移动分支。
 
-详细步骤见 [Unity 集成](docs/unity-integration.md)，从 `com.blaze.radar` 迁移见 [Radar 迁移](docs/radar-migration.md)。
+## 数据约定
 
-## 构建与验证
+```csharp
+InteractionManager.Instance.PointAdded += point =>
+{
+    // Radar: 聚类中心；Camera: 手中心
+    var center = point.PixelPosition;
 
-环境：Windows 10/11 x64、.NET 8 SDK、Unity 2021.3.45f1。
+    // Radar: 实际扫描点；Camera: 21 个手部骨骼点
+    var detailPoints = point.Fp;
+};
+```
+
+CameraVision 不区分左右手。多只手以多个 `InteractionPoint` 表示，每个 point 的 `Fp` 保存该手的骨骼点。Camera 特有的结构化手数据仍可从 extensions 读取；忽略 extensions 不影响通用交互。
+
+## 开发与验证
+
+要求 Windows 10/11 x64、.NET 8 SDK、Unity 2021.3 LTS 或更高。
 
 ```powershell
 dotnet test BlazeInteraction.sln -c Release --nologo
-powershell -ExecutionPolicy Bypass -File scripts/test.ps1 -Configuration Release
-powershell -ExecutionPolicy Bypass -File scripts/test-unity-package.ps1 -UnityEditor "D:\Developer\2021.3.45f1\Editor\Unity.exe" -TestPlatform All -IncludeSamples
 
-$publish = Join-Path $env:TEMP ("BlazeInteractionBridge-" + [Guid]::NewGuid().ToString("N"))
-New-Item -ItemType Directory -Path $publish
-powershell -ExecutionPolicy Bypass -File scripts/publish-interaction-bridge.ps1 -OutputDirectory $publish -EmbedUnityPackage
+powershell -ExecutionPolicy Bypass -File scripts/publish-interaction-bridge.ps1 `
+  -Runtime win-x64 -EmbedUnityPackage
+
 powershell -ExecutionPolicy Bypass -File scripts/test-embedded-bridge.ps1
+
+powershell -ExecutionPolicy Bypass -File scripts/test-unity-package.ps1 `
+  -UnityEditor "D:\Developer\2021.3.45f1\Editor\Unity.exe" `
+  -TestPlatform All -IncludeSamples
 ```
 
-发布布局必须满足：
+发布包必须包含完整 `Bridge~/win-x64`，不能只复制 `BlazeInteractionBridge.exe`。
 
-- 根目录恰好一个 `BlazeInteractionBridge.exe`；
-- Radar 位于 `Providers/Radar/`，由 `provider.json` 声明 Provider API 1；
-- Unity 包内嵌的是完整 self-contained Bridge payload，不允许只替换 EXE；
-- `bridge-version.txt`、Provider manifest、入口 DLL 与 SHA-256 校验全部通过。
+## 文档入口
 
-本轮 Gate A 自动化结果见 [Gate A 测试报告](docs/gate-a-test-report.md)。真实雷达、投影机、网卡和长稳运行仍需现场验收，自动化不能替代硬件门禁。
-
-## 仓库结构
-
-- `src/Blaze.Interaction.*`：Contracts、Provider 托管、Interaction IPC 与 WPF Bridge。
-- `providers/Radar/Blaze.Provider.Radar/`：RadarControl 到 Provider API 1 的适配层。
-- `src/Radar.*`：保留并继续回归的 F10/F20 设备、配置、处理与旧桥接实现。
-- `UnityPackage/com.blaze.interaction/`：唯一 UPM 包、兼容层、Samples、测试与内嵌 Bridge。
-- `tests/`：Interaction、Radar、发布布局、兼容性与端到端测试。
-- `scripts/`：完整测试、发布、嵌入和真实 IPC 冒烟脚本。
-
-## 文档
-
-- [架构与所有权](docs/architecture.md)
-- [Interaction IPC 1](docs/protocol.md)
-- [Unity 集成](docs/unity-integration.md)
+- [安装与升级](INSTALL.md)
+- [文档总览](docs/README.md)
+- [图文功能说明](docs/user-guide.md)
+- [Unity API 与场景集成](docs/unity-integration.md)
+- [架构与数据流](docs/architecture.md)
+- [代码维护与扩展](docs/development-guide.md)
+- [仓库结构](docs/repository-structure.md)
 - [Provider 开发](docs/provider-development.md)
-- [Radar 迁移](docs/radar-migration.md)
-- [Gate A 测试报告](docs/gate-a-test-report.md)
-- [Radar 标定](docs/calibration.md)
+- [Interaction IPC 1](docs/protocol.md)
 - [故障排查](docs/troubleshooting.md)
-- [Radar 用户说明](docs/user-guide.md)
+- [版本与限制](docs/version-and-limitations.md)
+
+历史设计稿、阶段计划和门禁报告保留在 `docs/superpowers/`、`docs/camera-vision/` 与各 `*-test-report.md` 中，仅作决策追溯；以本页及 `docs/README.md` 指向的当前文档为准。

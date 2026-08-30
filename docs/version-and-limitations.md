@@ -1,36 +1,32 @@
 # 版本与已知限制
 
-## 1.2.10 身份
+## 1.1.0 身份
 
-- Bridge：`BridgeVersion.Value = 1.2.10`，WPF footer 为 `Bridge 1.2.10 · IPC 2 · Windows x64`。
-- Unity SDK：`UnitySdkVersion.Value = 1.2.10`；`package.json` 与 `bridge-version.txt` 同为 `1.2.10`。
-- Unity 包：`com.blaze.radar`，公共命名空间 `Blaze.Radar`，最低 Unity `2021.3`。
-- IPC：`IpcProtocolVersion.Current = 2`。业务帧只发送 screen-addressed `PointerBatch`，v1 `PointerFrame` 不可混用。
-- 安装 URL：`https://github.com/blaze-tc/RadarControl.git?path=/UnityPackage/com.blaze.radar#v1.2.10`。
+- Unity 包：`com.blaze.interaction`，版本 `1.1.0`，最低 Unity `2021.3`。
+- Bridge：`BlazeInteractionBridge.exe` / `bridge-version.txt` 为 `1.1.0`。
+- Providers：`blaze.radar.f10f20` 与 `blaze.camera.vision`，Provider API `1`，版本 `1.1.0`。
+- IPC：Interaction IPC `1`，默认基础 Pipe `Blaze.InteractionBridge`，运行时按项目数据目录增加唯一后缀。
+- 平台：Windows x64。
 
-## 1.2.10 能力
+## 1.1.0 能力
 
-- 左、右、上、下边线死区沿有效拉框的真实边向内过滤，支持旋转/梯形区域，并以橙色带在主视图和放大编辑器中预览。
-- 快速移动预设按屏幕分辨率调整关联距离，并降低确认与稀疏聚类门槛；预设需由操作员保存应用，且应在边线噪点过滤之后使用。
-- “一键模拟”会将所有 Unity 已关联屏幕中的已启用雷达统一切换为 Simulation，保存后立即启动，不再要求先逐个修改数据源模式。
-- “停止模拟”会停止已关联屏幕中运行及切换过渡中的 Simulation 管线，但保留 Simulation 数据源配置，便于再次启动。
-- 区域 1 提供独立拉框精细编辑器；预览可缩放、平移、适应拉框和恢复参数范围，且不改变雷达过滤参数或 Unity 坐标。
-- “区域 / 校准”按钮按等宽网格自动换行，在最小窗口宽度与垂直滚动条存在时仍完整可见。
-- 任意数量启用逻辑屏幕，每屏稳定 ID、独立分辨率/比例、Order，且全局恰好一个 Primary。
-- 每屏任意多个 F10/F20 Sensor；独立连接、物理变换、过滤/标定和 OutputRect；同屏融合、跟踪、交互参数。
-- LEFT/L1、FRONT/F1+F2 overlap、RIGHT/R1 等拓扑可映射到独立 Display、Camera `pixelRect` 或 RenderTexture。
-- Basic Interaction 与 Multi-Screen Camera Routing 支持 local/IPC 分层验证；Bridge/Player 日志可按 screen/sensor/sequence 对时。
-- WPF 软件渲染、Per-Monitor V2 DPI、ClearType/像素对齐用于降低投影电脑上 GPU dirty-region 导致的控件消失或模糊。
+- Radar F10/F20、Simulation、Replay、区域/边缘/屏蔽过滤、四点标定、多雷达同屏融合、跟踪、Touch/Dwell。
+- Radar 中心点与所有实际扫描点同时传给 Unity。
+- CameraVision 摄像头能力枚举、分辨率/帧率选择、MediaPipe 手部检测、每手 21 骨骼点、多手输出、四角区域、平滑、X/Y 翻转和 Unity 分辨率换算。
+- Radar/CameraVision 选择、返回切换和按项目/Player 隔离持久化。
+- 通用 `InteractionPoint`、UGUI/Physics2D/Physics3D、Camera 路由、Samples 和 Windows Player 自动复制。
 
 ## 限制
 
-- 仅 Windows x64；UPM 含完整 self-contained .NET/WPF payload，体积明显大于纯 C# 包。
-- 1.2.10 不自动完成联合标定；每个雷达仍由物理四角与 OutputRect 对齐。标定和屏蔽区依赖现场几何。
-- Fusion 只在同屏去重；Pointer ID 只在同屏稳定，不提供跨屏人员身份连续跟踪。
-- 不提供多雷达同步录制容器；`.radarrec` 仍是单传感器原始 TCP 块/连接状态，不等于厂商文件格式。
-- 只读厂家点数据，不发送文档未定义的写命令，不修改设备 IP/网关/扫描频率/马达状态。
-- 屏幕输出频率不会提高雷达真实扫描频率；`ScreenPointerReceived` 在 Unity 主线程逐帧触发，视觉连续轨迹应由业务显示层插值。
-- IPC v1/v2 主版本不兼容；必须用 Hello/HelloAck 明确拒绝后升级双方，不能尝试降级解析。
-- 自动测试不能替代真实三投影、四雷达、8 小时稳定性、NIC/雷达重连、投影 focus/DPI 和最终 Windows Player 验收。
+- CameraVision 不提供跨帧的生物身份识别，也不区分左/右手；稳定性受模型、画面、遮挡和性能影响。
+- “不限制手数量”表示 SDK 不写死两只手；底层模型和硬件吞吐仍构成实际容量上限。
+- Camera 标定是二维四点映射，不解决镜头畸变、深度或三维姿态标定。
+- Radar Fusion 只在同一 Surface 内去重，不提供跨 Surface 人员身份连续跟踪。
+- `Fp` 是 point 附属明细点，不具有独立 Down/Move/Up 生命周期；业务需要每个关节的语义时读取 Camera extensions。
+- WPF 控制台和 Camera 原生推理仅随 Windows x64 payload 发布。
+- UPM 包包含自包含 .NET/WPF、OpenCV、模型和原生库，体积明显大于纯 C# 包。
+- 自动化测试不能替代真实 Radar 网络、不同摄像头、投影 DPI/focus、长期运行和最终 Player 换机验收。
 
-版本或 SHA 不一致时，从 Package Manager 的 Resolved Path 和 Player `RadarBridge/` 开始排查，清除项目内陈旧 1.1.x package cache 后重建。现场验收必须归档最终 Schema 2 配置、tagged logs、`Player.log` 与 EXE/package SHA。
+## 兼容性
+
+1.1.0 保持 Interaction IPC 1 和现有 Unity `InteractionManager`/`InteractionPoint` 使用方式；新增 CameraVision 与 `Fp` 使用可选数据面。`com.blaze.radar` 的旧独立 IPC/Launcher 不应与本包并存。

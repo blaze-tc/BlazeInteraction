@@ -32,7 +32,7 @@ JSON 使用 camelCase、字符串 enum；坐标对象必须显式包含有限数
 {
   "unityPid": 1234,
   "unityVersion": "2021.3.45f1",
-  "sdkVersion": "1.0.0",
+  "sdkVersion": "1.1.0",
   "surfaces": [
     {
       "surfaceId": "FRONT",
@@ -50,7 +50,7 @@ Surface ID、Order 必须唯一，宽高为正，且恰好一个 Primary。Bridg
 
 ```json
 {
-  "bridgeVersion": "1.0.0",
+  "bridgeVersion": "1.1.0",
   "activeProvider": {
     "id": "blaze.radar.f10f20",
     "instanceId": "radar-main"
@@ -79,7 +79,7 @@ Ack 写入前不得向客户端发布业务帧。默认握手超时 5 秒、心�
 | `timestampUnixMs` | frame 采样/输出时间 |
 | `points` | 不可为 null；允许空列表表示视觉状态刷新 |
 
-每个 point 含 `id`、Surface/Provider/Source identity、`Hover|Down|Move|Up|Cancel`、normalized `[0,1]`、logical pixel、confidence `[0,1]`、timestamp、可选的 `fp` footprint 和可选 `extensions`。`fp` 是按 point 关联的 footprint 坐标数组，坐标使用与 `pixelPosition` 相同的像素坐标空间；数组顺序由 Provider 定义且消费者必须保留，重复坐标也是有效数据。旧 JSON 缺少 `fp` 时按空列表处理。Point ID 的稳定域由 Provider 定义；Radar Gate A 中按 Surface 保持既有 Screen-local 语义。`fp` 的生命周期归外层 point 所有，point 被撤销或离开 frame 后消费者不得将其视为独立生命周期对象。
+每个 point 含 `id`、Surface/Provider/Source identity、`Hover|Down|Move|Up|Cancel`、normalized `[0,1]`、logical pixel、confidence `[0,1]`、timestamp、可选的 `fp` footprint 和可选 `extensions`。`fp` 是按 point 关联的明细坐标数组，坐标使用与 `pixelPosition` 相同的像素坐标空间；Radar 使用它传实际扫描点，CameraVision 使用它传 21 个手部骨骼点。数组顺序由 Provider 定义且消费者必须保留，重复坐标也是有效数据。旧 JSON 缺少 `fp` 时按空列表处理。Point ID 的稳定域由 Provider 定义；`fp` 的生命周期归外层 point 所有，point 被撤销或离开 frame 后消费者不得将其视为独立生命周期对象。
 
 `extensions` 是新增设备类型的可选数据面，不能改变核心字段含义。消费者必须能在忽略未知扩展时继续处理基础 InteractionPoint。
 
@@ -106,4 +106,4 @@ Pipe 使用 `CurrentUserOnly`。服务端从 Windows pipe handle 读取真实客
 
 `Error` payload 为 `{ code, message }`。协议/客户端输入错误只关闭当前 session；server 程序错误和 writer fault 不会被伪装成可恢复输入错误。客户端收到 Error 时在 Unity 主线程触发 `ErrorReceived`，随后按配置延迟重连。
 
-恢复顺序：停止旧 Player/Play Mode → 确认没有旧 `RadarBridge.exe` 占用 → 校验双方使用 Interaction IPC 1 和 `Blaze.InteractionBridge` → 校验 package/Bridge `1.0.0` 与 Provider manifest → 重新 Hello。修改 Pipe Name 不能绕过 protocol、版本或 PID 校验。
+恢复顺序：停止旧 Player/Play Mode → 确认没有旧 `BlazeInteractionBridge.exe` 占用 → 校验双方使用 Interaction IPC 1 和项目专属 Pipe → 校验 package/Bridge/Provider `1.1.0` → 重新 Hello。修改 Pipe Name 不能绕过 protocol、版本或 PID 校验。

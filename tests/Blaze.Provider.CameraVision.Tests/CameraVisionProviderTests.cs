@@ -54,8 +54,8 @@ public sealed class CameraVisionProviderTests
                     .Select(index => Hand(0.1f + (index * 0.1f), 0.5f)))));
         await services.SeedConfigurationAsync();
         var provider = await InitializedProviderAsync(services);
-        var frameReady = NextInteractionFrame(provider);
         var control = (ICameraVisionControl)provider;
+        var frameReady = NextInteractionFrame(provider);
         var statusReady = new TaskCompletionSource<CameraVisionStatusSnapshot>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         control.StatusChanged += snapshot =>
@@ -268,6 +268,113 @@ public sealed class CameraVisionProviderTests
     }
 
     [Fact]
+    public async Task RepeatedFrameProcessingFailures_FaultProviderAndReleaseCamera()
+    {
+        var camera = new ReleaseObservedCameraBackend();
+        using var services = new TestServices(
+            () => camera,
+            () => new ThrowingDetectHandBackend("native frame failure"));
+        await services.SeedConfigurationAsync();
+        var provider = await InitializedProviderAsync(services);
+        var control = (ICameraVisionControl)provider;
+
+        await provider.StartAsync(CancellationToken.None);
+        await WaitUntilAsync(() => provider.Status == ProviderRuntimeStatus.Faulted);
+        await WaitUntilAsync(() =>
+            camera.IsDisposed &&
+            control.CurrentStatus.CameraStatus == CameraCaptureStatus.Stopped);
+
+        Assert.Equal(CameraCaptureStatus.Stopped, provider.CameraStatus);
+        Assert.Equal(CameraCaptureStatus.Stopped, control.CurrentStatus.CameraStatus);
+        Assert.True(camera.CloseCount > 0);
+        await provider.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task RepeatedFrameProcessingFailures_AfterActiveHandPublishSingleCancelAndReleaseCamera()
+    {
+        var camera = new ReleaseObservedCameraBackend();
+        using var services = new TestServices(
+            () => camera,
+            () => new FirstSuccessThenThrowingHandBackend(
+                new HandDetectionResult([Hand(0.5f, 0.5f)]),
+                "native frame failure"));
+        await services.SeedConfigurationAsync();
+        var provider = await InitializedProviderAsync(services);
+        var hoverReady = new TaskCompletionSource<InteractionPoint>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelReady = new TaskCompletionSource<InteractionPoint>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelCount = 0;
+        provider.FrameReceived += (_, args) =>
+        {
+            foreach (var point in args.Frame.Points)
+            {
+                if (point.Phase == InteractionPhase.Hover)
+                {
+                    hoverReady.TrySetResult(point);
+                }
+                else if (point.Phase == InteractionPhase.Cancel)
+                {
+                    Interlocked.Increment(ref cancelCount);
+                    cancelReady.TrySetResult(point);
+                }
+            }
+        };
+
+        await provider.StartAsync(CancellationToken.None);
+        var hover = await hoverReady.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var cancel = await cancelReady.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await WaitUntilAsync(() => provider.Status == ProviderRuntimeStatus.Faulted);
+        await WaitUntilAsync(() => camera.IsDisposed);
+
+        Assert.Equal(hover.Id, cancel.Id);
+        Assert.Equal(hover.SourceId, cancel.SourceId);
+        Assert.Equal(InteractionPhase.Cancel, cancel.Phase);
+        Assert.Equal(1, Volatile.Read(ref cancelCount));
+        Assert.Equal(CameraCaptureStatus.Stopped, provider.CameraStatus);
+        await provider.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task UncalibratedRotatedCapture_MapsUsingActualTransformedFrameDimensions()
+    {
+        using var services = new TestServices(
+            () => new SingleFrameCameraBackend(width: 320, height: 180),
+            () => new FakeHandBackend(new HandDetectionResult([Hand(0.5f, 0.5f)])));
+        await services.SeedConfigurationAsync(new CameraVisionConfiguration(
+            schemaVersion: 1,
+            capture: new CameraCaptureOptions
+            {
+                Width = 160,
+                Height = 90,
+                FramesPerSecond = 30,
+                Rotation = CameraRotation.Rotate90,
+                ReconnectDelay = TimeSpan.FromSeconds(1)
+            },
+            maxHands: 8,
+            minDetectionConfidence: 0.5f,
+            minTrackingConfidence: 0.5f,
+            trackingPoint: HandTrackingPoint.IndexTip,
+            smoothingFactor: 0.35f,
+            maximumMatchDistance: 0.2f,
+            lostFrameTolerance: 1,
+            calibrations: new Dictionary<string, CameraCalibration>()));
+        var provider = await InitializedProviderAsync(services);
+        var frameReady = NextInteractionFrame(provider);
+
+        await provider.StartAsync(CancellationToken.None);
+        var point = Assert.Single(
+            (await frameReady.WaitAsync(TimeSpan.FromSeconds(5))).Points);
+
+        Assert.Equal(0.5f, point.NormalizedPosition.X, 3);
+        Assert.Equal(0.5f, point.NormalizedPosition.Y, 3);
+        Assert.Equal(180, provider.FrameStatistics!.ActualWidth);
+        Assert.Equal(320, provider.FrameStatistics.ActualHeight);
+        await provider.DisposeAsync();
+    }
+
+    [Fact]
     public async Task Lifecycle_RepeatedStartStopFiftyTimesReleasesEachBackend()
     {
         using var services = new TestServices(
@@ -466,6 +573,10 @@ public sealed class CameraVisionProviderTests
                 .SaveAsync(configuration, CancellationToken.None);
         }
 
+        public Task SeedConfigurationAsync(CameraVisionConfiguration configuration) =>
+            new CameraVisionConfigurationStore(this)
+                .SaveAsync(configuration, CancellationToken.None);
+
         public async Task SetOutputFlipsAsync(bool flipX, bool flipY)
         {
             var store = new CameraVisionConfigurationStore(this);
@@ -481,7 +592,9 @@ public sealed class CameraVisionProviderTests
         public void Dispose() => _data.Dispose();
     }
 
-    private sealed class SingleFrameCameraBackend : ICameraCaptureBackend
+    private sealed class SingleFrameCameraBackend(
+        int width = 100,
+        int height = 100) : ICameraCaptureBackend
     {
         private int _served;
         public bool IsOpen { get; private set; }
@@ -497,7 +610,7 @@ public sealed class CameraVisionProviderTests
             frame = new CameraFrame(
                 1,
                 DateTimeOffset.UtcNow,
-                new Mat(100, 100, MatType.CV_8UC3, new Scalar(1, 2, 3)));
+                new Mat(height, width, MatType.CV_8UC3, new Scalar(1, 2, 3)));
             return true;
         }
 
@@ -550,6 +663,97 @@ public sealed class CameraVisionProviderTests
             long timestampUnixMs,
             CancellationToken cancellationToken) => throw new InvalidOperationException(error);
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class ThrowingDetectHandBackend(string error) : IHandDetectionBackend
+    {
+        public HandBackendStatus Status { get; private set; } = HandBackendStatus.Uninitialized;
+
+        public Task InitializeAsync(HandDetectionOptions options, CancellationToken cancellationToken)
+        {
+            Status = HandBackendStatus.Ready;
+            return Task.CompletedTask;
+        }
+
+        public ValueTask<HandDetectionResult> DetectAsync(
+            RgbFrameView frame,
+            long timestampUnixMs,
+            CancellationToken cancellationToken) =>
+            ValueTask.FromException<HandDetectionResult>(new InvalidOperationException(error));
+
+        public ValueTask DisposeAsync()
+        {
+            Status = HandBackendStatus.Disposed;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class FirstSuccessThenThrowingHandBackend(
+        HandDetectionResult firstResult,
+        string error) : IHandDetectionBackend
+    {
+        private int _detectCount;
+        public HandBackendStatus Status { get; private set; } = HandBackendStatus.Uninitialized;
+
+        public Task InitializeAsync(HandDetectionOptions options, CancellationToken cancellationToken)
+        {
+            Status = HandBackendStatus.Ready;
+            return Task.CompletedTask;
+        }
+
+        public ValueTask<HandDetectionResult> DetectAsync(
+            RgbFrameView frame,
+            long timestampUnixMs,
+            CancellationToken cancellationToken) =>
+            Interlocked.Increment(ref _detectCount) == 1
+                ? ValueTask.FromResult(firstResult)
+                : ValueTask.FromException<HandDetectionResult>(new InvalidOperationException(error));
+
+        public ValueTask DisposeAsync()
+        {
+            Status = HandBackendStatus.Disposed;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class ReleaseObservedCameraBackend : ICameraCaptureBackend
+    {
+        private long _sequence;
+        private int _closeCount;
+        private int _disposed;
+
+        public bool IsOpen { get; private set; }
+        public int CloseCount => Volatile.Read(ref _closeCount);
+        public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+
+        public bool TryOpen(CameraCaptureOptions options)
+        {
+            IsOpen = true;
+            return true;
+        }
+
+        public bool TryRead(out CameraFrame? frame)
+        {
+            Thread.Sleep(1);
+            frame = new CameraFrame(
+                Interlocked.Increment(ref _sequence),
+                DateTimeOffset.UtcNow,
+                new Mat(100, 100, MatType.CV_8UC3, new Scalar(1, 2, 3)));
+            return true;
+        }
+
+        public void Close()
+        {
+            IsOpen = false;
+            Interlocked.Increment(ref _closeCount);
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            Close();
+            Interlocked.Exchange(ref _disposed, 1);
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class DisposeObservedBackend(

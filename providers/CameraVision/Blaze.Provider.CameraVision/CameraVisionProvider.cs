@@ -395,9 +395,13 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
         {
             var configuration = _configuration
                 ?? throw new InvalidOperationException("CameraVision is not initialized.");
-            var preview = _processingService?.LatestFrame?.Preview;
-            var cameraWidth = preview?.Width ?? RotatedWidth(configuration.Capture);
-            var cameraHeight = preview?.Height ?? RotatedHeight(configuration.Capture);
+            var statistics = _captureService?.Statistics;
+            var cameraWidth = statistics?.ActualWidth > 0
+                ? statistics.ActualWidth
+                : RotatedWidth(configuration.Capture);
+            var cameraHeight = statistics?.ActualHeight > 0
+                ? statistics.ActualHeight
+                : RotatedHeight(configuration.Capture);
             var cameraPoint = new Vector2Data(
                 previewPosition.X / previewSize.X * cameraWidth,
                 previewPosition.Y / previewSize.Y * cameraHeight);
@@ -460,6 +464,16 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
     {
         var previous = _configuration
             ?? throw new InvalidOperationException("CameraVision is not initialized.");
+        var captureGeometryChanged = !CaptureGeometryEquals(
+            previous.Capture,
+            configuration.Capture);
+        if (captureGeometryChanged &&
+            CalibrationEquals(previous.Calibrations, configuration.Calibrations))
+        {
+            configuration = CloneConfiguration(
+                configuration,
+                new Dictionary<string, CameraCalibration>(StringComparer.Ordinal));
+        }
         var captureChanged = !CaptureConfigurationEquals(
             previous.Capture,
             configuration.Capture);
@@ -640,8 +654,11 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
             _providerDirectory,
             "models",
             "hand_landmarker.task");
-        var calibration = configuration.Calibrations.TryGetValue(surface.SurfaceId, out var configured)
-            ? configured
+        var hasConfiguredCalibration = configuration.Calibrations.TryGetValue(
+            surface.SurfaceId,
+            out var configured);
+        var calibration = hasConfiguredCalibration
+            ? configured!
             : FullFrameCalibration(configuration.Capture);
         try
         {
@@ -659,7 +676,8 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
                     configuration.MaximumMatchDistance,
                     configuration.LostFrameTolerance),
                 new EmaPositionFilter(configuration.SmoothingFactor),
-                configuration.MinDetectionConfidence);
+                configuration.MinDetectionConfidence,
+                useActualFrameDimensions: !hasConfiguredCalibration);
         }
         catch
         {
@@ -668,11 +686,14 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
         }
     }
 
-    private static CameraCalibration FullFrameCalibration(CameraCaptureOptions capture) => new(
+    private static CameraCalibration FullFrameCalibration(CameraCaptureOptions capture) =>
+        FullFrameCalibration(RotatedWidth(capture), RotatedHeight(capture));
+
+    private static CameraCalibration FullFrameCalibration(int width, int height) => new(
         new Vector2Data(0f, 0f),
-        new Vector2Data(capture.Width, 0f),
-        new Vector2Data(capture.Width, capture.Height),
-        new Vector2Data(0f, capture.Height));
+        new Vector2Data(width, 0f),
+        new Vector2Data(width, height),
+        new Vector2Data(0f, height));
 
     private InteractionPoint CreateActivePoint(
         CameraHandSnapshot hand,
@@ -751,9 +772,59 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
             if (ReferenceEquals(Volatile.Read(ref _processingService), processing)
                 && Status is ProviderRuntimeStatus.Starting or ProviderRuntimeStatus.Running)
             {
+                PublishActivePointCancellationFrame();
                 TransitionTo(ProviderRuntimeStatus.Faulted, exception);
+                var capture = Interlocked.Exchange(ref _captureService, null);
+                if (capture is not null)
+                {
+                    capture.StatusChanged -= OnCameraStatusChanged;
+                    await capture.DisposeAsync().ConfigureAwait(false);
+                    PublishControlStatus(error: exception);
+                }
             }
         }
+    }
+
+    private void PublishActivePointCancellationFrame()
+    {
+        var surface = Volatile.Read(ref _surface);
+        if (surface is null)
+        {
+            lock (_pointGate)
+            {
+                _lastPoints.Clear();
+            }
+            return;
+        }
+
+        var timestampUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        IReadOnlyList<InteractionPoint> cancellations;
+        lock (_pointGate)
+        {
+            if (_lastPoints.Count == 0)
+            {
+                return;
+            }
+
+            cancellations = Array.AsReadOnly(_lastPoints.Values
+                .Select(point => point with
+                {
+                    Phase = InteractionPhase.Cancel,
+                    TimestampUnixMs = timestampUnixMs
+                })
+                .ToArray());
+            _lastPoints.Clear();
+        }
+
+        InvokeFrameReceived(new InteractionFrame
+        {
+            ProviderId = CameraVisionPlugin.ProviderId,
+            ProviderInstanceId = ProviderInstanceId,
+            SurfaceId = surface.SurfaceId,
+            Sequence = Interlocked.Increment(ref _sequence),
+            TimestampUnixMs = timestampUnixMs,
+            Points = cancellations
+        });
     }
 
     private async Task StopRunAsync()
@@ -953,11 +1024,15 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
         }
         var configuration = Volatile.Read(ref _configuration);
         var surface = Volatile.Read(ref _surface);
+        var actualWidth = statistics?.ActualWidth ?? latest?.Preview.Width ?? 0;
+        var actualHeight = statistics?.ActualHeight ?? latest?.Preview.Height ?? 0;
         var calibration = configuration is not null && surface is not null &&
                           configuration.Calibrations.TryGetValue(surface.SurfaceId, out var configured)
             ? configured
             : configuration is not null
-                ? FullFrameCalibration(configuration.Capture)
+                ? actualWidth > 0 && actualHeight > 0
+                    ? FullFrameCalibration(actualWidth, actualHeight)
+                    : FullFrameCalibration(configuration.Capture)
                 : null;
         return new CameraVisionStatusSnapshot(
             Status,
@@ -975,8 +1050,8 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
             latest?.ActiveHands,
             error ?? Volatile.Read(ref _controlError),
             latest?.TimestampUnixMs ?? 0,
-            statistics?.ActualWidth ?? latest?.Preview.Width ?? 0,
-            statistics?.ActualHeight ?? latest?.Preview.Height ?? 0,
+            actualWidth,
+            actualHeight,
             outputPoints,
             calibration?.Points);
     }
@@ -1048,6 +1123,15 @@ public sealed class CameraVisionProvider : IInteractionProvider, ICameraVisionCo
         left.MirrorX == right.MirrorX &&
         left.Rotation == right.Rotation &&
         left.ReconnectDelay == right.ReconnectDelay;
+
+    private static bool CaptureGeometryEquals(
+        CameraCaptureOptions left,
+        CameraCaptureOptions right) =>
+        left.DeviceIndex == right.DeviceIndex &&
+        left.Width == right.Width &&
+        left.Height == right.Height &&
+        left.MirrorX == right.MirrorX &&
+        left.Rotation == right.Rotation;
 
     private static bool CalibrationEquals(
         IReadOnlyDictionary<string, CameraCalibration> left,

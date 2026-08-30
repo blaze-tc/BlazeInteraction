@@ -80,7 +80,7 @@ public sealed class RadarProviderLoaderIntegrationTests
         var manifest = Assert.IsType<ProviderManifest>(entry.Manifest);
         Assert.Equal("blaze.radar.f10f20", manifest.Id);
         Assert.Equal("F10 / F20 激光雷达", manifest.DisplayName);
-        Assert.Equal("1.0.0", manifest.Version);
+        Assert.Equal("1.1.0", manifest.Version);
         Assert.Equal(1, manifest.ProviderApiVersion);
         Assert.Equal("Blaze.Provider.Radar.dll", manifest.EntryAssembly);
         Assert.Equal("Blaze.Provider.Radar.RadarPlugin", manifest.EntryType);

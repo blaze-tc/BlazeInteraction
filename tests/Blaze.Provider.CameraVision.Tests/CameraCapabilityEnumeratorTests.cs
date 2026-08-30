@@ -59,6 +59,25 @@ public sealed class CameraCapabilityEnumeratorTests
         Assert.Equal(factory.CreatedCount, factory.DisposedCount);
     }
 
+    [Fact]
+    public async Task EnumerateAsync_ReturnsControlBeforeBlockingModeProbeCompletes()
+    {
+        var subject = new CameraCapabilityEnumerator(
+            new DelayedCapabilityFactory(TimeSpan.FromMilliseconds(300)),
+            candidates: [new CameraCaptureMode(640, 480, 30)]);
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        var enumeration = subject.EnumerateAsync(
+            new CameraDeviceDescriptor(0, "Camera 0"),
+            CancellationToken.None);
+
+        stopwatch.Stop();
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromMilliseconds(100),
+            $"Capability probing blocked its caller for {stopwatch.Elapsed.TotalMilliseconds:F1} ms.");
+        await enumeration;
+    }
+
     private sealed class CapabilityProbeFactory(IEnumerable<CameraCaptureMode> acceptedModes)
         : ICameraCaptureBackendFactory
     {
@@ -114,5 +133,24 @@ public sealed class CameraCapabilityEnumeratorTests
             disposed();
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class DelayedCapabilityFactory(TimeSpan delay) : ICameraCaptureBackendFactory
+    {
+        public ICameraCaptureBackend Create() => new DelayedCapabilityBackend(delay);
+    }
+
+    private sealed class DelayedCapabilityBackend(TimeSpan delay) : ICameraCaptureBackend
+    {
+        public bool IsOpen => false;
+        public bool TryOpen(CameraCaptureOptions options)
+        {
+            Thread.Sleep(delay);
+            return false;
+        }
+        public bool TryGetActiveMode(out CameraCaptureMode? mode) { mode = null; return false; }
+        public bool TryRead(out CameraFrame? frame) { frame = null; return false; }
+        public void Close() { }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
