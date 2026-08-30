@@ -171,7 +171,7 @@ $bridgeProcess = $null
 if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw "Embedded BlazeInteractionBridge executable was not found: $executable" }
 if (-not (Test-Path -LiteralPath $versionMarker -PathType Leaf)) { throw "Embedded BlazeInteractionBridge version marker was not found: $versionMarker" }
 $embeddedVersion = (Get-Content -LiteralPath $versionMarker -Raw -Encoding UTF8).Trim()
-if ($embeddedVersion -ne '1.1.0') { throw "Embedded BlazeInteractionBridge version marker must be 1.1.0; found '$embeddedVersion'." }
+if ($embeddedVersion -ne '1.1.1') { throw "Embedded BlazeInteractionBridge version marker must be 1.1.1; found '$embeddedVersion'." }
 if ($SetupDelaySeconds -ge $StartupTimeoutSeconds) { throw 'SetupDelaySeconds must be less than StartupTimeoutSeconds.' }
 
 try {
@@ -210,7 +210,7 @@ try {
         -SelectedProviderId 'blaze.radar.f10f20' `
         -SuccessMessage 'Radar standard InteractionFrame passed.' `
         -InjectFailure:$InjectSetupFailure
-    Write-Host 'Interaction IPC 1 Hello/HelloAck passed with Bridge version 1.1.0.'
+    Write-Host 'Interaction IPC 1 Hello/HelloAck passed with Bridge version 1.1.1.'
     Invoke-ProviderSmoke `
         -ExpectedProviderId 'blaze.camera.vision' `
         -ExpectedProviderInstanceId 'camera-vision-main' `

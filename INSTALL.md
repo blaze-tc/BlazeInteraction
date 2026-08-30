@@ -1,4 +1,4 @@
-# Blaze Interaction SDK 1.1.0 安装与升级
+# Blaze Interaction SDK 1.1.1 安装与升级
 
 本文面向需要在另一台 Windows 电脑上直接导入 Unity 的使用者。推荐下载 GitHub Release 中的 `.tgz`，它已经包含 Windows x64 自包含 Bridge、Radar Provider、CameraVision Provider、手部模型和原生运行库。
 
@@ -12,11 +12,11 @@
 ## 2. 推荐：从 Release 本地文件导入
 
 1. 打开 [BlazeInteraction Releases](https://github.com/blaze-tc/BlazeInteraction/releases)。
-2. 下载 `com.blaze.interaction-1.1.0.tgz`，不要解压。
+2. 下载 `com.blaze.interaction-1.1.1.tgz`，不要解压。
 3. Unity 打开 **Window > Package Manager**。
 4. 点击左上角 `+`，选择 **Add package from tarball...**。
 5. 选择下载的 `.tgz`。
-6. Package Manager 应显示 **Blaze Interaction SDK 1.1.0**。
+6. Package Manager 应显示 **Blaze Interaction SDK 1.1.1**。
 
 `.tgz` 可以复制到离线电脑再导入。Unity 会把包缓存到当前项目，不依赖原下载路径长期存在。
 
@@ -27,7 +27,7 @@
 Package Manager 选择 **Add package from git URL...**：
 
 ```text
-https://github.com/blaze-tc/BlazeInteraction.git?path=/UnityPackage/com.blaze.interaction#v1.1.0
+https://github.com/blaze-tc/BlazeInteraction.git?path=/UnityPackage/com.blaze.interaction#v1.1.1
 ```
 
 ### 本地源码
@@ -126,7 +126,7 @@ BlazeInteractionBridge/
 
 ## 11. 安装验收
 
-- [ ] Package Manager 显示 `1.1.0`。
+- [ ] Package Manager 显示 `1.1.1`。
 - [ ] Project Settings Surface 校验通过。
 - [ ] Play Mode 自动打开 Blaze Interaction Bridge。
 - [ ] 顶部 Unity 连接为 True，当前 Provider 与选择模式一致。

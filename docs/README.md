@@ -1,6 +1,6 @@
 # BlazeInteraction 文档总览
 
-以下文档描述 `v1.1.0` 的当前行为。首次使用建议按“安装 → 图文功能 → Unity 集成”的顺序阅读；修改代码前阅读“架构 → 开发指南 → 对应模块文档”。
+以下文档描述 `v1.1.1` 的当前行为。首次使用建议按“安装 → 图文功能 → Unity 集成”的顺序阅读；修改代码前阅读“架构 → 开发指南 → 对应模块文档”。
 
 ## 使用与部署
 
@@ -10,7 +10,7 @@
 | [图文功能说明](user-guide.md) | 设备选择、Radar、CameraVision、Unity 示例界面与操作 |
 | [Unity 集成](unity-integration.md) | Surface、Runtime、API、Camera 路由、Samples |
 | [故障排查](troubleshooting.md) | 连接、配置、相机、雷达、版本和性能问题 |
-| [版本与限制](version-and-limitations.md) | 1.1.0 身份、能力边界和现场限制 |
+| [版本与限制](version-and-limitations.md) | 1.1.1 身份、能力边界和现场限制 |
 
 ## 维护与扩展
 
@@ -26,6 +26,7 @@
 
 ## 验证与历史记录
 
+- [v1.1.1 发布说明](release-notes/v1.1.1.md)：CameraVision 标定框预览坐标修复与安装入口。
 - `docs/verification/`：性能和稳定性验证证据。
 - `docs/camera-vision/`：CameraVision 早期 Gate 分析/报告。
 - `docs/*-test-report.md`：对应阶段的测试快照。

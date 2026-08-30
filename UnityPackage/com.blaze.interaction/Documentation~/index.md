@@ -1,4 +1,4 @@
-# Blaze Interaction SDK 1.1.0
+# Blaze Interaction SDK 1.1.1
 
 1. 在 Project Settings > Blaze Interaction 配置至少一个有效 Surface。
 2. GameObject > Blaze Interaction > Create Runtime。

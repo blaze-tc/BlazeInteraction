@@ -34,6 +34,6 @@ switch ($Scenario) {
             -F20Profile (Join-Path $profiles 'f20-profile.json') -Version '1.2.0'
     }
     'ValidateOutput' {
-        Assert-InteractionBridgePayload -Directory $FixtureRoot -ExpectedVersion '1.1.0'
+        Assert-InteractionBridgePayload -Directory $FixtureRoot -ExpectedVersion '1.1.1'
     }
 }

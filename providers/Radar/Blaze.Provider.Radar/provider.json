@@ -1,7 +1,7 @@
 {
   "id": "blaze.radar.f10f20",
   "displayName": "F10 / F20 激光雷达",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "providerApiVersion": 1,
   "entryAssembly": "Blaze.Provider.Radar.dll",
   "entryType": "Blaze.Provider.Radar.RadarPlugin",

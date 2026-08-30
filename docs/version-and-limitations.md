@@ -1,14 +1,14 @@
 # 版本与已知限制
 
-## 1.1.0 身份
+## 1.1.1 身份
 
-- Unity 包：`com.blaze.interaction`，版本 `1.1.0`，最低 Unity `2021.3`。
-- Bridge：`BlazeInteractionBridge.exe` / `bridge-version.txt` 为 `1.1.0`。
-- Providers：`blaze.radar.f10f20` 与 `blaze.camera.vision`，Provider API `1`，版本 `1.1.0`。
+- Unity 包：`com.blaze.interaction`，版本 `1.1.1`，最低 Unity `2021.3`。
+- Bridge：`BlazeInteractionBridge.exe` / `bridge-version.txt` 为 `1.1.1`。
+- Providers：`blaze.radar.f10f20` 与 `blaze.camera.vision`，Provider API `1`，版本 `1.1.1`。
 - IPC：Interaction IPC `1`，默认基础 Pipe `Blaze.InteractionBridge`，运行时按项目数据目录增加唯一后缀。
 - 平台：Windows x64。
 
-## 1.1.0 能力
+## 1.1.1 能力
 
 - Radar F10/F20、Simulation、Replay、区域/边缘/屏蔽过滤、四点标定、多雷达同屏融合、跟踪、Touch/Dwell。
 - Radar 中心点与所有实际扫描点同时传给 Unity。
@@ -29,4 +29,4 @@
 
 ## 兼容性
 
-1.1.0 保持 Interaction IPC 1 和现有 Unity `InteractionManager`/`InteractionPoint` 使用方式；新增 CameraVision 与 `Fp` 使用可选数据面。`com.blaze.radar` 的旧独立 IPC/Launcher 不应与本包并存。
+1.1.1 保持 Interaction IPC 1 和现有 Unity `InteractionManager`/`InteractionPoint` 使用方式；CameraVision 与 `Fp` 继续使用 v1.1.0 引入的可选数据面。本补丁仅修复 CameraVision 降采样预览中的标定框和手部 overlay 坐标换算。`com.blaze.radar` 的旧独立 IPC/Launcher 不应与本包并存。

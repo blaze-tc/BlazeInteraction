@@ -32,7 +32,7 @@ JSON 使用 camelCase、字符串 enum；坐标对象必须显式包含有限数
 {
   "unityPid": 1234,
   "unityVersion": "2021.3.45f1",
-  "sdkVersion": "1.1.0",
+  "sdkVersion": "1.1.1",
   "surfaces": [
     {
       "surfaceId": "FRONT",
@@ -50,7 +50,7 @@ Surface ID、Order 必须唯一，宽高为正，且恰好一个 Primary。Bridg
 
 ```json
 {
-  "bridgeVersion": "1.1.0",
+  "bridgeVersion": "1.1.1",
   "activeProvider": {
     "id": "blaze.radar.f10f20",
     "instanceId": "radar-main"
@@ -106,4 +106,4 @@ Pipe 使用 `CurrentUserOnly`。服务端从 Windows pipe handle 读取真实客
 
 `Error` payload 为 `{ code, message }`。协议/客户端输入错误只关闭当前 session；server 程序错误和 writer fault 不会被伪装成可恢复输入错误。客户端收到 Error 时在 Unity 主线程触发 `ErrorReceived`，随后按配置延迟重连。
 
-恢复顺序：停止旧 Player/Play Mode → 确认没有旧 `BlazeInteractionBridge.exe` 占用 → 校验双方使用 Interaction IPC 1 和项目专属 Pipe → 校验 package/Bridge/Provider `1.1.0` → 重新 Hello。修改 Pipe Name 不能绕过 protocol、版本或 PID 校验。
+恢复顺序：停止旧 Player/Play Mode → 确认没有旧 `BlazeInteractionBridge.exe` 占用 → 校验双方使用 Interaction IPC 1 和项目专属 Pipe → 校验 package/Bridge/Provider `1.1.1` → 重新 Hello。修改 Pipe Name 不能绕过 protocol、版本或 PID 校验。

@@ -38,7 +38,7 @@ public sealed class EmbeddedBridgePayloadTests
             Directory.EnumerateFiles(publishDirectory, "*.exe", SearchOption.AllDirectories))));
         Assert.Equal("BlazeInteractionBridge.exe", Path.GetFileName(Assert.Single(
             Directory.EnumerateFiles(publishDirectory, "*.exe", SearchOption.TopDirectoryOnly))));
-        Assert.Equal("1.1.0", File.ReadAllText(Path.Combine(publishDirectory, "bridge-version.txt")).Trim());
+        Assert.Equal("1.1.1", File.ReadAllText(Path.Combine(publishDirectory, "bridge-version.txt")).Trim());
 
         using var runtimeConfig = JsonDocument.Parse(File.ReadAllText(Path.Combine(
             publishDirectory, "BlazeInteractionBridge.runtimeconfig.json")));
@@ -48,13 +48,13 @@ public sealed class EmbeddedBridgePayloadTests
         using var manifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(
             publishDirectory, "Providers", "Radar", "provider.json")));
         Assert.Equal("blaze.radar.f10f20", manifest.RootElement.GetProperty("id").GetString());
-        Assert.Equal("1.1.0", manifest.RootElement.GetProperty("version").GetString());
+        Assert.Equal("1.1.1", manifest.RootElement.GetProperty("version").GetString());
         Assert.Equal(1, manifest.RootElement.GetProperty("providerApiVersion").GetInt32());
 
         using var cameraManifest = JsonDocument.Parse(File.ReadAllText(Path.Combine(
             publishDirectory, "Providers", "CameraVision", "provider.json")));
         Assert.Equal("blaze.camera.vision", cameraManifest.RootElement.GetProperty("id").GetString());
-        Assert.Equal("1.1.0", cameraManifest.RootElement.GetProperty("version").GetString());
+        Assert.Equal("1.1.1", cameraManifest.RootElement.GetProperty("version").GetString());
         Assert.Equal(1, cameraManifest.RootElement.GetProperty("providerApiVersion").GetInt32());
         Assert.Contains(
             Directory.EnumerateFiles(

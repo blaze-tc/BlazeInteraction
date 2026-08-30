@@ -39,6 +39,60 @@ public sealed class CameraPreviewOverlayBuilderTests
     }
 
     [Fact]
+    public void WorkspaceBuilderScalesCaptureCalibrationIntoDownsampledPreview()
+    {
+        var status = new CameraVisionStatusSnapshot(
+            ProviderRuntimeStatus.Running,
+            CameraCaptureStatus.Connected,
+            30,
+            30,
+            30,
+            4,
+            0,
+            Array.Empty<Vector2Data>(),
+            0,
+            true,
+            new CameraPreviewSnapshot(960, 540, 2880, new byte[960 * 540 * 3]),
+            Array.Empty<CameraHandSnapshot>(),
+            null,
+            actualWidth: 1280,
+            actualHeight: 720,
+            calibrationPoints:
+            [
+                new Vector2Data(0, 0),
+                new Vector2Data(1280, 0),
+                new Vector2Data(1280, 720),
+                new Vector2Data(0, 720)
+            ]);
+        var surface = new InteractionSurface
+        {
+            SurfaceId = "main",
+            Name = "Main",
+            LogicalWidth = 1920,
+            LogicalHeight = 1080,
+            IsPrimary = true,
+            Order = 0
+        };
+
+        var workspace = CameraPreviewModelBuilder.BuildWorkspace(
+            status,
+            surface,
+            rawWidth: 1000,
+            rawHeight: 1000,
+            unityWidth: 1000,
+            unityHeight: 1000);
+
+        Assert.Equal(0, workspace.Raw.CalibrationVertices[0].X, 3);
+        Assert.Equal(218.75f, workspace.Raw.CalibrationVertices[0].Y, 3);
+        Assert.Equal(1000, workspace.Raw.CalibrationVertices[1].X, 3);
+        Assert.Equal(218.75f, workspace.Raw.CalibrationVertices[1].Y, 3);
+        Assert.Equal(1000, workspace.Raw.CalibrationVertices[2].X, 3);
+        Assert.Equal(781.25f, workspace.Raw.CalibrationVertices[2].Y, 3);
+        Assert.Equal(0, workspace.Raw.CalibrationVertices[3].X, 3);
+        Assert.Equal(781.25f, workspace.Raw.CalibrationVertices[3].Y, 3);
+    }
+
+    [Fact]
     public void PreviewModelsShareTimestampAndUnityUsesExactOutputPointsWithoutBones()
     {
         var hands = new[] { Hand(1, 0.25f), Hand(2, 0.75f) };
@@ -125,6 +179,58 @@ public sealed class CameraPreviewOverlayBuilderTests
 
         Assert.Equal(100f, joint.Position.X, 3);
         Assert.Equal(100f, joint.Position.Y, 3);
+    }
+
+    [Fact]
+    public void RawOverlayScalesCaptureGeometryIntoDownsampledPreviewSpace()
+    {
+        var cameraPoints = new[]
+        {
+            new Vector2Data(640, 360),
+            new Vector2Data(0, 0),
+            new Vector2Data(1280, 0),
+            new Vector2Data(1280, 720),
+            new Vector2Data(0, 720)
+        };
+        var hand = new CameraHandSnapshot(
+            1,
+            0.9f,
+            new Vector2Data(640, 360),
+            new Vector2Data(0.5f, 0.5f),
+            Enumerable.Range(0, DetectedHand.LandmarkCount)
+                .Select(index => new CameraMappedLandmark(
+                    index,
+                    cameraPoints[Math.Min(index, cameraPoints.Length - 1)],
+                    new Vector2Data(0.5f, 0.5f),
+                    0)));
+        var status = new CameraVisionStatusSnapshot(
+            ProviderRuntimeStatus.Running,
+            CameraCaptureStatus.Connected,
+            30,
+            30,
+            30,
+            4,
+            1,
+            [hand.NormalizedPosition],
+            0,
+            true,
+            new CameraPreviewSnapshot(960, 540, 2880, new byte[960 * 540 * 3]),
+            [hand],
+            null,
+            actualWidth: 1280,
+            actualHeight: 720);
+
+        var overlay = CameraPreviewOverlayBuilder.Build(status, 960, 540);
+
+        var centerJoint = overlay.Joints.Single(item => item.LandmarkIndex == 0);
+        Assert.Equal(480, centerJoint.Position.X, 3);
+        Assert.Equal(270, centerJoint.Position.Y, 3);
+        Assert.Equal(480, overlay.TrackingPoints.Single().Position.X, 3);
+        Assert.Equal(270, overlay.TrackingPoints.Single().Position.Y, 3);
+        Assert.Contains(new Vector2Data(0, 0), overlay.Outlines.Single().Points);
+        Assert.Contains(new Vector2Data(960, 0), overlay.Outlines.Single().Points);
+        Assert.Contains(new Vector2Data(960, 540), overlay.Outlines.Single().Points);
+        Assert.Contains(new Vector2Data(0, 540), overlay.Outlines.Single().Points);
     }
 
     [Fact]

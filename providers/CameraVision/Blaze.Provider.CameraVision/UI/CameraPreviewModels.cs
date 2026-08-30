@@ -234,16 +234,27 @@ internal static class CameraPreviewModelBuilder
 
     private static IReadOnlyList<Vector2Data> CalibrationVertices(
         CameraVisionStatusSnapshot snapshot,
-        CameraPreviewSnapshot preview) =>
-        snapshot.CalibrationPoints.Count == 4
-            ? snapshot.CalibrationPoints
-            :
+        CameraPreviewSnapshot preview)
+    {
+        if (snapshot.CalibrationPoints.Count != 4)
+        {
+            return
             [
                 new Vector2Data(0, 0),
                 new Vector2Data(preview.Width, 0),
                 new Vector2Data(preview.Width, preview.Height),
                 new Vector2Data(0, preview.Height)
             ];
+        }
+
+        var captureWidth = snapshot.ActualWidth > 0 ? snapshot.ActualWidth : preview.Width;
+        var captureHeight = snapshot.ActualHeight > 0 ? snapshot.ActualHeight : preview.Height;
+        var scaleX = preview.Width / (float)captureWidth;
+        var scaleY = preview.Height / (float)captureHeight;
+        return snapshot.CalibrationPoints
+            .Select(point => new Vector2Data(point.X * scaleX, point.Y * scaleY))
+            .ToArray();
+    }
 
     private static CameraPreviewSnapshot Warp(
         CameraPreviewSnapshot preview,

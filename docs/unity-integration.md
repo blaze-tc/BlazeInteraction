@@ -1,11 +1,11 @@
-# Unity 集成：com.blaze.interaction 1.1.0
+# Unity 集成：com.blaze.interaction 1.1.1
 
 ## 安装
 
-推荐从 GitHub Release 下载 `com.blaze.interaction-1.1.0.tgz`，在 Package Manager 中选择 **Add package from tarball...**。也可使用固定 Git URL：
+推荐从 GitHub Release 下载 `com.blaze.interaction-1.1.1.tgz`，在 Package Manager 中选择 **Add package from tarball...**。也可使用固定 Git URL：
 
 ```text
-https://github.com/blaze-tc/BlazeInteraction.git?path=/UnityPackage/com.blaze.interaction#v1.1.0
+https://github.com/blaze-tc/BlazeInteraction.git?path=/UnityPackage/com.blaze.interaction#v1.1.1
 ```
 
 依赖为 UGUI `1.0.0` 与 Newtonsoft Json `3.0.2`。不要同时安装旧 `com.blaze.radar`。

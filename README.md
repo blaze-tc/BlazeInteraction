@@ -11,7 +11,7 @@ Radar F10/F20 / Simulation       Camera + MediaPipe Hand Landmarker
                       |
               Interaction IPC 1
                       |
-        com.blaze.interaction 1.1.0
+        com.blaze.interaction 1.1.1
                       |
        UGUI / Physics2D / Physics3D
 ```
@@ -31,7 +31,7 @@ Radar F10/F20 / Simulation       Camera + MediaPipe Hand Landmarker
 从 [GitHub Releases](https://github.com/blaze-tc/BlazeInteraction/releases/latest) 下载：
 
 ```text
-com.blaze.interaction-1.1.0.tgz
+com.blaze.interaction-1.1.1.tgz
 ```
 
 Unity 中打开 **Window > Package Manager**，点击左上角 `+`，选择 **Add package from tarball...**，选中下载的 `.tgz`。随后：
@@ -48,7 +48,7 @@ Unity 中打开 **Window > Package Manager**，点击左上角 `+`，选择 **Ad
 固定发布标签：
 
 ```text
-https://github.com/blaze-tc/BlazeInteraction.git?path=/UnityPackage/com.blaze.interaction#v1.1.0
+https://github.com/blaze-tc/BlazeInteraction.git?path=/UnityPackage/com.blaze.interaction#v1.1.1
 ```
 
 本仓库开发：

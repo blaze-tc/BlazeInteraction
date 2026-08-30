@@ -10,7 +10,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'bridge-release-functions.ps1')
 
-$expectedVersion = '1.1.0'
+$expectedVersion = '1.1.1'
 
 $repositoryRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {

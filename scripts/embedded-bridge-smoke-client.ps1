@@ -83,7 +83,7 @@ try {
         payload = [ordered]@{
             unityPid = $PID
             unityVersion = 'release-smoke'
-            sdkVersion = '1.1.0'
+            sdkVersion = '1.1.1'
             surfaces = @([ordered]@{
                 surfaceId = 'main'; name = 'Smoke Primary'; logicalWidth = 1920; logicalHeight = 1080
                 isPrimary = $true; order = 0
@@ -101,7 +101,7 @@ try {
         $responsePayload = $response.payload | ConvertTo-Json -Depth 8 -Compress
         throw "Expected Interaction IPC 1 HelloAck; received protocol '$($response.protocolVersion)' message '$($response.messageType)' payload '$responsePayload'."
     }
-    if ($response.payload.bridgeVersion -ne '1.1.0') {
+    if ($response.payload.bridgeVersion -ne '1.1.1') {
         throw "HelloAck identity mismatch: Bridge '$($response.payload.bridgeVersion)', IPC '$($response.protocolVersion)'."
     }
     if ($response.payload.activeProvider.id -cne $ExpectedProviderId -or

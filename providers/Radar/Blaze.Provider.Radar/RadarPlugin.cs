@@ -7,7 +7,7 @@ public sealed class RadarPlugin : IInteractionProviderPlugin
     public ProviderDescriptor Descriptor { get; } = new(
         RadarFrameAdapter.ProviderId,
         "F10 / F20 激光雷达",
-        new Version(1, 1, 0),
+        new Version(1, 1, 1),
         "Radar",
         ["interaction-point", "preview", "multi-sensor", "calibration", "multi-surface"]);
 

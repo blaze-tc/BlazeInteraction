@@ -1,6 +1,6 @@
 # BlazeInteraction 图文功能说明
 
-适用版本：`1.1.0`。界面由统一 Bridge 承载；首次选择感应设备后，选择和各 Provider 配置按 Unity 项目分别保存。
+适用版本：`1.1.1`。界面由统一 Bridge 承载；首次选择感应设备后，选择和各 Provider 配置按 Unity 项目分别保存。
 
 ## 1. Radar 控制台
 
@@ -8,7 +8,7 @@
 
 Radar 页面用于真机、回放和模拟数据。顶部状态区分别显示 Unity 连接与雷达连接；Unity 未进入 Play Mode 时显示未连接是正常状态。
 
-截图页眉中的 Radar engine/legacy IPC 版本来自被复用的 RadarControl 内部模块；Unity 生产链仍由外层 `BlazeInteractionBridge.exe` 通过 Interaction IPC 1 发送。排障时以 Package Manager、`bridge-version.txt` 和统一 Bridge HelloAck 的 `1.1.0` 为发布身份。
+截图页眉中的 Radar engine/legacy IPC 版本来自被复用的 RadarControl 内部模块；Unity 生产链仍由外层 `BlazeInteractionBridge.exe` 通过 Interaction IPC 1 发送。排障时以 Package Manager、`bridge-version.txt` 和统一 Bridge HelloAck 的 `1.1.1` 为发布身份。
 
 主要区域：
 

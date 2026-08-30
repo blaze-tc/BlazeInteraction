@@ -36,13 +36,15 @@ internal static class CameraPreviewOverlayBuilder
         var bones = new List<CameraOverlayBone>();
         var tracking = new List<CameraOverlayTrackingPoint>();
         var outlines = new List<CameraOverlayOutline>();
+        var sourceWidth = snapshot.ActualWidth > 0 ? snapshot.ActualWidth : snapshot.Preview.Width;
+        var sourceHeight = snapshot.ActualHeight > 0 ? snapshot.ActualHeight : snapshot.Preview.Height;
         foreach (var hand in snapshot.Hands)
         {
             var color = ColorFor(hand.TrackId);
             var positions = hand.Landmarks
                 .OrderBy(item => item.Index)
-                .Select(item => Scale(item.CameraPixelPosition, snapshot.Preview.Width,
-                    snapshot.Preview.Height, viewportWidth, viewportHeight))
+                .Select(item => Scale(item.CameraPixelPosition, sourceWidth,
+                    sourceHeight, viewportWidth, viewportHeight))
                 .ToArray();
             if (positions.Length != DetectedHand.LandmarkCount) continue;
             joints.AddRange(positions.Select((position, index) =>
@@ -52,7 +54,7 @@ internal static class CameraPreviewOverlayBuilder
                 positions[connection.From], positions[connection.To], color)));
             tracking.Add(new CameraOverlayTrackingPoint(
                 hand.TrackId,
-                Scale(hand.CameraTrackingPoint, snapshot.Preview.Width, snapshot.Preview.Height,
+                Scale(hand.CameraTrackingPoint, sourceWidth, sourceHeight,
                     viewportWidth, viewportHeight),
                 color));
             outlines.Add(new CameraOverlayOutline(hand.TrackId, ConvexHull(positions), color));

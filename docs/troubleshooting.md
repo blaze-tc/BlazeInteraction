@@ -1,4 +1,4 @@
-# BlazeInteraction 1.1.0 故障排查
+# BlazeInteraction 1.1.1 故障排查
 
 ## 先收集这些信息
 
@@ -13,7 +13,7 @@
 1. 确认处于 Play Mode，场景中存在启用的 `InteractionBridgeLauncher`。
 2. 确认 Project Settings 的 Surface 校验通过。
 3. 场景只能有一个 Runtime/EventSystem；移除旧 Radar Runtime/Package。
-4. 确认 Package、`InteractionSdkVersion` 和 `bridge-version.txt` 都是 `1.1.0`，IPC 是 Interaction IPC 1。
+4. 确认 Package、`InteractionSdkVersion` 和 `bridge-version.txt` 都是 `1.1.1`，IPC 是 Interaction IPC 1。
 5. 关闭残留 Bridge 后重进 Play Mode。不同 Unity 项目使用不同带哈希后缀的 Pipe，不能拿另一个项目启动的 Bridge 状态判断当前项目。
 
 ## 重新运行后参数丢失
@@ -30,7 +30,7 @@ Editor 配置应在 `<项目>/Library/BlazeInteraction/`，Player 配置应在 `
 - 左下 Unity 输出分辨率是否来自预期 Surface。
 - Output FPS 为 0 且错误区有 native 错误时，点击重连；保留完整错误和相机模式。
 
-`Invalid crop coordinates` 已在帧边界做防护；如果 1.1.0 仍复现，记录分辨率、翻转、四角坐标和出错前操作，不要只截异常弹窗。
+`Invalid crop coordinates` 已在帧边界做防护；如果 1.1.1 仍复现，记录分辨率、翻转、四角坐标和出错前操作，不要只截异常弹窗。
 
 ## Camera 参数操作卡顿
 
@@ -44,7 +44,7 @@ Editor 配置应在 `<项目>/Library/BlazeInteraction/`，Player 配置应在 `
 
 ## Radar 放大编辑/点数多时卡顿
 
-1.1.0 使用有界保留点数、合并 UI 快照和自绘画布。若仍复现，记录窗口大小、DPI、点数、操作顺序和内存/CPU；确认未使用旧 `RadarBridge.exe` 或旧 PackageCache。不要通过无限增加显示点上限处理设备噪声。
+1.1.1 使用有界保留点数、合并 UI 快照和自绘画布。若仍复现，记录窗口大小、DPI、点数、操作顺序和内存/CPU；确认未使用旧 `RadarBridge.exe` 或旧 PackageCache。不要通过无限增加显示点上限处理设备噪声。
 
 ## 点位方向/位置错误
 
@@ -54,7 +54,7 @@ Camera：左上四角区域定义透视换算，X/Y 翻转在标定后应用，�
 
 ## Bridge/Provider 版本不匹配
 
-移除旧包和旧 Sample，关闭 Unity，只清理当前项目中该包的 PackageCache/lock 解析，再安装固定 `v1.1.0` 或 Release `.tgz`。不要手工把新 EXE 覆盖到旧 payload；重新安装完整包。
+移除旧包和旧 Sample，关闭 Unity，只清理当前项目中该包的 PackageCache/lock 解析，再安装固定 `v1.1.1` 或 Release `.tgz`。不要手工把新 EXE 覆盖到旧 payload；重新安装完整包。
 
 ## Player 换机启动失败
 

@@ -37,7 +37,7 @@ public sealed class PackageIdentityTests
         using var packageJson = JsonDocument.Parse(File.ReadAllText(Path.Combine(packageRoot, "package.json")));
         var root = packageJson.RootElement;
         Assert.Equal("com.blaze.interaction", root.GetProperty("name").GetString());
-        Assert.Equal("1.1.0", root.GetProperty("version").GetString());
+        Assert.Equal("1.1.1", root.GetProperty("version").GetString());
         Assert.Equal("2021.3", root.GetProperty("unity").GetString());
         Assert.Equal(
             new[] { "Samples~/BasicInteraction", "Samples~/MultiSurfaceRouting" },

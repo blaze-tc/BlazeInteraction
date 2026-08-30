@@ -10,7 +10,7 @@ public sealed class CameraVisionPlugin : IInteractionProviderPlugin
     public ProviderDescriptor Descriptor { get; } = new(
         ProviderId,
         "CameraVision RGB Camera",
-        new Version(1, 1, 0),
+        new Version(1, 1, 1),
         "Camera",
         ["interaction-point", "preview", "hand-landmarks"]);
 

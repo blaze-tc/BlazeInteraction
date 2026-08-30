@@ -1,4 +1,4 @@
-# BlazeInteraction 1.1.0 架构与所有权
+# BlazeInteraction 1.1.1 架构与所有权
 
 ## 唯一生产数据链
 
