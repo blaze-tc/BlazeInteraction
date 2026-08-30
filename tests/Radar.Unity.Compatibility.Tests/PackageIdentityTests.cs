@@ -115,7 +115,7 @@ public sealed class PackageIdentityTests
         var presenter = FindYamlObjectByScriptGuid(scene, presenterGuid);
         var statusReference = Regex.Match(
             presenter,
-            @"^  statusText: \{fileID: (?<fileId>\d+)\}$",
+            @"^  statusText: \{fileID: (?<fileId>\d+)\}\r?$",
             RegexOptions.Multiline);
 
         Assert.True(statusReference.Success, "BasicInteractionPresenter.statusText must be serialized.");
@@ -127,7 +127,7 @@ public sealed class PackageIdentityTests
             statusText,
             StringComparison.Ordinal);
         Assert.Matches(
-            new Regex(@"^  m_Text: ['""]?IPC: DISCONNECTED['""]?$", RegexOptions.Multiline),
+            new Regex(@"^  m_Text: ['""]?IPC: DISCONNECTED['""]?\r?$", RegexOptions.Multiline),
             statusText);
 
         var handPresenterGuid = File.ReadLines(handPresenterMetaPath)
@@ -136,7 +136,7 @@ public sealed class PackageIdentityTests
         var handPresenter = FindYamlObjectByScriptGuid(scene, handPresenterGuid);
         var visualRootReference = Regex.Match(
             handPresenter,
-            @"^  visualRoot: \{fileID: (?<fileId>\d+)\}$",
+            @"^  visualRoot: \{fileID: (?<fileId>\d+)\}\r?$",
             RegexOptions.Multiline);
 
         Assert.True(visualRootReference.Success, "HandSkeletonPresenter.visualRoot must be serialized.");
